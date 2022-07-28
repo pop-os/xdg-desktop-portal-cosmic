@@ -1,0 +1,17 @@
+Source: xdg-desktop-portal-cosmic
+Section: admin
+Priority: optional
+Maintainer: System76 <info@system76.com>
+Build-Depends:
+  debhelper (>= 11),
+  debhelper-compat (= 11),
+  cargo,
+Standards-Version: 4.3.0
+Homepage: https://github.com/pop-os/xdg-desktop-portal-cosmic
+
+Package: xdg-desktop-portal-cosmic
+Architecture: amd64 arm64
+Depends:
+  ${misc:Depends},
+  ${shlibs:Depends}
+Description: Cosmic backend for xdg-desktop-portal

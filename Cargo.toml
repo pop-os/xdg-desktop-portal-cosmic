@@ -1,0 +1,9 @@
+[package]
+name = "xdg-desktop-portal-cosmic"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+tokio = { version = "1.19.2", features = ["macros", "net", "rt"] }
+zbus = { version = "2.3.2", default-features = false, features = ["tokio"] }
