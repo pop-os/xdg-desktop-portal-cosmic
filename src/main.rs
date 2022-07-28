@@ -1,6 +1,8 @@
 use std::{collections::HashMap, future};
 use zbus::zvariant;
 
+mod documents;
+
 static DBUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cosmic";
 static DBUS_PATH: &str = "/org/freedesktop/portal/desktop";
 
