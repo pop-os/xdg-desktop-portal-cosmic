@@ -3,6 +3,8 @@ use std::{collections::HashMap, future};
 mod documents;
 mod screenshot;
 use screenshot::Screenshot;
+mod screencast;
+use screencast::ScreenCast;
 
 static DBUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cosmic";
 static DBUS_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -15,9 +17,6 @@ const PORTAL_RESPONSE_OTHER: u32 = 2;
 // - implemented by objects at different paths
 // org.freedesktop.impl.portal.Inhibit
 // org.freedesktop.impl.portal.Screenshot
-// - save to /run/user/$UID/doc/ with document portal fuse filesystem
-//
-// zbus: implement multiple interfaces at one path?
 
 struct Request;
 
@@ -31,6 +30,7 @@ async fn main() -> zbus::Result<()> {
     let connection = zbus::ConnectionBuilder::session()?
         .name(DBUS_NAME)?
         .serve_at(DBUS_PATH, Screenshot)?
+        //.serve_at(DBUS_PATH, ScreenCast)?
         .build()
         .await?;
 

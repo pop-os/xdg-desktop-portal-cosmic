@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use zbus::zvariant;
 
+// TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
+
 #[derive(zvariant::DeserializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
 struct ScreenshotOptions {
@@ -34,7 +36,7 @@ impl Screenshot {
     ) -> (u32, ScreenshotResult) {
         // connection.object_server().at(&handle, Request);
 
-        // TODO create handle
+        // TODO create handle, show dialog
         // XXX
         std::fs::copy(
             "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png",
