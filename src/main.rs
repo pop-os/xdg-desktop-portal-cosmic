@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future};
+use std::future;
 
 mod documents;
 mod screenshot;

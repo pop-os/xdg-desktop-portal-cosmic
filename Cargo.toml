@@ -5,5 +5,8 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [dependencies]
-tokio = { version = "1.19.2", features = ["macros", "net", "rt"] }
+# pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
+pipewire = { git = "https://gitlab.freedesktop.org/ids1024/pipewire-rs", branch = "spa-sys" }
+spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/ids1024/pipewire-rs", branch = "spa-sys" }
+tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
 zbus = { version = "2.3.2", default-features = false, features = ["tokio"] }
