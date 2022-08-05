@@ -25,6 +25,28 @@ impl Request {
     fn close(&self) {}
 }
 
+struct Session;
+
+#[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Session")]
+impl Session {
+    async fn close(&self, #[zbus(signal_context)] signal_ctxt: zbus::SignalContext<'_>) {
+        self.closed(&signal_ctxt).await;
+        signal_ctxt
+            .connection()
+            .object_server()
+            .remove::<Self, _>(signal_ctxt.path());
+        // Notifiy ScreenCast, etc.
+    }
+
+    #[dbus_interface(signal)]
+    async fn closed(&self, signal_ctxt: &zbus::SignalContext<'_>) -> zbus::Result<()>;
+
+    #[dbus_interface(property, name = "version")]
+    fn version(&self) -> u32 {
+        1 // XXX?
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> zbus::Result<()> {
     let connection = zbus::ConnectionBuilder::session()?

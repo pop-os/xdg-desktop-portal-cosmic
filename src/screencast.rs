@@ -41,17 +41,25 @@ struct StartResult {
     restore_data: Option<(String, u32, zvariant::OwnedValue)>,
 }
 
+// XXX how to stop pipewire mainloop from another thread?
+struct SessionData {}
+
 pub struct ScreenCast;
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.ScreenCast")]
 impl ScreenCast {
     async fn create_session(
         &self,
+        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> (u32, CreateSessionResult) {
+        // TODO: handle
+        connection
+            .object_server()
+            .at(&session_handle, crate::Session);
         (
             crate::PORTAL_RESPONSE_SUCCESS,
             CreateSessionResult {
@@ -119,9 +127,14 @@ impl ScreenCast {
 
 async fn start_stream_on_thread() -> Result<Option<u32>, pipewire::Error> {
     let (tx, rx) = oneshot::channel();
+    let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
     std::thread::spawn(move || match start_stream() {
         Ok((loop_, node_id_rx)) => {
             tx.send(Ok(node_id_rx)).unwrap();
+            let weak_loop = loop_.downgrade();
+            thread_stop_rx.attach(&loop_, move |()| {
+                weak_loop.upgrade().unwrap().quit();
+            });
             loop_.run();
         }
         Err(err) => tx.send(Err(err)).unwrap(),
