@@ -111,7 +111,7 @@ impl ScreenCast {
         CURSOR_MODE_HIDDEN
     }
 
-    #[dbus_interface(property)]
+    #[dbus_interface(property, name = "version")]
     async fn version(&self) -> u32 {
         4
     }

@@ -30,7 +30,7 @@ async fn main() -> zbus::Result<()> {
     let connection = zbus::ConnectionBuilder::session()?
         .name(DBUS_NAME)?
         .serve_at(DBUS_PATH, Screenshot)?
-        //.serve_at(DBUS_PATH, ScreenCast)?
+        .serve_at(DBUS_PATH, ScreenCast)?
         .build()
         .await?;
 
