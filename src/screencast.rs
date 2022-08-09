@@ -235,20 +235,31 @@ fn start_stream() -> Result<(pipewire::MainLoop, oneshot::Receiver<Option<u32>>)
             _ => {}
         }
     })
-    .param_changed(|_, _, _| {})
+    .param_changed(|id, (), pod| {
+        if id != spa_sys::SPA_PARAM_Format {
+            return;
+        }
+        if let Some(pod) = std::ptr::NonNull::new(pod as *mut _) {
+            let value = unsafe {
+                spa::pod::deserialize::PodDeserializer::deserialize_ptr::<pod::Value>(pod)
+            };
+            println!("param-changed: {} {:?}", id, value);
+        }
+    })
     .process(|stream, ()| {
         if let Some(mut buffer) = stream.dequeue_buffer() {
             let mut datas = buffer.datas_mut();
             let mut chunk = datas[0].chunk();
-            *chunk.size_mut() = 1920 * 1080 * 3;
+            *chunk.size_mut() = 1920 * 1080 * 4;
             *chunk.offset_mut() = 0;
-            *chunk.stride_mut() = 3 * 1920;
+            *chunk.stride_mut() = 4 * 1920;
             let mut data = datas[0].get_mut();
-            if data.len() == 1920 * 1080 * 3 {
+            if data.len() == 1920 * 1080 * 4 {
                 for i in 0..(1920 * 1080) {
-                    data[i * 3] = 255;
-                    data[i * 3 + 1] = 0;
-                    data[i * 3 + 2] = 0;
+                    data[i * 4] = 255;
+                    data[i * 4 + 1] = 0;
+                    data[i * 4 + 2] = 0;
+                    data[i * 4 + 3] = 255;
                 }
             }
         }
@@ -284,12 +295,12 @@ fn buffers() -> Vec<u8> {
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_size,
                 flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Int(1920 * 1080 * 3),
+                value: pod::Value::Int(1920 * 1080 * 4),
             },
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_stride,
                 flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Int(1920 * 3),
+                value: pod::Value::Int(1920 * 4),
             },
         ],
     }))
@@ -313,7 +324,7 @@ fn format() -> Vec<u8> {
             pod::Property {
                 key: spa_sys::SPA_FORMAT_VIDEO_format,
                 flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Id(Id(spa_sys::SPA_VIDEO_FORMAT_RGB)),
+                value: pod::Value::Id(Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
             },
             // XXX modifiers
             pod::Property {
