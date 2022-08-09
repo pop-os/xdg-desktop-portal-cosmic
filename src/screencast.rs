@@ -4,7 +4,7 @@ use std::{
 };
 use zbus::zvariant;
 
-use crate::screencast_thread::start_stream_on_thread;
+use crate::screencast_thread::ScreencastThread;
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
 const CURSOR_MODE_EMBEDDED: u32 = 2;
@@ -42,14 +42,14 @@ struct StartResult {
 
 #[derive(Default)]
 struct SessionData {
-    thread_stop_tx: Option<pipewire::channel::Sender<()>>,
+    screencast_thread: Option<ScreencastThread>,
     closed: bool,
 }
 
 impl SessionData {
     fn close(&mut self) {
-        if let Some(thread_stop_tx) = self.thread_stop_tx.take() {
-            let _ = thread_stop_tx.send(());
+        if let Some(screencast_thread) = self.screencast_thread.take() {
+            screencast_thread.stop();
         }
         self.closed = true
         // XXX Remove from hashmap?
@@ -124,21 +124,23 @@ impl ScreenCast {
             }
         };
 
-        let res = start_stream_on_thread().await;
+        let res = ScreencastThread::new().await;
 
-        let (res, streams) = if let Ok((Some(node_id), thread_stop_tx)) = res {
+        let (res, streams) = if let Ok(screencast_thread) = res {
+            let node_id = screencast_thread.node_id();
             let mut session_data = session_data.lock().unwrap();
-            session_data.thread_stop_tx = Some(thread_stop_tx);
             if session_data.closed {
-                session_data.close();
+                screencast_thread.stop();
                 (crate::PORTAL_RESPONSE_OTHER, vec![])
             } else {
+                session_data.screencast_thread = Some(screencast_thread);
                 (
                     crate::PORTAL_RESPONSE_SUCCESS,
                     vec![(node_id, HashMap::new())],
                 )
             }
         } else {
+            // XXX handle error message?
             (crate::PORTAL_RESPONSE_OTHER, vec![])
         };
         (

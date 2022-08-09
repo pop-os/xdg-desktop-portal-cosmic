@@ -8,25 +8,43 @@ use pipewire::{
 use std::{cell::RefCell, io, rc::Rc};
 use tokio::sync::oneshot;
 
-pub async fn start_stream_on_thread(
-) -> Result<(Option<u32>, pipewire::channel::Sender<()>), pipewire::Error> {
-    let (tx, rx) = oneshot::channel();
-    let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
-    std::thread::spawn(move || match start_stream() {
-        Ok((loop_, node_id_rx)) => {
-            tx.send(Ok(node_id_rx)).unwrap();
-            let weak_loop = loop_.downgrade();
-            let _receiver = thread_stop_rx.attach(&loop_, move |()| {
-                weak_loop.upgrade().unwrap().quit();
-            });
-            loop_.run();
-        }
-        Err(err) => tx.send(Err(err)).unwrap(),
-    });
-    Ok((rx.await.unwrap()?.await.unwrap(), thread_stop_tx))
+pub struct ScreencastThread {
+    node_id: u32,
+    thread_stop_tx: pipewire::channel::Sender<()>,
 }
 
-fn start_stream() -> Result<(pipewire::MainLoop, oneshot::Receiver<Option<u32>>), pipewire::Error> {
+impl ScreencastThread {
+    pub async fn new() -> anyhow::Result<Self> {
+        let (tx, rx) = oneshot::channel();
+        let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
+        std::thread::spawn(move || match start_stream() {
+            Ok((loop_, node_id_rx)) => {
+                tx.send(Ok(node_id_rx)).unwrap();
+                let weak_loop = loop_.downgrade();
+                let _receiver = thread_stop_rx.attach(&loop_, move |()| {
+                    weak_loop.upgrade().unwrap().quit();
+                });
+                loop_.run();
+            }
+            Err(err) => tx.send(Err(err)).unwrap(),
+        });
+        Ok(Self {
+            node_id: rx.await.unwrap()?.await.unwrap()?,
+            thread_stop_tx,
+        })
+    }
+
+    pub fn node_id(&self) -> u32 {
+        self.node_id
+    }
+
+    pub fn stop(self) {
+        let _ = self.thread_stop_tx.send(());
+    }
+}
+
+fn start_stream(
+) -> Result<(pipewire::MainLoop, oneshot::Receiver<anyhow::Result<u32>>), pipewire::Error> {
     let loop_ = pipewire::MainLoop::new()?;
 
     let name = format!("cosmic-screenshot"); // XXX randomize?
@@ -54,13 +72,14 @@ fn start_stream() -> Result<(pipewire::MainLoop, oneshot::Receiver<Option<u32>>)
                 let stream = stream_cell_clone.borrow_mut();
                 let stream = stream.as_ref().unwrap();
                 if let Some(node_id_tx) = node_id_tx.borrow_mut().take() {
-                    node_id_tx.send(Some(stream.node_id())).unwrap();
+                    node_id_tx.send(Ok(stream.node_id())).unwrap();
                 }
             }
-            // XXX err?
-            StreamState::Error(_) => {
+            StreamState::Error(msg) => {
                 if let Some(node_id_tx) = node_id_tx.borrow_mut().take() {
-                    node_id_tx.send(None).unwrap();
+                    node_id_tx
+                        .send(Err(anyhow::anyhow!("stream error: {}", msg)))
+                        .unwrap();
                 }
             }
             _ => {}
