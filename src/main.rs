@@ -5,6 +5,7 @@ mod screenshot;
 use screenshot::Screenshot;
 mod screencast;
 use screencast::ScreenCast;
+mod screencast_thread;
 
 static DBUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cosmic";
 static DBUS_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -63,7 +64,7 @@ impl Session {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> zbus::Result<()> {
-    let connection = zbus::ConnectionBuilder::session()?
+    let _connection = zbus::ConnectionBuilder::session()?
         .name(DBUS_NAME)?
         .serve_at(DBUS_PATH, Screenshot)?
         .serve_at(DBUS_PATH, ScreenCast::default())?
