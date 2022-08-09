@@ -25,17 +25,31 @@ impl Request {
     fn close(&self) {}
 }
 
-struct Session;
+struct Session {
+    close_cb: Option<Box<dyn FnOnce() + Send + Sync + 'static>>,
+}
+
+impl Session {
+    fn new<F: FnOnce() + Send + Sync + 'static>(cb: F) -> Self {
+        Self {
+            close_cb: Some(Box::new(cb)),
+        }
+    }
+}
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Session")]
 impl Session {
-    async fn close(&self, #[zbus(signal_context)] signal_ctxt: zbus::SignalContext<'_>) {
-        self.closed(&signal_ctxt).await;
-        signal_ctxt
+    async fn close(&mut self, #[zbus(signal_context)] signal_ctxt: zbus::SignalContext<'_>) {
+        // XXX error?
+        let _ = self.closed(&signal_ctxt).await;
+        let _ = signal_ctxt
             .connection()
             .object_server()
-            .remove::<Self, _>(signal_ctxt.path());
-        // Notifiy ScreenCast, etc.
+            .remove::<Self, _>(signal_ctxt.path())
+            .await;
+        if let Some(cb) = self.close_cb.take() {
+            cb();
+        }
     }
 
     #[dbus_interface(signal)]
@@ -52,7 +66,7 @@ async fn main() -> zbus::Result<()> {
     let connection = zbus::ConnectionBuilder::session()?
         .name(DBUS_NAME)?
         .serve_at(DBUS_PATH, Screenshot)?
-        .serve_at(DBUS_PATH, ScreenCast)?
+        .serve_at(DBUS_PATH, ScreenCast::default())?
         .build()
         .await?;
 

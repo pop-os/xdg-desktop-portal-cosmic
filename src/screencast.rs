@@ -3,7 +3,13 @@ use pipewire::{
     spa::{self, pod, utils::Id},
     stream::StreamState,
 };
-use std::{cell::RefCell, collections::HashMap, io, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    io,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 use tokio::sync::oneshot;
 use zbus::zvariant;
 
@@ -41,10 +47,26 @@ struct StartResult {
     restore_data: Option<(String, u32, zvariant::OwnedValue)>,
 }
 
-// XXX how to stop pipewire mainloop from another thread?
-struct SessionData {}
+#[derive(Default)]
+struct SessionData {
+    thread_stop_tx: Option<pipewire::channel::Sender<()>>,
+    closed: bool,
+}
 
-pub struct ScreenCast;
+impl SessionData {
+    fn close(&mut self) {
+        if let Some(thread_stop_tx) = self.thread_stop_tx.take() {
+            let _ = thread_stop_tx.send(());
+        }
+        self.closed = true
+        // XXX Remove from hashmap?
+    }
+}
+
+#[derive(Default)]
+pub struct ScreenCast {
+    sessions: Mutex<HashMap<zvariant::ObjectPath<'static>, Arc<Mutex<SessionData>>>>,
+}
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.ScreenCast")]
 impl ScreenCast {
@@ -57,9 +79,17 @@ impl ScreenCast {
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> (u32, CreateSessionResult) {
         // TODO: handle
+        let session_data = Arc::new(Mutex::new(SessionData::default()));
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session_handle.to_owned(), session_data.clone());
+        let destroy_session = move || session_data.lock().unwrap().close();
         connection
             .object_server()
-            .at(&session_handle, crate::Session);
+            .at(&session_handle, crate::Session::new(destroy_session))
+            .await
+            .unwrap(); // XXX unwrap
         (
             crate::PORTAL_RESPONSE_SUCCESS,
             CreateSessionResult {
@@ -87,12 +117,34 @@ impl ScreenCast {
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> (u32, StartResult) {
-        let node_id = start_stream_on_thread().await;
-        let (res, streams) = if let Ok(Some(node_id)) = node_id {
-            (
-                crate::PORTAL_RESPONSE_SUCCESS,
-                vec![(node_id, HashMap::new())],
-            )
+        let session_data = match self.sessions.lock().unwrap().get(&session_handle) {
+            Some(session_data) => session_data.clone(),
+            None => {
+                return (
+                    crate::PORTAL_RESPONSE_OTHER,
+                    StartResult {
+                        streams: vec![],
+                        persist_mode: None,
+                        restore_data: None,
+                    },
+                )
+            }
+        };
+
+        let res = start_stream_on_thread().await;
+
+        let (res, streams) = if let Ok((Some(node_id), thread_stop_tx)) = res {
+            let mut session_data = session_data.lock().unwrap();
+            session_data.thread_stop_tx = Some(thread_stop_tx);
+            if session_data.closed {
+                session_data.close();
+                (crate::PORTAL_RESPONSE_OTHER, vec![])
+            } else {
+                (
+                    crate::PORTAL_RESPONSE_SUCCESS,
+                    vec![(node_id, HashMap::new())],
+                )
+            }
         } else {
             (crate::PORTAL_RESPONSE_OTHER, vec![])
         };
@@ -125,21 +177,22 @@ impl ScreenCast {
     }
 }
 
-async fn start_stream_on_thread() -> Result<Option<u32>, pipewire::Error> {
+async fn start_stream_on_thread(
+) -> Result<(Option<u32>, pipewire::channel::Sender<()>), pipewire::Error> {
     let (tx, rx) = oneshot::channel();
     let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
     std::thread::spawn(move || match start_stream() {
         Ok((loop_, node_id_rx)) => {
             tx.send(Ok(node_id_rx)).unwrap();
             let weak_loop = loop_.downgrade();
-            thread_stop_rx.attach(&loop_, move |()| {
+            let _receiver = thread_stop_rx.attach(&loop_, move |()| {
                 weak_loop.upgrade().unwrap().quit();
             });
             loop_.run();
         }
         Err(err) => tx.send(Err(err)).unwrap(),
     });
-    Ok(rx.await.unwrap()?.await.unwrap())
+    Ok((rx.await.unwrap()?.await.unwrap(), thread_stop_tx))
 }
 
 fn start_stream() -> Result<(pipewire::MainLoop, oneshot::Receiver<Option<u32>>), pipewire::Error> {
@@ -182,11 +235,8 @@ fn start_stream() -> Result<(pipewire::MainLoop, oneshot::Receiver<Option<u32>>)
             _ => {}
         }
     })
-    .param_changed(|_, _, _| {
-        println!("param-changed");
-    })
+    .param_changed(|_, _, _| {})
     .process(|stream, ()| {
-        println!("process");
         if let Some(mut buffer) = stream.dequeue_buffer() {
             let mut datas = buffer.datas_mut();
             let mut chunk = datas[0].chunk();
@@ -195,7 +245,6 @@ fn start_stream() -> Result<(pipewire::MainLoop, oneshot::Receiver<Option<u32>>)
             *chunk.stride_mut() = 3 * 1920;
             let mut data = datas[0].get_mut();
             if data.len() == 1920 * 1080 * 3 {
-                println!("Output");
                 for i in 0..(1920 * 1080) {
                     data[i * 3] = 255;
                     data[i * 3 + 1] = 0;
