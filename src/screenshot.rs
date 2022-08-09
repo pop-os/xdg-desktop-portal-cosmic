@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use zbus::zvariant;
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
@@ -22,7 +22,15 @@ struct PickColorResult {
     color: (f64, f64, f64), // (ddd)
 }
 
-pub struct Screenshot;
+pub struct Screenshot {
+    wayland_connection: Arc<wayland_client::Connection>,
+}
+
+impl Screenshot {
+    pub fn new(wayland_connection: Arc<wayland_client::Connection>) -> Self {
+        Self { wayland_connection }
+    }
+}
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Screenshot")]
 impl Screenshot {

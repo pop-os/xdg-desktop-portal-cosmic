@@ -6,8 +6,11 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 anyhow = "1.0.60"
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
 # pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
-pipewire = { git = "https://gitlab.freedesktop.org/ids1024/pipewire-rs", branch = "spa-sys" }
-spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/ids1024/pipewire-rs", branch = "spa-sys" }
+pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
+smithay = { git = "https://github.com/Smithay/smithay", features = ["backend_drm", "backend_egl", "renderer_gl"] }
+spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
+wayland-client = { version = "=0.30.0-beta.8" }
 zbus = { version = "2.3.2", default-features = false, features = ["tokio"] }

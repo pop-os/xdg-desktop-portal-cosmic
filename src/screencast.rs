@@ -56,9 +56,18 @@ impl SessionData {
     }
 }
 
-#[derive(Default)]
 pub struct ScreenCast {
     sessions: Mutex<HashMap<zvariant::ObjectPath<'static>, Arc<Mutex<SessionData>>>>,
+    wayland_connection: Arc<wayland_client::Connection>,
+}
+
+impl ScreenCast {
+    pub fn new(wayland_connection: Arc<wayland_client::Connection>) -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            wayland_connection,
+        }
+    }
 }
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.ScreenCast")]

@@ -1,4 +1,4 @@
-use std::future;
+use std::{future, process, sync::Arc};
 
 mod documents;
 mod screenshot;
@@ -64,10 +64,19 @@ impl Session {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> zbus::Result<()> {
+    let wayland_connection = match wayland_client::Connection::connect_to_env() {
+        Ok(connection) => connection,
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            process::exit(1)
+        }
+    };
+    let wayland_connection = Arc::new(wayland_connection);
+
     let _connection = zbus::ConnectionBuilder::session()?
         .name(DBUS_NAME)?
-        .serve_at(DBUS_PATH, Screenshot)?
-        .serve_at(DBUS_PATH, ScreenCast::default())?
+        .serve_at(DBUS_PATH, Screenshot::new(wayland_connection.clone()))?
+        .serve_at(DBUS_PATH, ScreenCast::new(wayland_connection))?
         .build()
         .await?;
 
