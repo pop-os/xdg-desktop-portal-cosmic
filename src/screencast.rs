@@ -5,6 +5,7 @@ use std::{
 use zbus::zvariant;
 
 use crate::screencast_thread::ScreencastThread;
+use crate::wayland::WaylandHelper;
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
 const CURSOR_MODE_EMBEDDED: u32 = 2;
@@ -58,14 +59,14 @@ impl SessionData {
 
 pub struct ScreenCast {
     sessions: Mutex<HashMap<zvariant::ObjectPath<'static>, Arc<Mutex<SessionData>>>>,
-    wayland_connection: wayland_client::Connection,
+    wayland_helper: WaylandHelper,
 }
 
 impl ScreenCast {
-    pub fn new(wayland_connection: wayland_client::Connection) -> Self {
+    pub fn new(wayland_helper: WaylandHelper) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            wayland_connection,
+            wayland_helper,
         }
     }
 }

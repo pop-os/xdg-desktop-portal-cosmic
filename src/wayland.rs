@@ -2,39 +2,83 @@ use cosmic_protocols::export_dmabuf::v1::client::{
     zcosmic_export_dmabuf_frame_v1, zcosmic_export_dmabuf_manager_v1,
 };
 use futures::future::poll_fn;
-use smithay::{
-    backend::{
-        allocator::{
-            dmabuf::{Dmabuf, DmabufFlags},
-            Fourcc, Modifier,
-        },
-        drm::node::DrmNode,
-        renderer::{
-            gles2::Gles2Texture,
-            multigpu::{egl::EglGlesBackend, GpuManager},
-            Bind, ExportMem,
-        },
-    },
-    utils::{Point, Rectangle, Size},
+use smithay::backend::{
+    allocator::{dmabuf::DmabufFlags, Fourcc, Modifier},
+    drm::node::DrmNode,
 };
-use std::{collections::HashMap, fs, io, os::unix::io::RawFd, process};
+use std::{
+    process,
+    sync::{Arc, Mutex},
+};
 use tokio::io::{unix::AsyncFd, Interest};
 use wayland_client::{
     protocol::{wl_output, wl_registry},
     Connection, Dispatch, QueueHandle, WEnum,
 };
 
-struct DmabufExporter {
+use crate::dmabuf_frame::{DmabufFrame, Object};
+
+struct WaylandHelperInner {
+    connection: wayland_client::Connection,
+    export_dmabuf_manager: Option<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1>,
+    outputs: Vec<wl_output::WlOutput>,
+}
+
+#[derive(Clone)]
+pub struct WaylandHelper {
+    inner: Arc<Mutex<WaylandHelperInner>>,
+}
+
+impl WaylandHelper {
+    pub fn new(connection: wayland_client::Connection) -> Self {
+        // XXX unwrap
+        let display = connection.display();
+        let mut event_queue = connection.new_event_queue();
+        let _registry = display.get_registry(&event_queue.handle(), ()).unwrap();
+        let mut data = WaylandHelper {
+            inner: Arc::new(Mutex::new(WaylandHelperInner {
+                connection,
+                export_dmabuf_manager: None,
+                outputs: Vec::new(),
+            })),
+        };
+        event_queue.flush().unwrap();
+
+        event_queue.roundtrip(&mut data).unwrap();
+
+        let mut data_clone = data.clone();
+        tokio::spawn(async move {
+            poll_fn(|cx| event_queue.poll_dispatch_pending(cx, &mut data_clone)).await;
+        });
+
+        data
+    }
+
+    pub fn dmabuf_exporter(&self) -> Option<DmabufExporter> {
+        let inner = self.inner.lock().unwrap();
+        Some(DmabufExporter {
+            event_queue: inner.connection.new_event_queue(),
+            manager: inner.export_dmabuf_manager.clone()?,
+        })
+    }
+
+    pub fn outputs(&self) -> Vec<wl_output::WlOutput> {
+        // TODO Good way to avoid clone?
+        self.inner.lock().unwrap().outputs.clone()
+    }
+}
+
+pub struct DmabufExporter {
     event_queue: wayland_client::EventQueue<CaptureState>,
     manager: zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1,
 }
 
 impl DmabufExporter {
-    fn capture_output(
+    pub fn capture_output(
         &mut self,
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
-    ) -> Result<DmaBufFrame, WEnum<zcosmic_export_dmabuf_frame_v1::CancelReason>> {
+    ) -> Result<DmabufFrame, WEnum<zcosmic_export_dmabuf_frame_v1::CancelReason>> {
         // TODO: way to get cursor metadata?
 
         let overlay_cursor = if overlay_cursor { 1 } else { 0 };
@@ -48,6 +92,7 @@ impl DmabufExporter {
             if let Some(res) = state.res {
                 break res;
             }
+            // Does this work properly if used on multiple threads for multiple event queues?
             self.event_queue.blocking_dispatch(&mut state).unwrap();
         };
 
@@ -57,47 +102,18 @@ impl DmabufExporter {
 
 #[derive(Default)]
 struct CaptureState {
-    frame: DmaBufFrame,
+    frame: DmabufFrame,
     res: Option<Result<(), WEnum<zcosmic_export_dmabuf_frame_v1::CancelReason>>>,
 }
 
-// XXX
-#[derive(Default)]
-struct AppData {
-    frames: HashMap<String, DmaBufFrame>,
-}
-
-#[derive(Debug, Default)]
-struct Object {
-    fd: RawFd,
-    index: u32,
-    offset: u32,
-    stride: u32,
-    plane_index: u32,
-}
-
-#[derive(Debug, Default)]
-struct DmaBufFrame {
-    node: Option<DrmNode>,
-    width: u32,
-    height: u32,
-    objects: Vec<Object>,
-    modifier: Option<Modifier>,
-    format: Option<Fourcc>,
-    flags: Option<DmabufFlags>,
-    ready: bool,
-}
-
-struct Globals(std::collections::BTreeMap<u32, (String, u32)>);
-
-impl Dispatch<wl_registry::WlRegistry, ()> for Globals {
+impl Dispatch<wl_registry::WlRegistry, ()> for WaylandHelper {
     fn event(
         app_data: &mut Self,
         registry: &wl_registry::WlRegistry,
         event: wl_registry::Event,
         _: &(),
         _: &Connection,
-        qh: &QueueHandle<Globals>,
+        qh: &QueueHandle<Self>,
     ) {
         println!("{:?}", event);
         match event {
@@ -105,14 +121,57 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Globals {
                 name,
                 interface,
                 version,
-            } => {
-                app_data.0.insert(name, (interface, version));
-            }
+            } => match interface.as_str() {
+                "zcosmic_export_dmabuf_manager_v1" => {
+                    app_data.inner.lock().unwrap().export_dmabuf_manager = Some(
+                            registry.bind::<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1, _, _>(
+                                name,
+                                1,
+                                qh,
+                                (),
+                            )
+                            .unwrap());
+                }
+                "wl_output" => {
+                    app_data.inner.lock().unwrap().outputs.push(
+                        registry
+                            .bind::<wl_output::WlOutput, _, _>(name, 4, qh, ())
+                            .unwrap(),
+                    );
+                }
+                _ => {}
+            },
             wl_registry::Event::GlobalRemove { name } => {
-                app_data.0.remove(&name);
+                // XXX remove output
             }
             _ => {}
         }
+    }
+}
+
+impl Dispatch<wl_output::WlOutput, ()> for WaylandHelper {
+    fn event(
+        app_data: &mut Self,
+        output: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1, ()>
+    for WaylandHelper
+{
+    fn event(
+        _: &mut Self,
+        _: &zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1,
+        _: zcosmic_export_dmabuf_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 
@@ -202,19 +261,4 @@ pub fn connect_to_wayland() -> wayland_client::Connection {
     tokio::spawn(read_event_task(wayland_connection.clone()));
 
     wayland_connection
-}
-
-pub fn monitor_wayland_registry(connection: wayland_client::Connection) {
-    // XXX unwrap
-    let display = connection.display();
-    let mut event_queue = connection.new_event_queue::<Globals>();
-    let _registry = display.get_registry(&event_queue.handle(), ()).unwrap();
-    let mut data = Globals(Default::default());
-    event_queue.flush().unwrap();
-
-    event_queue.roundtrip(&mut data).unwrap();
-
-    tokio::spawn(async move {
-        poll_fn(|cx| event_queue.poll_dispatch_pending(cx, &mut data)).await;
-    });
 }

@@ -1,5 +1,6 @@
 use std::future;
 
+mod dmabuf_frame;
 mod documents;
 mod screenshot;
 use screenshot::Screenshot;
@@ -63,13 +64,12 @@ impl Session {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> zbus::Result<()> {
     let wayland_connection = wayland::connect_to_wayland();
-
-    wayland::monitor_wayland_registry(wayland_connection.clone());
+    let wayland_helper = wayland::WaylandHelper::new(wayland_connection);
 
     let _connection = zbus::ConnectionBuilder::session()?
         .name(DBUS_NAME)?
-        .serve_at(DBUS_PATH, Screenshot::new(wayland_connection.clone()))?
-        .serve_at(DBUS_PATH, ScreenCast::new(wayland_connection))?
+        .serve_at(DBUS_PATH, Screenshot::new(wayland_helper.clone()))?
+        .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper))?
         .build()
         .await?;
 
