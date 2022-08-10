@@ -172,8 +172,8 @@ impl ScreenCast {
 
     #[dbus_interface(property)]
     async fn available_cursor_modes(&self) -> u32 {
-        // XXX
-        CURSOR_MODE_HIDDEN
+        // TODO: Support metadata?
+        CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED
     }
 
     #[dbus_interface(property, name = "version")]

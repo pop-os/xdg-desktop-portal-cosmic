@@ -54,22 +54,24 @@ impl Screenshot {
         if let Some(mut exporter) = self.wayland_helper.dmabuf_exporter() {
             // XXX way to select best output? Multiple?
             if let Some(output) = self.wayland_helper.outputs().first().cloned() {
-                tokio::task::spawn_blocking(move || {
-                    // XXX display
-                    let frame = exporter.capture_output(&output, false).unwrap();
-                    let file = io::BufWriter::new(fs::File::create("/tmp/out.png").unwrap());
-                    let mut gpu_manager = GpuManager::new(EglGlesBackend, None).unwrap();
-                    frame.write_to_png(&mut gpu_manager, file);
+                let res = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                    let frame = exporter.capture_output(&output, false)?;
+                    let file = io::BufWriter::new(fs::File::create("/tmp/out.png")?);
+                    let mut gpu_manager = GpuManager::new(EglGlesBackend, None)?;
+                    frame.write_to_png(&mut gpu_manager, file)?;
+                    Ok(())
                 })
                 .await;
+
+                if let Err(err) = res {
+                    eprintln!("Failed to capture screenshot: {}", err);
+                    return (
+                        crate::PORTAL_RESPONSE_OTHER,
+                        ScreenshotResult { uri: String::new() },
+                    );
+                }
             }
         }
-        /*
-        std::fs::copy(
-            "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png",
-            "/tmp/out.png",
-        );
-        */
 
         // connection.object_server().remove::<Request, _>(&handle);
         (

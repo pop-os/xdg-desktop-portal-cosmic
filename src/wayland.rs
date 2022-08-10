@@ -13,10 +13,10 @@ use std::{
 use tokio::io::{unix::AsyncFd, Interest};
 use wayland_client::{
     protocol::{wl_output, wl_registry},
-    Connection, Dispatch, QueueHandle, WEnum,
+    Connection, Dispatch, QueueHandle,
 };
 
-use crate::dmabuf_frame::{DmabufFrame, Object};
+use crate::dmabuf_frame::{DmabufError, DmabufFrame, Object};
 
 struct WaylandHelperInner {
     connection: wayland_client::Connection,
@@ -78,7 +78,7 @@ impl DmabufExporter {
         &mut self,
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
-    ) -> Result<DmabufFrame, WEnum<zcosmic_export_dmabuf_frame_v1::CancelReason>> {
+    ) -> Result<DmabufFrame, DmabufError> {
         // TODO: way to get cursor metadata?
 
         let overlay_cursor = if overlay_cursor { 1 } else { 0 };
@@ -103,7 +103,7 @@ impl DmabufExporter {
 #[derive(Default)]
 struct CaptureState {
     frame: DmabufFrame,
-    res: Option<Result<(), WEnum<zcosmic_export_dmabuf_frame_v1::CancelReason>>>,
+    res: Option<Result<(), DmabufError>>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for WaylandHelper {
@@ -175,6 +175,19 @@ impl Dispatch<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1, ()
     }
 }
 
+fn u64_from_slice(s: &[u8]) -> Option<u64> {
+    Some(u64::from_ne_bytes([
+        *s.get(0)?,
+        *s.get(1)?,
+        *s.get(2)?,
+        *s.get(3)?,
+        *s.get(4)?,
+        *s.get(5)?,
+        *s.get(6)?,
+        *s.get(7)?,
+    ]))
+}
+
 impl Dispatch<zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1, ()> for CaptureState {
     fn event(
         state: &mut Self,
@@ -188,10 +201,16 @@ impl Dispatch<zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1, ()> fo
 
         match event {
             zcosmic_export_dmabuf_frame_v1::Event::Device { ref node } => {
-                let node = u64::from_ne_bytes([
-                    node[0], node[1], node[2], node[3], node[4], node[5], node[6], node[7],
-                ]);
-                frame.node = Some(DrmNode::from_dev_id(node).unwrap());
+                if let Some(node) = u64_from_slice(node) {
+                    match DrmNode::from_dev_id(node) {
+                        Ok(node) => {
+                            frame.node = Some(node);
+                        }
+                        Err(err) => {
+                            state.res = Some(Err(DmabufError::CreateDrmNode(err)));
+                        }
+                    }
+                }
             }
             zcosmic_export_dmabuf_frame_v1::Event::Frame {
                 width,
@@ -204,9 +223,9 @@ impl Dispatch<zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1, ()> fo
             } => {
                 frame.width = width;
                 frame.height = height;
-                frame.format = Some(Fourcc::try_from(format).unwrap());
+                frame.format = Fourcc::try_from(format).ok();
                 frame.modifier = Some(Modifier::from(((mod_high as u64) << 32) + mod_low as u64));
-                frame.flags = Some(DmabufFlags::from_bits(u32::from(flags)).unwrap());
+                frame.flags = DmabufFlags::from_bits(u32::from(flags));
             }
             zcosmic_export_dmabuf_frame_v1::Event::Object {
                 fd,
@@ -229,7 +248,7 @@ impl Dispatch<zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1, ()> fo
                 state.res = Some(Ok(()));
             }
             zcosmic_export_dmabuf_frame_v1::Event::Cancel { reason } => {
-                state.res = Some(Err(reason));
+                state.res = Some(Err(DmabufError::Cancelled(reason)));
             }
             _ => {}
         }
