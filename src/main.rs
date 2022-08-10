@@ -1,4 +1,5 @@
-use std::future;
+use std::{collections::HashMap, future};
+use zbus::zvariant;
 
 mod dmabuf_frame;
 mod documents;
@@ -19,6 +20,32 @@ const PORTAL_RESPONSE_OTHER: u32 = 2;
 // TODO: org.freedesktop.impl.portal.Inhibit?
 
 struct Request;
+
+#[derive(zvariant::Type)]
+#[zvariant(signature = "(ua{sv})")]
+enum PortalResponse<T: zvariant::Type + serde::Serialize> {
+    Success(T),
+    Cancelled,
+    Other,
+}
+
+impl<T: zvariant::Type + serde::Serialize> serde::Serialize for PortalResponse<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Success(res) => (PORTAL_RESPONSE_SUCCESS, res).serialize(serializer),
+            Self::Cancelled => (
+                PORTAL_RESPONSE_CANCELLED,
+                HashMap::<String, zvariant::Value>::new(),
+            )
+                .serialize(serializer),
+            Self::Other => (
+                PORTAL_RESPONSE_OTHER,
+                HashMap::<String, zvariant::Value>::new(),
+            )
+                .serialize(serializer),
+        }
+    }
+}
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Request")]
 impl Request {

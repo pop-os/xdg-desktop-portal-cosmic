@@ -6,6 +6,7 @@ use zbus::zvariant;
 
 use crate::screencast_thread::ScreencastThread;
 use crate::wayland::WaylandHelper;
+use crate::PortalResponse;
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
 const CURSOR_MODE_EMBEDDED: u32 = 2;
@@ -80,7 +81,7 @@ impl ScreenCast {
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
-    ) -> (u32, CreateSessionResult) {
+    ) -> PortalResponse<CreateSessionResult> {
         // TODO: handle
         let session_data = Arc::new(Mutex::new(SessionData::default()));
         self.sessions
@@ -93,12 +94,9 @@ impl ScreenCast {
             .at(&session_handle, crate::Session::new(destroy_session))
             .await
             .unwrap(); // XXX unwrap
-        (
-            crate::PORTAL_RESPONSE_SUCCESS,
-            CreateSessionResult {
-                session_id: "foo".to_string(), // XXX
-            },
-        )
+        PortalResponse::Success(CreateSessionResult {
+            session_id: "foo".to_string(), // XXX
+        })
     }
 
     async fn select_sources(
@@ -107,9 +105,9 @@ impl ScreenCast {
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: SelectSourcesOptions,
-    ) -> (u32, HashMap<String, zvariant::OwnedValue>) {
+    ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
         // TODO: XXX
-        (crate::PORTAL_RESPONSE_SUCCESS, HashMap::new())
+        PortalResponse::Success(HashMap::new())
     }
 
     async fn start(
@@ -119,49 +117,36 @@ impl ScreenCast {
         app_id: String,
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
-    ) -> (u32, StartResult) {
+    ) -> PortalResponse<StartResult> {
         let session_data = match self.sessions.lock().unwrap().get(&session_handle) {
             Some(session_data) => session_data.clone(),
             None => {
-                return (
-                    crate::PORTAL_RESPONSE_OTHER,
-                    StartResult {
-                        streams: vec![],
-                        persist_mode: None,
-                        restore_data: None,
-                    },
-                )
+                return PortalResponse::Other;
             }
         };
 
         let res = ScreencastThread::new().await;
 
-        let (res, streams) = if let Ok(screencast_thread) = res {
+        let streams = if let Ok(screencast_thread) = res {
             let node_id = screencast_thread.node_id();
             let mut session_data = session_data.lock().unwrap();
             if session_data.closed {
                 screencast_thread.stop();
-                (crate::PORTAL_RESPONSE_OTHER, vec![])
+                return PortalResponse::Other;
             } else {
                 session_data.screencast_thread = Some(screencast_thread);
-                (
-                    crate::PORTAL_RESPONSE_SUCCESS,
-                    vec![(node_id, HashMap::new())],
-                )
+                vec![(node_id, HashMap::new())]
             }
         } else {
             // XXX handle error message?
-            (crate::PORTAL_RESPONSE_OTHER, vec![])
+            return PortalResponse::Other;
         };
-        (
-            res,
-            StartResult {
-                // XXX
-                streams,
-                persist_mode: None,
-                restore_data: None,
-            },
-        )
+        PortalResponse::Success(StartResult {
+            // XXX
+            streams,
+            persist_mode: None,
+            restore_data: None,
+        })
     }
 
     #[dbus_interface(property)]

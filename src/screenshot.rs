@@ -3,6 +3,7 @@ use std::{collections::HashMap, fs, io};
 use zbus::zvariant;
 
 use crate::wayland::WaylandHelper;
+use crate::PortalResponse;
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
 
@@ -44,7 +45,7 @@ impl Screenshot {
         app_id: &str,
         parent_window: &str,
         option: ScreenshotOptions,
-    ) -> (u32, ScreenshotResult) {
+    ) -> PortalResponse<ScreenshotResult> {
         // connection.object_server().at(&handle, Request);
 
         // TODO create handle, show dialog
@@ -65,21 +66,15 @@ impl Screenshot {
 
                 if let Err(err) = res {
                     eprintln!("Failed to capture screenshot: {}", err);
-                    return (
-                        crate::PORTAL_RESPONSE_OTHER,
-                        ScreenshotResult { uri: String::new() },
-                    );
+                    return PortalResponse::Other;
                 }
             }
         }
 
         // connection.object_server().remove::<Request, _>(&handle);
-        (
-            crate::PORTAL_RESPONSE_SUCCESS,
-            ScreenshotResult {
-                uri: format!("file:///tmp/out.png"),
-            },
-        )
+        PortalResponse::Success(ScreenshotResult {
+            uri: format!("file:///tmp/out.png"),
+        })
     }
 
     async fn pick_color(
@@ -88,14 +83,11 @@ impl Screenshot {
         app_id: &str,
         parent_window: &str,
         option: HashMap<String, zvariant::Value<'_>>,
-    ) -> (u32, PickColorResult) {
+    ) -> PortalResponse<PickColorResult> {
         // TODO create handle
         // XXX
-        (
-            crate::PORTAL_RESPONSE_SUCCESS,
-            PickColorResult {
-                color: (1., 1., 1.),
-            },
-        )
+        PortalResponse::Success(PickColorResult {
+            color: (1., 1., 1.),
+        })
     }
 }
