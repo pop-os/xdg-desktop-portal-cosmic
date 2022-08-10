@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 use zbus::zvariant;
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
@@ -23,11 +23,11 @@ struct PickColorResult {
 }
 
 pub struct Screenshot {
-    wayland_connection: Arc<wayland_client::Connection>,
+    wayland_connection: wayland_client::Connection,
 }
 
 impl Screenshot {
-    pub fn new(wayland_connection: Arc<wayland_client::Connection>) -> Self {
+    pub fn new(wayland_connection: wayland_client::Connection) -> Self {
         Self { wayland_connection }
     }
 }
