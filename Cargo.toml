@@ -10,7 +10,7 @@ cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
 # pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 futures = "0.3"
 pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
-smithay = { git = "https://github.com/Smithay/smithay", default-features = false, features = ["backend_drm", "backend_egl", "renderer_gl"] }
+smithay = { git = "https://github.com/Smithay/smithay", default-features = false, features = ["backend_drm", "backend_egl", "renderer_gl", "renderer_multi"] }
 spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "=0.30.0-beta.8" }
