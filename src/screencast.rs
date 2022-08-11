@@ -29,6 +29,7 @@ struct SelectSourcesOptions {
     types: Option<u32>,
     // Default: false
     multiple: Option<bool>,
+    cursor_mode: Option<u32>,
     restore_data: Option<(String, u32, zvariant::OwnedValue)>,
     // Default: 0
     persist_mode: Option<u32>,
@@ -45,6 +46,7 @@ struct StartResult {
 #[derive(Default)]
 struct SessionData {
     screencast_thread: Option<ScreencastThread>,
+    cursor_mode: Option<u32>,
     closed: bool,
 }
 
@@ -106,8 +108,14 @@ impl ScreenCast {
         app_id: String,
         options: SelectSourcesOptions,
     ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
-        // TODO: XXX
-        PortalResponse::Success(HashMap::new())
+        // TODO: Handle other options
+        match self.sessions.lock().unwrap().get(&session_handle) {
+            Some(session_data) => {
+                session_data.lock().unwrap().cursor_mode = options.cursor_mode;
+                PortalResponse::Success(HashMap::new())
+            }
+            None => PortalResponse::Other,
+        }
     }
 
     async fn start(
@@ -139,8 +147,13 @@ impl ScreenCast {
                 return PortalResponse::Other;
             };
 
-        // XXX overlay cursor
-        let res = ScreencastThread::new(exporter, output, false).await;
+        let cursor_mode = session_data
+            .lock()
+            .unwrap()
+            .cursor_mode
+            .unwrap_or(CURSOR_MODE_HIDDEN);
+        let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
+        let res = ScreencastThread::new(exporter, output, overlay_cursor).await;
 
         let streams = if let Ok(screencast_thread) = res {
             let node_id = screencast_thread.node_id();
