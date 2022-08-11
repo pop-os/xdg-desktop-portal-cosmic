@@ -63,13 +63,13 @@ pub struct DmabufFrame {
 }
 
 // TODO: self borrow, and deref to the mapped data?
-struct Mapping<'a> {
+pub struct Mapping<'a> {
     renderer: MultiRenderer<'a, 'a, EglGlesBackend, EglGlesBackend, Gles2Texture>,
     mapping: MultiTextureMapping<EglGlesBackend, EglGlesBackend>,
 }
 
 impl<'a> Mapping<'a> {
-    fn map(&mut self) -> anyhow::Result<&[u8]> {
+    pub fn map(&mut self) -> anyhow::Result<&[u8]> {
         Ok(self.renderer.map_texture(&self.mapping)?)
     }
 }

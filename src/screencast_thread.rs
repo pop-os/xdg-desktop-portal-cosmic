@@ -1,12 +1,17 @@
 // Thread to get frames from compositor and redirect to pipewire
+// TODO: Things other than outputs, handle disconnected output, resolution change
 
 use pipewire::{
     prelude::*,
     spa::{self, pod, utils::Id},
     stream::StreamState,
 };
+use smithay::backend::renderer::multigpu::{egl::EglGlesBackend, GpuManager};
 use std::{cell::RefCell, io, rc::Rc};
 use tokio::sync::oneshot;
+use wayland_client::protocol::wl_output;
+
+use crate::wayland::DmabufExporter;
 
 pub struct ScreencastThread {
     node_id: u32,
@@ -14,20 +19,26 @@ pub struct ScreencastThread {
 }
 
 impl ScreencastThread {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(
+        exporter: DmabufExporter,
+        output: wl_output::WlOutput,
+        overlay_cursor: bool,
+    ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
-        std::thread::spawn(move || match start_stream() {
-            Ok((loop_, node_id_rx)) => {
-                tx.send(Ok(node_id_rx)).unwrap();
-                let weak_loop = loop_.downgrade();
-                let _receiver = thread_stop_rx.attach(&loop_, move |()| {
-                    weak_loop.upgrade().unwrap().quit();
-                });
-                loop_.run();
-            }
-            Err(err) => tx.send(Err(err)).unwrap(),
-        });
+        std::thread::spawn(
+            move || match start_stream(exporter, output, overlay_cursor) {
+                Ok((loop_, node_id_rx)) => {
+                    tx.send(Ok(node_id_rx)).unwrap();
+                    let weak_loop = loop_.downgrade();
+                    let _receiver = thread_stop_rx.attach(&loop_, move |()| {
+                        weak_loop.upgrade().unwrap().quit();
+                    });
+                    loop_.run();
+                }
+                Err(err) => tx.send(Err(err)).unwrap(),
+            },
+        );
         Ok(Self {
             node_id: rx.await.unwrap()?.await.unwrap()?,
             thread_stop_tx,
@@ -44,6 +55,9 @@ impl ScreencastThread {
 }
 
 fn start_stream(
+    exporter: DmabufExporter,
+    output: wl_output::WlOutput,
+    overlay_cursor: bool,
 ) -> Result<(pipewire::MainLoop, oneshot::Receiver<anyhow::Result<u32>>), pipewire::Error> {
     let loop_ = pipewire::MainLoop::new()?;
 
@@ -55,6 +69,10 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
     let node_id_tx = RefCell::new(Some(node_id_tx));
+
+    // XXX unwrap
+    let gpu_manager = RefCell::new(GpuManager::new(EglGlesBackend, None).unwrap());
+    let exporter = RefCell::new(exporter);
 
     let stream = pipewire::stream::Stream::with_user_data(
         &loop_,
@@ -96,7 +114,7 @@ fn start_stream(
             println!("param-changed: {} {:?}", id, value);
         }
     })
-    .process(|stream, ()| {
+    .process(move |stream, ()| {
         if let Some(mut buffer) = stream.dequeue_buffer() {
             let datas = buffer.datas_mut();
             let chunk = datas[0].chunk();
@@ -105,19 +123,24 @@ fn start_stream(
             *chunk.stride_mut() = 4 * 1920;
             let data = datas[0].get_mut();
             if data.len() == 1920 * 1080 * 4 {
-                for i in 0..(1920 * 1080) {
-                    data[i * 4] = 255;
-                    data[i * 4 + 1] = 0;
-                    data[i * 4 + 2] = 0;
-                    data[i * 4 + 3] = 255;
-                }
+                // TODO error
+                let mut gpu_manager = gpu_manager.borrow_mut();
+                let mut exporter = exporter.borrow_mut();
+                || -> anyhow::Result<()> {
+                    let frame = exporter.capture_output(&output, overlay_cursor)?;
+                    if frame.width == 1920 && frame.height == 1080 {
+                        let mut mapping = frame.map_rgba(&mut gpu_manager)?;
+                        data.copy_from_slice(mapping.map()?);
+                    }
+                    Ok(())
+                }();
             }
         }
     })
     .create()?;
     // DRIVER, ALLOC_BUFFERS
     // ??? define formats (shm, dmabuf)
-    let format = format();
+    let format = format(1920, 1080);
     let buffers = buffers();
     let params = &mut [
         buffers.as_slice() as *const _ as _,
@@ -156,7 +179,7 @@ fn buffers() -> Vec<u8> {
     }))
 }
 
-fn format() -> Vec<u8> {
+fn format(width: u32, height: u32) -> Vec<u8> {
     value_to_bytes(pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_Format,
         id: spa_sys::SPA_PARAM_EnumFormat,
@@ -180,10 +203,7 @@ fn format() -> Vec<u8> {
             pod::Property {
                 key: spa_sys::SPA_FORMAT_VIDEO_size,
                 flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Rectangle(spa::utils::Rectangle {
-                    width: 1920,
-                    height: 1080,
-                }),
+                value: pod::Value::Rectangle(spa::utils::Rectangle { width, height }),
             },
             pod::Property {
                 key: spa_sys::SPA_FORMAT_VIDEO_framerate,

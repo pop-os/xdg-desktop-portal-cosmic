@@ -52,23 +52,31 @@ impl Screenshot {
         // XXX
         //
 
-        if let Some(mut exporter) = self.wayland_helper.dmabuf_exporter() {
+        let (mut exporter, output) = if let Some(exporter) = self.wayland_helper.dmabuf_exporter() {
             // XXX way to select best output? Multiple?
             if let Some(output) = self.wayland_helper.outputs().first().cloned() {
-                let res = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                    let frame = exporter.capture_output(&output, false)?;
-                    let file = io::BufWriter::new(fs::File::create("/tmp/out.png")?);
-                    let mut gpu_manager = GpuManager::new(EglGlesBackend, None)?;
-                    frame.write_to_png(&mut gpu_manager, file)?;
-                    Ok(())
-                })
-                .await;
-
-                if let Err(err) = res {
-                    eprintln!("Failed to capture screenshot: {}", err);
-                    return PortalResponse::Other;
-                }
+                (exporter, output)
+            } else {
+                eprintln!("No output");
+                return PortalResponse::Other;
             }
+        } else {
+            eprintln!("No dmabuf exporter");
+            return PortalResponse::Other;
+        };
+
+        let res = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let frame = exporter.capture_output(&output, false)?;
+            let file = io::BufWriter::new(fs::File::create("/tmp/out.png")?);
+            let mut gpu_manager = GpuManager::new(EglGlesBackend, None)?;
+            frame.write_to_png(&mut gpu_manager, file)?;
+            Ok(())
+        })
+        .await;
+
+        if let Err(err) = res {
+            eprintln!("Failed to capture screenshot: {}", err);
+            return PortalResponse::Other;
         }
 
         // connection.object_server().remove::<Request, _>(&handle);

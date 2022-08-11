@@ -125,7 +125,22 @@ impl ScreenCast {
             }
         };
 
-        let res = ScreencastThread::new().await;
+        let (mut exporter, output) =
+            if let Some(mut exporter) = self.wayland_helper.dmabuf_exporter() {
+                // XXX way to select best output? Multiple?
+                if let Some(output) = self.wayland_helper.outputs().first().cloned() {
+                    (exporter, output)
+                } else {
+                    eprintln!("No output");
+                    return PortalResponse::Other;
+                }
+            } else {
+                eprintln!("No dmabuf exporter");
+                return PortalResponse::Other;
+            };
+
+        // XXX overlay cursor
+        let res = ScreencastThread::new(exporter, output, false).await;
 
         let streams = if let Ok(screencast_thread) = res {
             let node_id = screencast_thread.node_id();
