@@ -8,7 +8,7 @@ use smithay::{
         drm::node::{CreateDrmNodeError, DrmNode},
         renderer::{
             gles2::Gles2Texture,
-            multigpu::{egl::EglGlesBackend, GpuManager},
+            multigpu::{egl::EglGlesBackend, GpuManager, MultiRenderer, MultiTextureMapping},
             Bind, ExportMem,
         },
     },
@@ -62,12 +62,23 @@ pub struct DmabufFrame {
     pub ready: bool,
 }
 
+// TODO: self borrow, and deref to the mapped data?
+struct Mapping<'a> {
+    renderer: MultiRenderer<'a, 'a, EglGlesBackend, EglGlesBackend, Gles2Texture>,
+    mapping: MultiTextureMapping<EglGlesBackend, EglGlesBackend>,
+}
+
+impl<'a> Mapping<'a> {
+    fn map(&mut self) -> anyhow::Result<&[u8]> {
+        Ok(self.renderer.map_texture(&self.mapping)?)
+    }
+}
+
 impl DmabufFrame {
-    pub fn write_to_png<T: Write>(
+    pub fn map_rgba<'a>(
         &self,
-        gpu_manager: &mut GpuManager<EglGlesBackend>,
-        file: T,
-    ) -> anyhow::Result<()> {
+        gpu_manager: &'a mut GpuManager<EglGlesBackend>,
+    ) -> anyhow::Result<Mapping<'a>> {
         let mut builder = Dmabuf::builder(
             (self.width as i32, self.height as i32),
             self.format.ok_or(DmabufError::Missing("format"))?,
@@ -92,7 +103,16 @@ impl DmabufFrame {
             size: Size::from((self.width as i32, self.height as i32)),
         };
         let mapping = renderer.copy_framebuffer(rectangle)?;
-        let data = renderer.map_texture(&mapping)?;
+        Ok(Mapping { renderer, mapping })
+    }
+
+    pub fn write_to_png<T: Write>(
+        &self,
+        gpu_manager: &mut GpuManager<EglGlesBackend>,
+        file: T,
+    ) -> anyhow::Result<()> {
+        let mut mapping = self.map_rgba(gpu_manager)?;
+        let data = mapping.map()?;
 
         let mut encoder = png::Encoder::new(file, self.width, self.height);
         encoder.set_color(png::ColorType::Rgba);
