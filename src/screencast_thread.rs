@@ -3,7 +3,11 @@
 
 use pipewire::{
     prelude::*,
-    spa::{self, pod, utils::Id},
+    spa::{
+        self,
+        pod::{self, deserialize::PodDeserializer, serialize::PodSerializer},
+        utils::Id,
+    },
     stream::StreamState,
 };
 use smithay::backend::renderer::multigpu::{egl::EglGlesBackend, GpuManager};
@@ -55,7 +59,7 @@ impl ScreencastThread {
 }
 
 fn start_stream(
-    exporter: DmabufExporter,
+    mut exporter: DmabufExporter,
     output: wl_output::WlOutput,
     overlay_cursor: bool,
 ) -> Result<(pipewire::MainLoop, oneshot::Receiver<anyhow::Result<u32>>), pipewire::Error> {
@@ -71,7 +75,14 @@ fn start_stream(
     let node_id_tx = RefCell::new(Some(node_id_tx));
 
     // XXX unwrap
-    let gpu_manager = RefCell::new(GpuManager::new(EglGlesBackend, None).unwrap());
+    let gpu_manager = GpuManager::new(EglGlesBackend, None).unwrap();
+
+    let (width, height) = match exporter.capture_output(&output, overlay_cursor) {
+        Ok(frame) => (frame.width, frame.height),
+        Err(err) => (0, 0), // XXX
+    };
+
+    let gpu_manager = RefCell::new(gpu_manager);
     let exporter = RefCell::new(exporter);
 
     let stream = pipewire::stream::Stream::with_user_data(
@@ -108,9 +119,7 @@ fn start_stream(
             return;
         }
         if let Some(pod) = std::ptr::NonNull::new(pod as *mut _) {
-            let value = unsafe {
-                spa::pod::deserialize::PodDeserializer::deserialize_ptr::<pod::Value>(pod)
-            };
+            let value = unsafe { PodDeserializer::deserialize_ptr::<pod::Value>(pod) };
             println!("param-changed: {} {:?}", id, value);
         }
     })
@@ -118,17 +127,17 @@ fn start_stream(
         if let Some(mut buffer) = stream.dequeue_buffer() {
             let datas = buffer.datas_mut();
             let chunk = datas[0].chunk();
-            *chunk.size_mut() = 1920 * 1080 * 4;
+            *chunk.size_mut() = width * height * 4;
             *chunk.offset_mut() = 0;
-            *chunk.stride_mut() = 4 * 1920;
+            *chunk.stride_mut() = 4 * width as i32;
             let data = datas[0].get_mut();
-            if data.len() == 1920 * 1080 * 4 {
+            if data.len() == width as usize * height as usize * 4 {
                 // TODO error
                 let mut gpu_manager = gpu_manager.borrow_mut();
                 let mut exporter = exporter.borrow_mut();
                 || -> anyhow::Result<()> {
                     let frame = exporter.capture_output(&output, overlay_cursor)?;
-                    if frame.width == 1920 && frame.height == 1080 {
+                    if frame.width == width && frame.height == height {
                         let mut mapping = frame.map_rgba(&mut gpu_manager)?;
                         data.copy_from_slice(mapping.map()?);
                     }
@@ -140,8 +149,8 @@ fn start_stream(
     .create()?;
     // DRIVER, ALLOC_BUFFERS
     // ??? define formats (shm, dmabuf)
-    let format = format(1920, 1080);
-    let buffers = buffers();
+    let format = format(width, height);
+    let buffers = buffers(width, height);
     let params = &mut [
         buffers.as_slice() as *const _ as _,
         format.as_slice() as *const _ as _,
@@ -156,11 +165,11 @@ fn start_stream(
 fn value_to_bytes(value: pod::Value) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut cursor = io::Cursor::new(&mut bytes);
-    spa::pod::serialize::PodSerializer::serialize(&mut cursor, &value).unwrap();
+    PodSerializer::serialize(&mut cursor, &value).unwrap();
     bytes
 }
 
-fn buffers() -> Vec<u8> {
+fn buffers(width: u32, height: u32) -> Vec<u8> {
     value_to_bytes(pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
@@ -168,12 +177,12 @@ fn buffers() -> Vec<u8> {
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_size,
                 flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Int(1920 * 1080 * 4),
+                value: pod::Value::Int(width as i32 * height as i32 * 4),
             },
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_stride,
                 flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Int(1920 * 4),
+                value: pod::Value::Int(width as i32 * 4),
             },
         ],
     }))
