@@ -166,10 +166,9 @@ impl ScreenCast {
             }
         }
 
-        let results: Vec<_> = res_futures.collect().await;
         let mut failed = false;
         let mut screencast_threads = Vec::new();
-        for res in results {
+        while let Some(res) = res_futures.next().await {
             match res {
                 Ok(thread) => screencast_threads.push(thread),
                 Err(err) => {
