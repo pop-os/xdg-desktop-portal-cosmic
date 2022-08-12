@@ -1,3 +1,4 @@
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -47,6 +48,7 @@ struct StartResult {
 struct SessionData {
     screencast_thread: Option<ScreencastThread>,
     cursor_mode: Option<u32>,
+    multiple: bool,
     closed: bool,
 }
 
@@ -111,7 +113,9 @@ impl ScreenCast {
         // TODO: Handle other options
         match self.sessions.lock().unwrap().get(&session_handle) {
             Some(session_data) => {
-                session_data.lock().unwrap().cursor_mode = options.cursor_mode;
+                let mut session_data = session_data.lock().unwrap();
+                session_data.cursor_mode = options.cursor_mode;
+                session_data.multiple = options.multiple.unwrap_or(false);
                 PortalResponse::Success(HashMap::new())
             }
             None => PortalResponse::Other,
@@ -133,41 +137,69 @@ impl ScreenCast {
             }
         };
 
-        let (exporter, output) = if let Some(exporter) = self.wayland_helper.dmabuf_exporter() {
-            // XXX way to select best output? Multiple?
-            if let Some(output) = self.wayland_helper.outputs().first().cloned() {
-                (exporter, output)
-            } else {
-                eprintln!("No output");
-                return PortalResponse::Other;
-            }
-        } else {
-            eprintln!("No dmabuf exporter");
-            return PortalResponse::Other;
+        let (cursor_mode, multiple) = {
+            let session_data = session_data.lock().unwrap();
+            let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
+            let multiple = session_data.multiple;
+            (cursor_mode, multiple)
         };
 
-        let cursor_mode = session_data
-            .lock()
-            .unwrap()
-            .cursor_mode
-            .unwrap_or(CURSOR_MODE_HIDDEN);
+        let mut outputs = self.wayland_helper.outputs();
+        if !outputs.is_empty() {
+            if !multiple {
+                // XXX way to select best output?
+                outputs.truncate(1);
+            }
+        } else {
+            eprintln!("No output");
+            return PortalResponse::Other;
+        }
+
         let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
-        let res = ScreencastThread::new(exporter, output, overlay_cursor).await;
-
-        let streams = if let Ok(screencast_thread) = res {
-            let node_id = screencast_thread.node_id();
-            let mut session_data = session_data.lock().unwrap();
-            if session_data.closed {
-                screencast_thread.stop();
-                return PortalResponse::Other;
+        let mut res_futures = FuturesUnordered::new();
+        for output in outputs {
+            if let Some(exporter) = self.wayland_helper.dmabuf_exporter() {
+                res_futures.push(ScreencastThread::new(exporter, output, overlay_cursor));
             } else {
-                session_data.screencast_thread = Some(screencast_thread);
-                vec![(node_id, HashMap::new())]
+                eprintln!("No dmabuf exporter");
+                return PortalResponse::Other;
             }
-        } else {
-            // XXX handle error message?
+        }
+
+        let results: Vec<_> = res_futures.collect().await;
+        let mut failed = false;
+        let mut screencast_threads = Vec::new();
+        for res in results {
+            match res {
+                Ok(thread) => screencast_threads.push(thread),
+                Err(err) => {
+                    eprintln!("Screencast thread failed: {}", err);
+                    failed = true;
+                }
+            }
+        }
+
+        // Stop any thread that didn't fail
+        if failed {
+            for thread in screencast_threads {
+                thread.stop();
+            }
             return PortalResponse::Other;
-        };
+        }
+
+        // Session may have already been cancelled
+        let mut session_data = session_data.lock().unwrap();
+        if session_data.closed {
+            for thread in screencast_threads {
+                thread.stop();
+            }
+            return PortalResponse::Cancelled;
+        }
+
+        let streams = screencast_threads
+            .iter()
+            .map(|thread| (thread.node_id(), HashMap::new()))
+            .collect();
         PortalResponse::Success(StartResult {
             // XXX
             streams,
