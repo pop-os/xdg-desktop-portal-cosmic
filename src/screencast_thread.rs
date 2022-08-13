@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 // Thread to get frames from compositor and redirect to pipewire
 // TODO: Things other than outputs, handle disconnected output, resolution change
 

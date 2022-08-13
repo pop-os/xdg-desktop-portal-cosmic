@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use cosmic_protocols::export_dmabuf::v1::client::{
     zcosmic_export_dmabuf_frame_v1, zcosmic_export_dmabuf_manager_v1,
 };
@@ -7,7 +9,7 @@ use smithay::backend::{
     drm::node::DrmNode,
 };
 use std::{
-    process,
+    array, process,
     sync::{Arc, Mutex},
 };
 use tokio::io::{unix::AsyncFd, Interest};
@@ -176,16 +178,11 @@ impl Dispatch<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1, ()
 }
 
 fn u64_from_slice(s: &[u8]) -> Option<u64> {
-    Some(u64::from_ne_bytes([
-        *s.get(0)?,
-        *s.get(1)?,
-        *s.get(2)?,
-        *s.get(3)?,
-        *s.get(4)?,
-        *s.get(5)?,
-        *s.get(6)?,
-        *s.get(7)?,
-    ]))
+    if s.len() >= 8 {
+        Some(u64::from_ne_bytes(array::from_fn(|n| s[n])))
+    } else {
+        None
+    }
 }
 
 impl Dispatch<zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1, ()> for CaptureState {

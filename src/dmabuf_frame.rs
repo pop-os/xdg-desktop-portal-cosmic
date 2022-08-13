@@ -118,7 +118,7 @@ impl DmabufFrame {
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;
-        writer.write_image_data(&data)?;
+        writer.write_image_data(data)?;
 
         Ok(())
     }

@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_variables)]
+
 use smithay::backend::renderer::multigpu::{egl::EglGlesBackend, GpuManager};
 use std::{collections::HashMap, fs, io};
 use zbus::zvariant;

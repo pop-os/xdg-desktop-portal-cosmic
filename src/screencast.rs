@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_variables)]
+
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::{
     collections::HashMap,
