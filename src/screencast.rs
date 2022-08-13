@@ -1,6 +1,7 @@
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::{
     collections::HashMap,
+    mem,
     sync::{Arc, Mutex},
 };
 use zbus::zvariant;
@@ -46,7 +47,7 @@ struct StartResult {
 
 #[derive(Default)]
 struct SessionData {
-    screencast_thread: Option<ScreencastThread>,
+    screencast_threads: Vec<ScreencastThread>,
     cursor_mode: Option<u32>,
     multiple: bool,
     closed: bool,
@@ -54,8 +55,8 @@ struct SessionData {
 
 impl SessionData {
     fn close(&mut self) {
-        if let Some(screencast_thread) = self.screencast_thread.take() {
-            screencast_thread.stop();
+        for thread in mem::take(&mut self.screencast_threads) {
+            thread.stop();
         }
         self.closed = true
         // XXX Remove from hashmap?
@@ -111,6 +112,7 @@ impl ScreenCast {
         options: SelectSourcesOptions,
     ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
         // TODO: Handle other options
+        // TODO: Prompt what monitor to record?
         match self.sessions.lock().unwrap().get(&session_handle) {
             Some(session_data) => {
                 let mut session_data = session_data.lock().unwrap();
@@ -199,6 +201,8 @@ impl ScreenCast {
             .iter()
             .map(|thread| (thread.node_id(), HashMap::new()))
             .collect();
+        session_data.screencast_threads = screencast_threads;
+
         PortalResponse::Success(StartResult {
             // XXX
             streams,
