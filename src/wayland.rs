@@ -9,7 +9,9 @@ use smithay::backend::{
     drm::node::DrmNode,
 };
 use std::{
-    array, process,
+    array,
+    collections::BTreeMap,
+    process,
     sync::{Arc, Mutex},
 };
 use tokio::io::{unix::AsyncFd, Interest};
@@ -23,7 +25,7 @@ use crate::dmabuf_frame::{DmabufError, DmabufFrame, Object};
 struct WaylandHelperInner {
     connection: wayland_client::Connection,
     export_dmabuf_manager: Option<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1>,
-    outputs: Vec<wl_output::WlOutput>,
+    outputs: BTreeMap<u32, wl_output::WlOutput>,
 }
 
 #[derive(Clone)]
@@ -41,7 +43,7 @@ impl WaylandHelper {
             inner: Arc::new(Mutex::new(WaylandHelperInner {
                 connection,
                 export_dmabuf_manager: None,
-                outputs: Vec::new(),
+                outputs: BTreeMap::new(),
             })),
         };
         event_queue.flush().unwrap();
@@ -65,8 +67,14 @@ impl WaylandHelper {
     }
 
     pub fn outputs(&self) -> Vec<wl_output::WlOutput> {
-        // TODO Good way to avoid clone?
-        self.inner.lock().unwrap().outputs.clone()
+        // TODO Good way to avoid allocation?
+        self.inner
+            .lock()
+            .unwrap()
+            .outputs
+            .values()
+            .cloned()
+            .collect()
     }
 }
 
@@ -135,16 +143,15 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WaylandHelper {
                             .unwrap());
                 }
                 "wl_output" => {
-                    app_data.inner.lock().unwrap().outputs.push(
-                        registry
-                            .bind::<wl_output::WlOutput, _, _>(name, 4, qh, ())
-                            .unwrap(),
-                    );
+                    let output = registry
+                        .bind::<wl_output::WlOutput, _, _>(name, 4, qh, ())
+                        .unwrap();
+                    app_data.inner.lock().unwrap().outputs.insert(name, output);
                 }
                 _ => {}
             },
             wl_registry::Event::GlobalRemove { name } => {
-                // XXX remove output
+                app_data.inner.lock().unwrap().outputs.remove(&name);
             }
             _ => {}
         }

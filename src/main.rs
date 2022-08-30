@@ -17,10 +17,6 @@ const PORTAL_RESPONSE_SUCCESS: u32 = 0;
 const PORTAL_RESPONSE_CANCELLED: u32 = 1;
 const PORTAL_RESPONSE_OTHER: u32 = 2;
 
-// TODO: org.freedesktop.impl.portal.Inhibit?
-
-struct Request;
-
 #[derive(zvariant::Type)]
 #[zvariant(signature = "(ua{sv})")]
 enum PortalResponse<T: zvariant::Type + serde::Serialize> {
@@ -46,6 +42,8 @@ impl<T: zvariant::Type + serde::Serialize> serde::Serialize for PortalResponse<T
         }
     }
 }
+
+struct Request;
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Request")]
 impl Request {
