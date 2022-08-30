@@ -1,4 +1,3 @@
 [D-BUS Service]
 Name=org.freedesktop.impl.portal.desktop.cosmic
-Exec=/usr/libexec/xdg-desktop-portal-cosmic
-SystemdService=xdg-desktop-portal-cosmic.service
+Exec=/bin/false
