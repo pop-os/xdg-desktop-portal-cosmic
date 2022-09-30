@@ -14,7 +14,7 @@ use smithay::{
     },
     utils::{Point, Rectangle, Size},
 };
-use std::{error::Error, fmt, io::Write, os::unix::io::RawFd};
+use std::{error::Error, fmt, io::Write, os::unix::io::OwnedFd};
 use wayland_client::WEnum;
 
 #[derive(Debug)]
@@ -41,9 +41,9 @@ impl fmt::Display for DmabufError {
 
 impl Error for DmabufError {}
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Object {
-    pub fd: RawFd, // TODO use `OwnedFd`
+    pub fd: OwnedFd,
     pub index: u32,
     pub offset: u32,
     pub stride: u32,
@@ -76,7 +76,7 @@ impl<'a> Mapping<'a> {
 
 impl DmabufFrame {
     pub fn map_rgba<'a>(
-        &self,
+        self,
         gpu_manager: &'a mut GpuManager<EglGlesBackend>,
     ) -> anyhow::Result<Mapping<'a>> {
         let mut builder = Dmabuf::builder(
@@ -84,7 +84,7 @@ impl DmabufFrame {
             self.format.ok_or(DmabufError::Missing("format"))?,
             self.flags.ok_or(DmabufError::Missing("flags"))?,
         );
-        for object in &self.objects {
+        for object in self.objects {
             builder.add_plane(
                 object.fd,
                 object.index,
@@ -107,14 +107,16 @@ impl DmabufFrame {
     }
 
     pub fn write_to_png<T: Write>(
-        &self,
+        self,
         gpu_manager: &mut GpuManager<EglGlesBackend>,
         file: T,
     ) -> anyhow::Result<()> {
+        let width = self.width;
+        let height = self.height;
         let mut mapping = self.map_rgba(gpu_manager)?;
         let data = mapping.map()?;
 
-        let mut encoder = png::Encoder::new(file, self.width, self.height);
+        let mut encoder = png::Encoder::new(file, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;

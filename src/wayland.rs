@@ -11,6 +11,7 @@ use smithay::backend::{
 use std::{
     array,
     collections::BTreeMap,
+    os::unix::io::AsRawFd,
     process,
     sync::{Arc, Mutex},
 };
@@ -38,7 +39,7 @@ impl WaylandHelper {
         // XXX unwrap
         let display = connection.display();
         let mut event_queue = connection.new_event_queue();
-        let _registry = display.get_registry(&event_queue.handle(), ()).unwrap();
+        let _registry = display.get_registry(&event_queue.handle(), ());
         let mut data = WaylandHelper {
             inner: Arc::new(Mutex::new(WaylandHelperInner {
                 connection,
@@ -93,8 +94,7 @@ impl DmabufExporter {
 
         let overlay_cursor = if overlay_cursor { 1 } else { 0 };
         self.manager
-            .capture_output(overlay_cursor, output, &self.event_queue.handle(), ())
-            .unwrap();
+            .capture_output(overlay_cursor, output, &self.event_queue.handle(), ());
         self.event_queue.flush().unwrap();
 
         let mut state = CaptureState::default();
@@ -139,13 +139,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WaylandHelper {
                                 1,
                                 qh,
                                 (),
-                            )
-                            .unwrap());
+                            ));
                 }
                 "wl_output" => {
-                    let output = registry
-                        .bind::<wl_output::WlOutput, _, _>(name, 4, qh, ())
-                        .unwrap();
+                    let output = registry.bind::<wl_output::WlOutput, _, _>(name, 4, qh, ());
                     app_data.inner.lock().unwrap().outputs.insert(name, output);
                 }
                 _ => {}
@@ -261,7 +258,11 @@ impl Dispatch<zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1, ()> fo
 
 async fn read_event_task(connection: wayland_client::Connection) {
     // XXX unwrap
-    let fd = connection.prepare_read().unwrap().connection_fd();
+    let fd = connection
+        .prepare_read()
+        .unwrap()
+        .connection_fd()
+        .as_raw_fd();
     let async_fd = AsyncFd::with_interest(fd, Interest::READABLE).unwrap();
     loop {
         let read_event_guard = connection.prepare_read().unwrap();
