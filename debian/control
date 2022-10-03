@@ -8,6 +8,7 @@ Build-Depends:
   cargo,
   libclang-dev,
   libpipewire-0.3-dev,
+  libxkbcommon-dev,
   pkg-config,
 Standards-Version: 4.3.0
 Homepage: https://github.com/pop-os/xdg-desktop-portal-cosmic
