@@ -12,12 +12,11 @@ use pipewire::{
     },
     stream::StreamState,
 };
-use smithay::backend::renderer::multigpu::{egl::EglGlesBackend, GpuManager};
 use std::{cell::RefCell, io, rc::Rc};
 use tokio::sync::oneshot;
 use wayland_client::protocol::wl_output;
 
-use crate::wayland::DmabufExporter;
+use crate::wayland::WaylandHelper;
 
 pub struct ScreencastThread {
     node_id: u32,
@@ -26,14 +25,14 @@ pub struct ScreencastThread {
 
 impl ScreencastThread {
     pub async fn new(
-        exporter: DmabufExporter,
+        wayland_helper: WaylandHelper,
         output: wl_output::WlOutput,
         overlay_cursor: bool,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
         std::thread::spawn(
-            move || match start_stream(exporter, output, overlay_cursor) {
+            move || match start_stream(wayland_helper, output, overlay_cursor) {
                 Ok((loop_, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
@@ -61,7 +60,7 @@ impl ScreencastThread {
 }
 
 fn start_stream(
-    mut exporter: DmabufExporter,
+    mut wayland_helper: WaylandHelper,
     output: wl_output::WlOutput,
     overlay_cursor: bool,
 ) -> Result<(pipewire::MainLoop, oneshot::Receiver<anyhow::Result<u32>>), pipewire::Error> {
@@ -76,16 +75,10 @@ fn start_stream(
     let (node_id_tx, node_id_rx) = oneshot::channel();
     let node_id_tx = RefCell::new(Some(node_id_tx));
 
-    // XXX unwrap
-    let gpu_manager = GpuManager::new(EglGlesBackend, None).unwrap();
-
-    let (width, height) = match exporter.capture_output(&output, overlay_cursor) {
+    let (width, height) = match wayland_helper.capture_output_shm(&output, overlay_cursor) {
         Ok(frame) => (frame.width, frame.height),
         Err(err) => (0, 0), // XXX
     };
-
-    let gpu_manager = RefCell::new(gpu_manager);
-    let exporter = RefCell::new(exporter);
 
     let stream = pipewire::stream::Stream::with_user_data(
         &loop_,
@@ -135,13 +128,10 @@ fn start_stream(
             let data = datas[0].get_mut();
             if data.len() == width as usize * height as usize * 4 {
                 // TODO error
-                let mut gpu_manager = gpu_manager.borrow_mut();
-                let mut exporter = exporter.borrow_mut();
                 || -> anyhow::Result<()> {
-                    let frame = exporter.capture_output(&output, overlay_cursor)?;
+                    let mut frame = wayland_helper.capture_output_shm(&output, overlay_cursor)?;
                     if frame.width == width && frame.height == height {
-                        let mut mapping = frame.map_rgba(&mut gpu_manager)?;
-                        data.copy_from_slice(mapping.map()?);
+                        data.copy_from_slice(frame.bytes());
                     }
                     Ok(())
                 }();
@@ -152,7 +142,7 @@ fn start_stream(
     // DRIVER, ALLOC_BUFFERS
     // ??? define formats (shm, dmabuf)
     let format = format(width, height);
-    let buffers = buffers(width, height);
+    let buffers = buffers(width as u32, height as u32);
     let params = &mut [
         buffers.as_slice() as *const _ as _,
         format.as_slice() as *const _ as _,

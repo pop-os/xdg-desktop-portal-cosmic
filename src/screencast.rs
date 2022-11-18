@@ -162,12 +162,11 @@ impl ScreenCast {
         let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
         let mut res_futures = FuturesUnordered::new();
         for output in outputs {
-            if let Some(exporter) = self.wayland_helper.dmabuf_exporter() {
-                res_futures.push(ScreencastThread::new(exporter, output, overlay_cursor));
-            } else {
-                eprintln!("No dmabuf exporter");
-                return PortalResponse::Other;
-            }
+            res_futures.push(ScreencastThread::new(
+                self.wayland_helper.clone(),
+                output,
+                overlay_cursor,
+            ));
         }
 
         let mut failed = false;

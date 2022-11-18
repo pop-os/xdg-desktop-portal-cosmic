@@ -1,6 +1,5 @@
 #![allow(dead_code, unused_variables)]
 
-use smithay::backend::renderer::multigpu::{egl::EglGlesBackend, GpuManager};
 use std::{collections::HashMap, fs, io};
 use zbus::zvariant;
 
@@ -54,24 +53,18 @@ impl Screenshot {
         // XXX
         //
 
-        let (mut exporter, output) = if let Some(exporter) = self.wayland_helper.dmabuf_exporter() {
-            // XXX way to select best output? Multiple?
-            if let Some(output) = self.wayland_helper.outputs().first().cloned() {
-                (exporter, output)
-            } else {
-                eprintln!("No output");
-                return PortalResponse::Other;
-            }
-        } else {
-            eprintln!("No dmabuf exporter");
+        // XXX way to select best output? Multiple?
+        let Some(output) = self.wayland_helper.outputs().first().cloned() else {
+            eprintln!("No output");
             return PortalResponse::Other;
         };
 
+        let wayland_helper = self.wayland_helper.clone();
         let res = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let frame = exporter.capture_output(&output, false)?;
+            let mut frame = wayland_helper.capture_output_shm(&output, false)?;
+            // TODO capture as shm
             let file = io::BufWriter::new(fs::File::create("/tmp/out.png")?);
-            let mut gpu_manager = GpuManager::new(EglGlesBackend, None)?;
-            frame.write_to_png(&mut gpu_manager, file)?;
+            frame.write_to_png(file)?;
             Ok(())
         })
         .await;

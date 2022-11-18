@@ -6,14 +6,14 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 anyhow = "1.0.60"
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "9edef8d8" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "9edef8d8" }
 # pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 futures = "0.3"
 pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
 png = "0.17.5"
 serde = "1.0.143"
-smithay = { git = "https://github.com/Smithay/smithay", rev = "625cbca5", default-features = false, features = ["backend_drm", "backend_egl", "renderer_gl", "renderer_multi"] }
 spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
-wayland-client = { version = "0.30.0-beta.10" }
+wayland-client = { version = "0.30.0-beta.13" }
 zbus = { version = "2.3.2", default-features = false, features = ["tokio"] }

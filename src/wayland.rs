@@ -1,274 +1,350 @@
 #![allow(unused_variables)]
 
-use cosmic_protocols::export_dmabuf::v1::client::{
-    zcosmic_export_dmabuf_frame_v1, zcosmic_export_dmabuf_manager_v1,
-};
-use futures::future::poll_fn;
-use smithay::backend::{
-    allocator::{dmabuf::DmabufFlags, Fourcc, Modifier},
-    drm::node::DrmNode,
+use cosmic_client_toolkit::{
+    cosmic_protocols::screencopy::v1::client::{
+        zcosmic_screencopy_manager_v1, zcosmic_screencopy_session_v1,
+    },
+    screencopy::{BufferInfo, ScreencopyHandler, ScreencopyState},
+    sctk::{
+        self,
+        error::GlobalError,
+        globals::ProvidesBoundGlobal,
+        output::{OutputHandler, OutputState},
+        registry::{ProvidesRegistryState, RegistryState},
+        shm::{raw::RawPool, ShmHandler, ShmState},
+    },
 };
 use std::{
-    array,
-    collections::BTreeMap,
-    os::unix::io::AsRawFd,
+    collections::HashMap,
+    io::Write,
     process,
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Condvar, Mutex, MutexGuard},
+    thread,
 };
-use tokio::io::{unix::AsyncFd, Interest};
 use wayland_client::{
-    protocol::{wl_output, wl_registry},
-    Connection, Dispatch, QueueHandle,
+    backend::ObjectId,
+    globals::registry_queue_init,
+    protocol::{wl_buffer, wl_output, wl_shm},
+    Connection, Dispatch, Proxy, QueueHandle, WEnum,
 };
 
-use crate::dmabuf_frame::{DmabufError, DmabufFrame, Object};
+// TODO
+#[derive(Clone)]
+struct BoundGlobal<T: wayland_client::Proxy, const V: u32>(T);
 
-struct WaylandHelperInner {
-    connection: wayland_client::Connection,
-    export_dmabuf_manager: Option<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1>,
-    outputs: BTreeMap<u32, wl_output::WlOutput>,
+impl<I: wayland_client::Proxy, const V: u32> ProvidesBoundGlobal<I, V> for BoundGlobal<I, V> {
+    fn bound_global(&self) -> Result<I, GlobalError> {
+        Ok(self.0.clone())
+    }
 }
 
+struct WaylandHelperInner {
+    conn: wayland_client::Connection,
+    outputs: Mutex<Vec<wl_output::WlOutput>>,
+    qh: QueueHandle<AppData>,
+    screencopy_manager: zcosmic_screencopy_manager_v1::ZcosmicScreencopyManagerV1,
+    wl_shm: BoundGlobal<wl_shm::WlShm, 1>,
+    sessions: Mutex<HashMap<ObjectId, Session>>,
+}
+
+// TODO seperate state object from what is passed to threads
 #[derive(Clone)]
 pub struct WaylandHelper {
-    inner: Arc<Mutex<WaylandHelperInner>>,
+    inner: Arc<WaylandHelperInner>,
+}
+
+struct AppData {
+    wayland_helper: WaylandHelper, // TODO: populate outputs
+    registry_state: RegistryState,
+    screencopy_state: ScreencopyState,
+    output_state: OutputState,
+    shm_state: ShmState,
+}
+
+#[derive(Default)]
+struct SessionData {
+    buffer_infos: Option<Vec<BufferInfo>>,
+    res: Option<Result<(), WEnum<zcosmic_screencopy_session_v1::FailureReason>>>,
+}
+
+// TODO: dmabuf? need to handle modifier negotation
+#[derive(Default)]
+struct SessionInner {
+    condvar: Condvar,
+    data: Mutex<SessionData>,
+}
+
+#[derive(Clone, Default)]
+struct Session {
+    inner: Arc<SessionInner>,
+}
+
+impl Session {
+    fn update<F: FnOnce(&mut SessionData)>(&self, f: F) {
+        f(&mut *self.inner.data.lock().unwrap());
+        self.inner.condvar.notify_all();
+    }
+
+    fn wait_while<F: FnMut(&SessionData) -> bool>(&self, mut f: F) -> MutexGuard<SessionData> {
+        self.inner
+            .condvar
+            .wait_while(self.inner.data.lock().unwrap(), |data| f(data))
+            .unwrap()
+    }
 }
 
 impl WaylandHelper {
-    pub fn new(connection: wayland_client::Connection) -> Self {
+    pub fn new(conn: wayland_client::Connection) -> Self {
         // XXX unwrap
-        let display = connection.display();
-        let mut event_queue = connection.new_event_queue();
-        let _registry = display.get_registry(&event_queue.handle(), ());
-        let mut data = WaylandHelper {
-            inner: Arc::new(Mutex::new(WaylandHelperInner {
-                connection,
-                export_dmabuf_manager: None,
-                outputs: BTreeMap::new(),
-            })),
+        let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
+        let qh = event_queue.handle();
+        let registry_state = RegistryState::new(&globals);
+        let screencopy_state = ScreencopyState::new(&globals, &qh);
+        let shm_state = ShmState::bind(&globals, &qh).unwrap();
+        let wayland_helper = WaylandHelper {
+            inner: Arc::new(WaylandHelperInner {
+                conn,
+                outputs: Mutex::new(Vec::new()),
+                qh: qh.clone(),
+                screencopy_manager: screencopy_state.screencopy_manager.clone(),
+                wl_shm: BoundGlobal(shm_state.wl_shm().clone()),
+                sessions: Mutex::new(HashMap::new()),
+            }),
+        };
+        let mut data = AppData {
+            shm_state,
+            wayland_helper: wayland_helper.clone(),
+            output_state: OutputState::new(&globals, &qh),
+            screencopy_state,
+            registry_state,
         };
         event_queue.flush().unwrap();
 
         event_queue.roundtrip(&mut data).unwrap();
 
-        let mut data_clone = data.clone();
-        tokio::spawn(async move {
-            poll_fn(|cx| event_queue.poll_dispatch_pending(cx, &mut data_clone)).await;
+        thread::spawn(move || loop {
+            event_queue.blocking_dispatch(&mut data).unwrap();
         });
 
-        data
-    }
-
-    pub fn dmabuf_exporter(&self) -> Option<DmabufExporter> {
-        let inner = self.inner.lock().unwrap();
-        Some(DmabufExporter {
-            event_queue: inner.connection.new_event_queue(),
-            manager: inner.export_dmabuf_manager.clone()?,
-        })
+        wayland_helper
     }
 
     pub fn outputs(&self) -> Vec<wl_output::WlOutput> {
         // TODO Good way to avoid allocation?
-        self.inner
-            .lock()
-            .unwrap()
-            .outputs
-            .values()
-            .cloned()
-            .collect()
+        self.inner.outputs.lock().unwrap().clone()
     }
-}
 
-pub struct DmabufExporter {
-    event_queue: wayland_client::EventQueue<CaptureState>,
-    manager: zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1,
-}
-
-impl DmabufExporter {
-    pub fn capture_output(
-        &mut self,
+    pub fn capture_output_shm(
+        &self,
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
-    ) -> Result<DmabufFrame, DmabufError> {
+    ) -> Result<ShmImage, std::io::Error> {
         // TODO: way to get cursor metadata?
 
         let overlay_cursor = if overlay_cursor { 1 } else { 0 };
-        self.manager
-            .capture_output(overlay_cursor, output, &self.event_queue.handle(), ());
-        self.event_queue.flush().unwrap();
 
-        let mut state = CaptureState::default();
-        let res = loop {
-            if let Some(res) = state.res {
-                break res;
-            }
-            // Does this work properly if used on multiple threads for multiple event queues?
-            self.event_queue.blocking_dispatch(&mut state).unwrap();
-        };
+        let mut sessions = self.inner.sessions.lock().unwrap();
+        let screencopy_session = self.inner.screencopy_manager.capture_output(
+            &output,
+            zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
+            &self.inner.qh,
+            Default::default(),
+        );
+        self.inner.conn.flush().unwrap();
+        let session = Session::default();
+        sessions.insert(screencopy_session.id(), session.clone());
+        drop(sessions);
 
-        res.and(Ok(state.frame))
+        let buffer_infos = session
+            .wait_while(|data| data.buffer_infos.is_none())
+            .buffer_infos
+            .take()
+            .unwrap();
+
+        // XXX
+        let buffer_info = buffer_infos
+            .iter()
+            .find(|x| {
+                x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
+                    && x.format == wl_shm::Format::Abgr8888.into()
+            })
+            .unwrap();
+
+        // Can only assume ARGB8888. Try RGBA8888, but fallback and rotate components?
+        // If cosmic-comp specific, can assume support for whatever compositor supports.
+        let mut pool = RawPool::new(
+            buffer_info.height as usize * buffer_info.width as usize * 4,
+            &self.inner.wl_shm,
+        )
+        .unwrap();
+        let buffer = pool.create_buffer(
+            0,
+            buffer_info.width as i32,
+            buffer_info.height as i32,
+            buffer_info.stride as i32,
+            wl_shm::Format::Abgr8888,
+            (),
+            &self.inner.qh,
+        ); // XXX RGBA
+
+        screencopy_session.attach_buffer(&buffer, None, 0); // XXX age?
+        screencopy_session.commit(zcosmic_screencopy_session_v1::Options::empty());
+        self.inner.conn.flush().unwrap();
+
+        // TODO: wait for server to release buffer?
+        let _res = session
+            .wait_while(|data| data.res.is_none())
+            .res
+            .take()
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(16));
+
+        Ok(ShmImage {
+            pool,
+            buffer,
+            width: 2560,
+            height: 1440,
+        })
     }
 }
 
-#[derive(Default)]
-struct CaptureState {
-    frame: DmabufFrame,
-    res: Option<Result<(), DmabufError>>,
+pub struct ShmImage {
+    pool: RawPool,
+    buffer: wl_buffer::WlBuffer,
+    pub width: u32,
+    pub height: u32,
 }
 
-impl Dispatch<wl_registry::WlRegistry, ()> for WaylandHelper {
-    fn event(
-        app_data: &mut Self,
-        registry: &wl_registry::WlRegistry,
-        event: wl_registry::Event,
-        _: &(),
-        _: &Connection,
+impl ShmImage {
+    pub fn bytes(&mut self) -> &[u8] {
+        &*self.pool.mmap()
+    }
+
+    pub fn write_to_png<T: Write>(&mut self, file: T) -> anyhow::Result<()> {
+        let mut encoder = png::Encoder::new(file, self.width, self.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(self.bytes())?;
+
+        Ok(())
+    }
+}
+
+impl Drop for ShmImage {
+    fn drop(&mut self) {
+        self.buffer.destroy();
+    }
+}
+
+impl ProvidesRegistryState for AppData {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    sctk::registry_handlers!(OutputState);
+}
+
+impl ShmHandler for AppData {
+    fn shm_state(&mut self) -> &mut ShmState {
+        &mut self.shm_state
+    }
+}
+
+impl OutputHandler for AppData {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.wayland_helper
+            .inner
+            .outputs
+            .lock()
+            .unwrap()
+            .push(output);
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        let mut outputs = self.wayland_helper.inner.outputs.lock().unwrap();
+        let idx = outputs.iter().position(|x| x == &output).unwrap();
+        outputs.remove(idx);
+    }
+}
+
+impl ScreencopyHandler for AppData {
+    fn screencopy_state(&mut self) -> &mut ScreencopyState {
+        &mut self.screencopy_state
+    }
+
+    fn init_done(
+        &mut self,
+        conn: &Connection,
         qh: &QueueHandle<Self>,
+        session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+        buffer_infos: &[BufferInfo],
     ) {
-        println!("{:?}", event);
-        match event {
-            wl_registry::Event::Global {
-                name,
-                interface,
-                version,
-            } => match interface.as_str() {
-                "zcosmic_export_dmabuf_manager_v1" => {
-                    app_data.inner.lock().unwrap().export_dmabuf_manager = Some(
-                            registry.bind::<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1, _, _>(
-                                name,
-                                1,
-                                qh,
-                                (),
-                            ));
-                }
-                "wl_output" => {
-                    let output = registry.bind::<wl_output::WlOutput, _, _>(name, 4, qh, ());
-                    app_data.inner.lock().unwrap().outputs.insert(name, output);
-                }
-                _ => {}
-            },
-            wl_registry::Event::GlobalRemove { name } => {
-                app_data.inner.lock().unwrap().outputs.remove(&name);
-            }
-            _ => {}
-        }
+        let sessions = self.wayland_helper.inner.sessions.lock().unwrap();
+        sessions.get(&session.id()).unwrap().update(|data| {
+            data.buffer_infos = Some(buffer_infos.to_vec());
+        });
+    }
+
+    fn ready(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+    ) {
+        let sessions = self.wayland_helper.inner.sessions.lock().unwrap();
+        sessions.get(&session.id()).unwrap().update(|data| {
+            data.res = Some(Ok(()));
+        });
+    }
+
+    fn failed(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+        reason: WEnum<zcosmic_screencopy_session_v1::FailureReason>,
+    ) {
+        // TODO send message to thread
+        let sessions = self.wayland_helper.inner.sessions.lock().unwrap();
+        sessions.get(&session.id()).unwrap().update(|data| {
+            data.res = Some(Err(reason));
+        });
     }
 }
 
-impl Dispatch<wl_output::WlOutput, ()> for WaylandHelper {
+impl Dispatch<wl_buffer::WlBuffer, ()> for AppData {
     fn event(
-        app_data: &mut Self,
-        output: &wl_output::WlOutput,
-        event: wl_output::Event,
+        _app_data: &mut Self,
+        _buffer: &wl_buffer::WlBuffer,
+        _event: wl_buffer::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<Self>,
+        _qh: &QueueHandle<Self>,
     ) {
-    }
-}
-
-impl Dispatch<zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1, ()>
-    for WaylandHelper
-{
-    fn event(
-        _: &mut Self,
-        _: &zcosmic_export_dmabuf_manager_v1::ZcosmicExportDmabufManagerV1,
-        _: zcosmic_export_dmabuf_manager_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-fn u64_from_slice(s: &[u8]) -> Option<u64> {
-    if s.len() >= 8 {
-        Some(u64::from_ne_bytes(array::from_fn(|n| s[n])))
-    } else {
-        None
-    }
-}
-
-impl Dispatch<zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1, ()> for CaptureState {
-    fn event(
-        state: &mut Self,
-        _: &zcosmic_export_dmabuf_frame_v1::ZcosmicExportDmabufFrameV1,
-        event: zcosmic_export_dmabuf_frame_v1::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<CaptureState>,
-    ) {
-        let mut frame = &mut state.frame;
-
-        match event {
-            zcosmic_export_dmabuf_frame_v1::Event::Device { ref node } => {
-                if let Some(node) = u64_from_slice(node) {
-                    match DrmNode::from_dev_id(node) {
-                        Ok(node) => {
-                            frame.node = Some(node);
-                        }
-                        Err(err) => {
-                            state.res = Some(Err(DmabufError::CreateDrmNode(err)));
-                        }
-                    }
-                }
-            }
-            zcosmic_export_dmabuf_frame_v1::Event::Frame {
-                width,
-                height,
-                mod_high,
-                mod_low,
-                format,
-                flags,
-                ..
-            } => {
-                frame.width = width;
-                frame.height = height;
-                frame.format = Fourcc::try_from(format).ok();
-                frame.modifier = Some(Modifier::from(((mod_high as u64) << 32) + mod_low as u64));
-                frame.flags = DmabufFlags::from_bits(u32::from(flags));
-            }
-            zcosmic_export_dmabuf_frame_v1::Event::Object {
-                fd,
-                index,
-                offset,
-                stride,
-                plane_index,
-                ..
-            } => {
-                assert!(plane_index == frame.objects.last().map_or(0, |x| x.plane_index + 1));
-                frame.objects.push(Object {
-                    fd,
-                    index,
-                    offset,
-                    stride,
-                    plane_index,
-                });
-            }
-            zcosmic_export_dmabuf_frame_v1::Event::Ready { .. } => {
-                state.res = Some(Ok(()));
-            }
-            zcosmic_export_dmabuf_frame_v1::Event::Cancel { reason } => {
-                state.res = Some(Err(DmabufError::Cancelled(reason)));
-            }
-            _ => {}
-        }
-    }
-}
-
-async fn read_event_task(connection: wayland_client::Connection) {
-    // XXX unwrap
-    let fd = connection
-        .prepare_read()
-        .unwrap()
-        .connection_fd()
-        .as_raw_fd();
-    let async_fd = AsyncFd::with_interest(fd, Interest::READABLE).unwrap();
-    loop {
-        let read_event_guard = connection.prepare_read().unwrap();
-        let mut read_guard = async_fd.readable().await.unwrap();
-        read_event_guard.read().unwrap();
-        read_guard.clear_ready();
     }
 }
 
@@ -282,7 +358,10 @@ pub fn connect_to_wayland() -> wayland_client::Connection {
         }
     };
 
-    tokio::spawn(read_event_task(wayland_connection.clone()));
-
     wayland_connection
 }
+
+sctk::delegate_shm!(AppData);
+sctk::delegate_registry!(AppData);
+sctk::delegate_output!(AppData);
+cosmic_client_toolkit::delegate_screencopy!(AppData);
