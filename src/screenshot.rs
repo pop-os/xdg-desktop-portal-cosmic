@@ -50,8 +50,6 @@ impl Screenshot {
         // connection.object_server().at(&handle, Request);
 
         // TODO create handle, show dialog
-        // XXX
-        //
 
         // XXX way to select best output? Multiple?
         let Some(output) = self.wayland_helper.outputs().first().cloned() else {
@@ -61,8 +59,9 @@ impl Screenshot {
 
         let wayland_helper = self.wayland_helper.clone();
         let res = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let mut frame = wayland_helper.capture_output_shm(&output, false)?;
-            // TODO capture as shm
+            let mut frame = wayland_helper
+                .capture_output_shm(&output, false)
+                .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?; // XXX
             let file = io::BufWriter::new(fs::File::create("/tmp/out.png")?);
             frame.write_to_png(file)?;
             Ok(())

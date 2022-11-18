@@ -7,43 +7,32 @@ use cosmic_client_toolkit::{
     screencopy::{BufferInfo, ScreencopyHandler, ScreencopyState},
     sctk::{
         self,
-        error::GlobalError,
-        globals::ProvidesBoundGlobal,
         output::{OutputHandler, OutputState},
         registry::{ProvidesRegistryState, RegistryState},
-        shm::{raw::RawPool, ShmHandler, ShmState},
+        shm::{ShmHandler, ShmState},
     },
 };
 use std::{
     collections::HashMap,
     io::Write,
+    os::unix::io::{AsFd, AsRawFd, FromRawFd, OwnedFd},
     process,
-    sync::{mpsc, Arc, Condvar, Mutex, MutexGuard},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     thread,
 };
 use wayland_client::{
     backend::ObjectId,
     globals::registry_queue_init,
-    protocol::{wl_buffer, wl_output, wl_shm},
+    protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
 };
-
-// TODO
-#[derive(Clone)]
-struct BoundGlobal<T: wayland_client::Proxy, const V: u32>(T);
-
-impl<I: wayland_client::Proxy, const V: u32> ProvidesBoundGlobal<I, V> for BoundGlobal<I, V> {
-    fn bound_global(&self) -> Result<I, GlobalError> {
-        Ok(self.0.clone())
-    }
-}
 
 struct WaylandHelperInner {
     conn: wayland_client::Connection,
     outputs: Mutex<Vec<wl_output::WlOutput>>,
     qh: QueueHandle<AppData>,
     screencopy_manager: zcosmic_screencopy_manager_v1::ZcosmicScreencopyManagerV1,
-    wl_shm: BoundGlobal<wl_shm::WlShm, 1>,
+    wl_shm: wl_shm::WlShm,
     sessions: Mutex<HashMap<ObjectId, Session>>,
 }
 
@@ -107,7 +96,7 @@ impl WaylandHelper {
                 outputs: Mutex::new(Vec::new()),
                 qh: qh.clone(),
                 screencopy_manager: screencopy_state.screencopy_manager.clone(),
-                wl_shm: BoundGlobal(shm_state.wl_shm().clone()),
+                wl_shm: shm_state.wl_shm().clone(),
                 sessions: Mutex::new(HashMap::new()),
             }),
         };
@@ -138,7 +127,24 @@ impl WaylandHelper {
         &self,
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
-    ) -> Result<ShmImage, std::io::Error> {
+    ) -> Option<ShmImage<OwnedFd>> {
+        use nix::sys::memfd;
+        use std::ffi::CStr;
+        let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
+        let fd = memfd::memfd_create(name, memfd::MemFdCreateFlag::MFD_CLOEXEC).unwrap(); // XXX
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+
+        self.capture_output_shm_fd(output, overlay_cursor, fd, None)
+    }
+
+    pub fn capture_output_shm_fd<T: AsFd>(
+        &self,
+        output: &wl_output::WlOutput,
+        overlay_cursor: bool,
+        fd: T,
+        len: Option<u32>,
+    ) -> Option<ShmImage<T>> {
+        // XXX error type?
         // TODO: way to get cursor metadata?
 
         let overlay_cursor = if overlay_cursor { 1 } else { 0 };
@@ -170,71 +176,73 @@ impl WaylandHelper {
             })
             .unwrap();
 
-        // Can only assume ARGB8888. Try RGBA8888, but fallback and rotate components?
-        // If cosmic-comp specific, can assume support for whatever compositor supports.
-        let mut pool = RawPool::new(
-            buffer_info.height as usize * buffer_info.width as usize * 4,
-            &self.inner.wl_shm,
-        )
-        .unwrap();
+        let buf_len = buffer_info.stride * buffer_info.height;
+        if let Some(len) = len {
+            if len != buf_len {
+                return None;
+            }
+        } else {
+            nix::unistd::ftruncate(fd.as_fd().as_raw_fd(), buf_len as _);
+        };
+        let pool = self.inner.wl_shm.create_pool(
+            fd.as_fd().as_raw_fd(),
+            buf_len as i32,
+            &self.inner.qh,
+            (),
+        );
         let buffer = pool.create_buffer(
             0,
             buffer_info.width as i32,
             buffer_info.height as i32,
             buffer_info.stride as i32,
             wl_shm::Format::Abgr8888,
-            (),
             &self.inner.qh,
-        ); // XXX RGBA
+            (),
+        );
 
         screencopy_session.attach_buffer(&buffer, None, 0); // XXX age?
         screencopy_session.commit(zcosmic_screencopy_session_v1::Options::empty());
         self.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
-        let _res = session
+        let res = session
             .wait_while(|data| data.res.is_none())
             .res
             .take()
             .unwrap();
+        pool.destroy();
+        buffer.destroy();
 
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        //std::thread::sleep(std::time::Duration::from_millis(16));
 
-        Ok(ShmImage {
-            pool,
-            buffer,
-            width: 2560,
-            height: 1440,
-        })
+        if res.is_ok() {
+            Some(ShmImage {
+                fd,
+                width: buffer_info.width,
+                height: buffer_info.height,
+            })
+        } else {
+            None
+        }
     }
 }
 
-pub struct ShmImage {
-    pool: RawPool,
-    buffer: wl_buffer::WlBuffer,
+pub struct ShmImage<T: AsFd> {
+    fd: T,
     pub width: u32,
     pub height: u32,
 }
 
-impl ShmImage {
-    pub fn bytes(&mut self) -> &[u8] {
-        &*self.pool.mmap()
-    }
-
-    pub fn write_to_png<T: Write>(&mut self, file: T) -> anyhow::Result<()> {
+impl<T: AsFd> ShmImage<T> {
+    pub fn write_to_png<W: Write>(&mut self, file: W) -> anyhow::Result<()> {
+        let mmap = unsafe { memmap2::Mmap::map(&self.fd.as_fd())? };
         let mut encoder = png::Encoder::new(file, self.width, self.height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;
-        writer.write_image_data(self.bytes())?;
+        writer.write_image_data(&mmap)?;
 
         Ok(())
-    }
-}
-
-impl Drop for ShmImage {
-    fn drop(&mut self) {
-        self.buffer.destroy();
     }
 }
 
@@ -333,6 +341,18 @@ impl ScreencopyHandler for AppData {
         sessions.get(&session.id()).unwrap().update(|data| {
             data.res = Some(Err(reason));
         });
+    }
+}
+
+impl Dispatch<wl_shm_pool::WlShmPool, ()> for AppData {
+    fn event(
+        _app_data: &mut Self,
+        _buffer: &wl_shm_pool::WlShmPool,
+        _event: wl_shm_pool::Event,
+        _: &(),
+        _: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
     }
 }
 

@@ -839,6 +839,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "libc",
  "memoffset",
+ "pin-utils",
 ]
 
 [[package]]
@@ -1733,6 +1734,8 @@ dependencies = [
  "cosmic-protocols",
  "futures",
  "libspa-sys",
+ "memmap2",
+ "nix 0.25.0",
  "pipewire",
  "png",
  "serde",

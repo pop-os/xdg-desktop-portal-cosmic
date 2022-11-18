@@ -12,7 +12,7 @@ use pipewire::{
     },
     stream::StreamState,
 };
-use std::{cell::RefCell, io, rc::Rc};
+use std::{cell::RefCell, io, os::unix::io::BorrowedFd, rc::Rc, slice};
 use tokio::sync::oneshot;
 use wayland_client::protocol::wl_output;
 
@@ -60,7 +60,7 @@ impl ScreencastThread {
 }
 
 fn start_stream(
-    mut wayland_helper: WaylandHelper,
+    wayland_helper: WaylandHelper,
     output: wl_output::WlOutput,
     overlay_cursor: bool,
 ) -> Result<(pipewire::MainLoop, oneshot::Receiver<anyhow::Result<u32>>), pipewire::Error> {
@@ -76,8 +76,8 @@ fn start_stream(
     let node_id_tx = RefCell::new(Some(node_id_tx));
 
     let (width, height) = match wayland_helper.capture_output_shm(&output, overlay_cursor) {
-        Ok(frame) => (frame.width, frame.height),
-        Err(err) => (0, 0), // XXX
+        Some(frame) => (frame.width, frame.height),
+        None => (0, 0), // XXX
     };
 
     let stream = pipewire::stream::Stream::with_user_data(
@@ -118,24 +118,58 @@ fn start_stream(
             println!("param-changed: {} {:?}", id, value);
         }
     })
+    .add_buffer(move |buffer| {
+        let buf = unsafe { &mut *(*buffer).buffer };
+        let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
+        // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
+
+        for data in datas {
+            use nix::{sys::memfd, unistd};
+            use std::ffi::CStr;
+
+            let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
+            let fd = memfd::memfd_create(name, memfd::MemFdCreateFlag::MFD_CLOEXEC).unwrap(); // XXX
+            unistd::ftruncate(fd, (width * height * 4) as _);
+
+            // TODO test `data.type_`
+
+            data.type_ = spa_sys::SPA_DATA_MemFd;
+            data.flags = 0;
+            data.fd = fd as _;
+            data.data = std::ptr::null_mut();
+            data.maxsize = width * height * 4;
+            data.mapoffset = 0;
+
+            let mut chunk = unsafe { &mut *data.chunk };
+            chunk.size = width * height * 4;
+            chunk.offset = 0;
+            chunk.stride = 4 * width as i32;
+        }
+    })
+    .remove_buffer(|buffer| {
+        let buf = unsafe { &mut *(*buffer).buffer };
+        let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
+
+        for data in datas {
+            let _ = nix::unistd::close(data.fd as _);
+            data.fd = -1;
+        }
+    })
     .process(move |stream, ()| {
         if let Some(mut buffer) = stream.dequeue_buffer() {
             let datas = buffer.datas_mut();
-            let chunk = datas[0].chunk();
-            *chunk.size_mut() = width * height * 4;
-            *chunk.offset_mut() = 0;
-            *chunk.stride_mut() = 4 * width as i32;
-            let data = datas[0].get_mut();
-            if data.len() == width as usize * height as usize * 4 {
-                // TODO error
-                || -> anyhow::Result<()> {
-                    let mut frame = wayland_helper.capture_output_shm(&output, overlay_cursor)?;
-                    if frame.width == width && frame.height == height {
-                        data.copy_from_slice(frame.bytes());
-                    }
-                    Ok(())
-                }();
-            }
+            //let data = datas[0].get_mut();
+            //if data.len() == width as usize * height as usize * 4 {
+            let fd = unsafe { BorrowedFd::borrow_raw(datas[0].fd()) };
+            // TODO error
+            wayland_helper.capture_output_shm_fd(
+                &output,
+                overlay_cursor,
+                fd,
+                Some(width * height * 4),
+            );
+            //if frame.width == width && frame.height == height {
+            //}
         }
     })
     .create()?;
@@ -147,7 +181,8 @@ fn start_stream(
         buffers.as_slice() as *const _ as _,
         format.as_slice() as *const _ as _,
     ];
-    let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
+    //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
+    let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
     stream.connect(spa::Direction::Output, None, flags, params)?;
     *stream_cell.borrow_mut() = Some(stream);
 
@@ -166,6 +201,19 @@ fn buffers(width: u32, height: u32) -> Vec<u8> {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
         properties: vec![
+            /*
+            pod::Property {
+                key: spa_sys::SPA_PARAM_BUFFERS_dataType,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
+                    spa::utils::ChoiceFlags::empty(),
+                    spa::utils::ChoiceEnum::Flags {
+                        default: 1 << spa_sys::SPA_DATA_MemFd,
+                        flags: vec![],
+                    },
+                ))),
+            },
+            */
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_size,
                 flags: pod::PropertyFlags::empty(),
@@ -175,6 +223,28 @@ fn buffers(width: u32, height: u32) -> Vec<u8> {
                 key: spa_sys::SPA_PARAM_BUFFERS_stride,
                 flags: pod::PropertyFlags::empty(),
                 value: pod::Value::Int(width as i32 * 4),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_BUFFERS_align,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Int(16),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_BUFFERS_blocks,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Int(1),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_BUFFERS_buffers,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
+                    spa::utils::ChoiceFlags::empty(),
+                    spa::utils::ChoiceEnum::Range {
+                        default: 4,
+                        min: 1,
+                        max: 32,
+                    },
+                ))),
             },
         ],
     }))

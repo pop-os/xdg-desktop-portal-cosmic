@@ -10,6 +10,8 @@ cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "9edef8d8" }
 # pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 futures = "0.3"
+memmap2 = "0.5.8"
+nix = "0.25.0"
 pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
 png = "0.17.5"
 serde = "1.0.143"
