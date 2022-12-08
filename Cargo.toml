@@ -6,8 +6,8 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 anyhow = "1.0.60"
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "9edef8d8" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "9edef8d8" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c58234c7" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c58234c7" }
 # pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 futures = "0.3"
 memmap2 = "0.5.8"

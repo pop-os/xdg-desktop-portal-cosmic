@@ -283,7 +283,7 @@ checksum = "396de984970346b0d9e93d1415082923c679e5ae5c3ee3dcbd104f5610af126b"
 [[package]]
 name = "cosmic-client-toolkit"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-protocols?rev=9edef8d8#9edef8d86c3e1a98ce5ca93a3e99bd5fd860e061"
+source = "git+https://github.com/pop-os/cosmic-protocols?rev=c58234c7#c58234c714bf2fc35cfe8918570012dae2759c7c"
 dependencies = [
  "cosmic-protocols",
  "gl_generator",
@@ -295,7 +295,7 @@ dependencies = [
 [[package]]
 name = "cosmic-protocols"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-protocols?rev=9edef8d8#9edef8d86c3e1a98ce5ca93a3e99bd5fd860e061"
+source = "git+https://github.com/pop-os/cosmic-protocols?rev=c58234c7#c58234c714bf2fc35cfe8918570012dae2759c7c"
 dependencies = [
  "bitflags",
  "wayland-backend",
