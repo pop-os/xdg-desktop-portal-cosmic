@@ -1,5 +1,6 @@
 vendor*
 target
+/result
 .cargo
 debian/xdg-desktop-portal-cosmic*
 debian/*debhelper*
