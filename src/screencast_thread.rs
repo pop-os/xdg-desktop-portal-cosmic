@@ -160,7 +160,7 @@ fn start_stream(
             let datas = buffer.datas_mut();
             //let data = datas[0].get_mut();
             //if data.len() == width as usize * height as usize * 4 {
-            let fd = unsafe { BorrowedFd::borrow_raw(datas[0].fd()) };
+            let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
             // TODO error
             wayland_helper.capture_output_shm_fd(
                 &output,
