@@ -73,7 +73,7 @@ fn start_stream(
     let stream_cell_clone = stream_cell.clone();
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
-    let node_id_tx = RefCell::new(Some(node_id_tx));
+    let mut node_id_tx = Some(node_id_tx);
 
     let (width, height) = match wayland_helper.capture_output_shm(&output, overlay_cursor) {
         Some(frame) => (frame.width, frame.height),
@@ -95,12 +95,12 @@ fn start_stream(
             StreamState::Paused => {
                 let stream = stream_cell_clone.borrow_mut();
                 let stream = stream.as_ref().unwrap();
-                if let Some(node_id_tx) = node_id_tx.borrow_mut().take() {
+                if let Some(node_id_tx) = node_id_tx.take() {
                     node_id_tx.send(Ok(stream.node_id())).unwrap();
                 }
             }
             StreamState::Error(msg) => {
-                if let Some(node_id_tx) = node_id_tx.borrow_mut().take() {
+                if let Some(node_id_tx) = node_id_tx.take() {
                     node_id_tx
                         .send(Err(anyhow::anyhow!("stream error: {}", msg)))
                         .unwrap();
