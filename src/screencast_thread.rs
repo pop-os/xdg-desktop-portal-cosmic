@@ -12,7 +12,13 @@ use pipewire::{
     },
     stream::StreamState,
 };
-use std::{cell::RefCell, io, os::unix::io::BorrowedFd, rc::Rc, slice};
+use std::{
+    cell::RefCell,
+    io,
+    os::fd::{BorrowedFd, IntoRawFd},
+    rc::Rc,
+    slice,
+};
 use tokio::sync::oneshot;
 use wayland_client::protocol::wl_output;
 
@@ -124,18 +130,17 @@ fn start_stream(
         // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
 
         for data in datas {
-            use nix::{sys::memfd, unistd};
             use std::ffi::CStr;
 
             let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
-            let fd = memfd::memfd_create(name, memfd::MemFdCreateFlag::MFD_CLOEXEC).unwrap(); // XXX
-            unistd::ftruncate(fd, (width * height * 4) as _);
+            let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
+            rustix::fs::ftruncate(&fd, (width * height * 4) as _);
 
             // TODO test `data.type_`
 
             data.type_ = spa_sys::SPA_DATA_MemFd;
             data.flags = 0;
-            data.fd = fd as _;
+            data.fd = fd.into_raw_fd() as _;
             data.data = std::ptr::null_mut();
             data.maxsize = width * height * 4;
             data.mapoffset = 0;
@@ -151,7 +156,7 @@ fn start_stream(
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
 
         for data in datas {
-            let _ = nix::unistd::close(data.fd as _);
+            let _ = unsafe { rustix::io::close(data.fd as _) };
             data.fd = -1;
         }
     })

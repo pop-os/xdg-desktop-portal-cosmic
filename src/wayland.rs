@@ -17,7 +17,7 @@ use cosmic_client_toolkit::{
 };
 use std::{
     io::Write,
-    os::unix::io::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, OwnedFd},
     process,
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread,
@@ -133,11 +133,9 @@ impl WaylandHelper {
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
-        use nix::sys::memfd;
         use std::ffi::CStr;
         let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
-        let fd = memfd::memfd_create(name, memfd::MemFdCreateFlag::MFD_CLOEXEC).unwrap(); // XXX
-        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
 
         self.capture_output_shm_fd(output, overlay_cursor, fd, None)
     }
@@ -187,7 +185,7 @@ impl WaylandHelper {
                 return None;
             }
         } else {
-            nix::unistd::ftruncate(fd.as_fd().as_raw_fd(), buf_len as _);
+            rustix::fs::ftruncate(&fd, buf_len as _);
         };
         let pool = self.inner.wl_shm.create_pool(
             fd.as_fd().as_raw_fd(),
