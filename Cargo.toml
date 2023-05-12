@@ -9,8 +9,8 @@ anyhow = "1.0.60"
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols" }
 futures = "0.3"
-memmap2 = "0.5.8"
-nix = "0.25.0"
+memmap2 = "0.6.1"
+nix = "0.26.2"
 # pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
 pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 png = "0.17.5"
@@ -19,4 +19,4 @@ serde = "1.0.143"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.30.0" }
-zbus = { version = "2.3.2", default-features = false, features = ["tokio"] }
+zbus = { version = "3.13.0", default-features = false, features = ["tokio"] }
