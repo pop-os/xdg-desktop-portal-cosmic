@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_variables)]
 
-use std::{collections::HashMap, fs, io};
+use std::{collections::HashMap, io, path::PathBuf};
+use wayland_client::protocol::wl_output;
 use zbus::zvariant;
 
 use crate::wayland::WaylandHelper;
@@ -35,6 +36,56 @@ impl Screenshot {
     pub fn new(wayland_helper: WaylandHelper) -> Self {
         Self { wayland_helper }
     }
+
+    async fn screenshot_inner(
+        &self,
+        output: wl_output::WlOutput,
+        app_id: &str,
+    ) -> anyhow::Result<PathBuf> {
+        use ashpd::documents::Permission;
+
+        let wayland_helper = self.wayland_helper.clone();
+        let (file, path) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let mut frame = wayland_helper
+                .capture_output_shm(&output, false)
+                .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
+            let mut file = tempfile::Builder::new()
+                .prefix("screenshot-")
+                .suffix(".png")
+                .tempfile()?;
+            frame.write_to_png(io::BufWriter::new(&mut file))?;
+            Ok(file.keep()?)
+        })
+        .await??;
+
+        let documents = ashpd::documents::Documents::new().await?;
+        let mount_point = documents.mount_point().await?;
+        let app_id = if app_id.is_empty() {
+            None
+        } else {
+            Some(app_id.try_into()?)
+        };
+        let (doc_ids, _) = documents
+            .add_full(
+                &[&file],
+                Default::default(),
+                app_id,
+                &[
+                    Permission::Read,
+                    Permission::Write,
+                    Permission::GrantPermissions,
+                    Permission::Delete,
+                ],
+            )
+            .await?;
+        let doc_id = doc_ids.get(0).unwrap();
+
+        let mut doc_path = mount_point.as_ref().to_path_buf();
+        doc_path.push(&**doc_id);
+        doc_path.push(path.file_name().unwrap());
+
+        Ok(doc_path)
+    }
 }
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Screenshot")]
@@ -57,25 +108,17 @@ impl Screenshot {
             return PortalResponse::Other;
         };
 
-        let wayland_helper = self.wayland_helper.clone();
-        let res = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let mut frame = wayland_helper
-                .capture_output_shm(&output, false)
-                .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?; // XXX
-            let file = io::BufWriter::new(fs::File::create("/tmp/out.png")?);
-            frame.write_to_png(file)?;
-            Ok(())
-        })
-        .await;
-
-        if let Err(err) = res {
-            eprintln!("Failed to capture screenshot: {}", err);
-            return PortalResponse::Other;
-        }
+        let doc_path = match self.screenshot_inner(output, app_id).await {
+            Ok(res) => res,
+            Err(err) => {
+                eprintln!("Failed to capture screenshot: {}", err);
+                return PortalResponse::Other;
+            }
+        };
 
         // connection.object_server().remove::<Request, _>(&handle);
         PortalResponse::Success(ScreenshotResult {
-            uri: format!("file:///tmp/out.png"),
+            uri: format!("file:///{}", doc_path.display()),
         })
     }
 
