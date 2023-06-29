@@ -28,6 +28,8 @@
               ./src
               ./Cargo.toml
               ./Cargo.lock
+              ./Makefile
+              ./data
             ];
           };
           nativeBuildInputs = with pkgs; [ pkg-config rustPlatform.bindgenHook ];
@@ -47,7 +49,12 @@
           inherit xdg-desktop-portal-cosmic;
         };
 
-        packages.default = xdg-desktop-portal-cosmic;
+        packages.default = xdg-desktop-portal-cosmic.overrideAttrs (oldAttrs: rec {
+          installPhase = ''
+            make install prefix=$out
+          '';
+          passthru.providedSessions = [ "cosmic" ];
+        });
 
         apps.default = flake-utils.lib.mkApp {
           drv = xdg-desktop-portal-cosmic;
