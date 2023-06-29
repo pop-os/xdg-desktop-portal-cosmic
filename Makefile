@@ -1,7 +1,7 @@
 prefix ?= /usr/local
 bindir = $(prefix)/bin
 libdir = $(prefix)/lib
-libexecdir = $(prefix)/libexec
+libexecdir ?= $(prefix)/libexec
 includedir = $(prefix)/include
 datarootdir = $(prefix)/share
 datadir = $(datarootdir)
@@ -34,7 +34,7 @@ $(BIN): Cargo.toml Cargo.lock src/main.rs vendor-check
 
 install:
 	install -Dm0755 target/$(TARGET)/$(BIN) $(DESTDIR)$(libexecdir)/$(BIN)
-	install -Dm0644 data/$(DBUS_NAME).service $(DESTDIR)/$(datadir)/dbus-1/services/$(DBUS_NAME).service
+	install -Dm0644 data/$(DBUS_NAME).service $(DESTDIR)/$(datadir)/systemd/user/$(DBUS_NAME).service
 	install -Dm0644 data/cosmic.portal $(DESTDIR)/$(datadir)/xdg-desktop-portal/portals/cosmic.portal
 
 ## Cargo Vendoring

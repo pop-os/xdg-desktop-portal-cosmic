@@ -32,7 +32,7 @@
               ./data
             ];
           };
-          nativeBuildInputs = with pkgs; [ pkg-config rustPlatform.bindgenHook ];
+          nativeBuildInputs = with pkgs; [ pkg-config rustPlatform.bindgenHook gnumake ];
           buildInputs = with pkgs; [
             pipewire
             libxkbcommon
@@ -49,9 +49,12 @@
           inherit xdg-desktop-portal-cosmic;
         };
 
-        packages.default = xdg-desktop-portal-cosmic.overrideAttrs (oldAttrs: rec {
+        # FIXME reference the libexecdir for xdp-cosmic in the nix store in cosmic-session
+        # then the hack putting xdp-cosmic into bin can be removed
+        packages.default = xdg-desktop-portal-cosmic
+        .overrideAttrs (oldAttrs: rec {
           installPhase = ''
-            make install prefix=$out
+            make install prefix=$out libexecdir=$out/bin
           '';
           passthru.providedSessions = [ "cosmic" ];
         });
