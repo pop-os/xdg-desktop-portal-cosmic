@@ -115,7 +115,7 @@ fn start_stream(
             _ => {}
         }
     })
-    .param_changed(|id, (), pod| {
+    .param_changed(|_, id, (), pod| {
         if id != spa_sys::SPA_PARAM_Format {
             return;
         }
