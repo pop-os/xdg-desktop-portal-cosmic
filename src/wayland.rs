@@ -1,5 +1,3 @@
-#![allow(unused_variables)]
-
 use cosmic_client_toolkit::{
     cosmic_protocols::screencopy::v1::client::{
         zcosmic_screencopy_manager_v1, zcosmic_screencopy_session_v1,
@@ -150,6 +148,7 @@ impl WaylandHelper {
         // XXX error type?
         // TODO: way to get cursor metadata?
 
+        #[allow(unused_variables)] // TODO
         let overlay_cursor = if overlay_cursor { 1 } else { 0 };
 
         let session = Arc::new(Session::default());
@@ -309,8 +308,8 @@ impl ScreencopyHandler for AppData {
 
     fn init_done(
         &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
         session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
         buffer_infos: &[BufferInfo],
     ) {
@@ -321,8 +320,8 @@ impl ScreencopyHandler for AppData {
 
     fn ready(
         &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
         session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
     ) {
         Session::for_session(session).unwrap().update(|data| {
@@ -332,8 +331,8 @@ impl ScreencopyHandler for AppData {
 
     fn failed(
         &mut self,
-        conn: &Connection,
-        qh: &QueueHandle<Self>,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
         session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
         reason: WEnum<zcosmic_screencopy_session_v1::FailureReason>,
     ) {
