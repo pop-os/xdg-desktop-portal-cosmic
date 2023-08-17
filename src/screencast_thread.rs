@@ -4,10 +4,9 @@
 // TODO: Things other than outputs, handle disconnected output, resolution change
 
 use pipewire::{
-    prelude::*,
     spa::{
         self,
-        pod::{self, deserialize::PodDeserializer, serialize::PodSerializer},
+        pod::{self, deserialize::PodDeserializer, serialize::PodSerializer, Pod},
         utils::Id,
     },
     stream::StreamState,
@@ -39,18 +38,22 @@ impl ScreencastThread {
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
         std::thread::spawn(
             move || match start_stream(wayland_helper, output, overlay_cursor) {
-                Ok((loop_, node_id_rx)) => {
+                Ok((loop_, listener, context, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
                     let _receiver = thread_stop_rx.attach(&loop_, move |()| {
                         weak_loop.upgrade().unwrap().quit();
                     });
                     loop_.run();
+                    // XXX fix segfault with opposite drop order
+                    drop(listener);
+                    drop(context);
                 }
                 Err(err) => tx.send(Err(err)).unwrap(),
             },
         );
         Ok(Self {
+            // XXX can second unwrap fail?
             node_id: rx.await.unwrap()?.await.unwrap()?,
             thread_stop_tx,
         })
@@ -69,13 +72,22 @@ fn start_stream(
     wayland_helper: WaylandHelper,
     output: wl_output::WlOutput,
     overlay_cursor: bool,
-) -> Result<(pipewire::MainLoop, oneshot::Receiver<anyhow::Result<u32>>), pipewire::Error> {
+) -> Result<
+    (
+        pipewire::MainLoop,
+        pipewire::stream::StreamListener<()>,
+        pipewire::Context<pipewire::MainLoop>,
+        oneshot::Receiver<anyhow::Result<u32>>,
+    ),
+    pipewire::Error,
+> {
     let loop_ = pipewire::MainLoop::new()?;
+    let context = pipewire::Context::new(&loop_)?;
+    let core = context.connect(None)?;
 
     let name = format!("cosmic-screenshot"); // XXX randomize?
 
-    let stream_cell: Rc<RefCell<Option<pipewire::stream::Stream<()>>>> =
-        Rc::new(RefCell::new(None));
+    let stream_cell: Rc<RefCell<Option<pipewire::stream::Stream>>> = Rc::new(RefCell::new(None));
     let stream_cell_clone = stream_cell.clone();
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
@@ -86,112 +98,115 @@ fn start_stream(
         None => (0, 0), // XXX
     };
 
-    let stream = pipewire::stream::Stream::with_user_data(
-        &loop_,
+    let stream = pipewire::stream::Stream::new(
+        &core,
         &name,
         pipewire::properties! {
             "media.class" => "Video/Source",
             "node.name" => "cosmic-screenshot", // XXX
         },
-        (),
-    )
-    .state_changed(move |old, new| {
-        println!("state-changed '{:?}' -> '{:?}'", old, new);
-        match new {
-            StreamState::Paused => {
-                let stream = stream_cell_clone.borrow_mut();
-                let stream = stream.as_ref().unwrap();
-                if let Some(node_id_tx) = node_id_tx.take() {
-                    node_id_tx.send(Ok(stream.node_id())).unwrap();
+    )?;
+    let listener = stream
+        .add_local_listener()
+        .state_changed(move |old, new| {
+            println!("state-changed '{:?}' -> '{:?}'", old, new);
+            match new {
+                StreamState::Paused => {
+                    let stream = stream_cell_clone.borrow_mut();
+                    let stream = stream.as_ref().unwrap();
+                    if let Some(node_id_tx) = node_id_tx.take() {
+                        node_id_tx.send(Ok(stream.node_id())).unwrap();
+                    }
                 }
-            }
-            StreamState::Error(msg) => {
-                if let Some(node_id_tx) = node_id_tx.take() {
-                    node_id_tx
-                        .send(Err(anyhow::anyhow!("stream error: {}", msg)))
-                        .unwrap();
+                StreamState::Error(msg) => {
+                    if let Some(node_id_tx) = node_id_tx.take() {
+                        node_id_tx
+                            .send(Err(anyhow::anyhow!("stream error: {}", msg)))
+                            .unwrap();
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-    })
-    .param_changed(|_, id, (), pod| {
-        if id != spa_sys::SPA_PARAM_Format {
-            return;
-        }
-        if let Some(pod) = std::ptr::NonNull::new(pod as *mut _) {
-            let value = unsafe { PodDeserializer::deserialize_ptr::<pod::Value>(pod) };
-            println!("param-changed: {} {:?}", id, value);
-        }
-    })
-    .add_buffer(move |buffer| {
-        let buf = unsafe { &mut *(*buffer).buffer };
-        let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
-        // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
+        })
+        .param_changed(|_, id, (), pod| {
+            if id != spa_sys::SPA_PARAM_Format {
+                return;
+            }
+            if let Some(pod) = pod {
+                let value = PodDeserializer::deserialize_from::<pod::Value>(pod.as_bytes());
+                println!("param-changed: {} {:?}", id, value);
+            }
+        })
+        .add_buffer(move |buffer| {
+            let buf = unsafe { &mut *(*buffer).buffer };
+            let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
+            // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
 
-        for data in datas {
-            use std::ffi::CStr;
+            for data in datas {
+                use std::ffi::CStr;
 
-            let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
-            let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
-            rustix::fs::ftruncate(&fd, (width * height * 4) as _);
+                let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
+                let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
+                rustix::fs::ftruncate(&fd, (width * height * 4) as _);
 
-            // TODO test `data.type_`
+                // TODO test `data.type_`
 
-            data.type_ = spa_sys::SPA_DATA_MemFd;
-            data.flags = 0;
-            data.fd = fd.into_raw_fd() as _;
-            data.data = std::ptr::null_mut();
-            data.maxsize = width * height * 4;
-            data.mapoffset = 0;
+                data.type_ = spa_sys::SPA_DATA_MemFd;
+                data.flags = 0;
+                data.fd = fd.into_raw_fd() as _;
+                data.data = std::ptr::null_mut();
+                data.maxsize = width * height * 4;
+                data.mapoffset = 0;
 
-            let mut chunk = unsafe { &mut *data.chunk };
-            chunk.size = width * height * 4;
-            chunk.offset = 0;
-            chunk.stride = 4 * width as i32;
-        }
-    })
-    .remove_buffer(|buffer| {
-        let buf = unsafe { &mut *(*buffer).buffer };
-        let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
+                let chunk = unsafe { &mut *data.chunk };
+                chunk.size = width * height * 4;
+                chunk.offset = 0;
+                chunk.stride = 4 * width as i32;
+            }
+        })
+        .remove_buffer(|buffer| {
+            let buf = unsafe { &mut *(*buffer).buffer };
+            let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
 
-        for data in datas {
-            let _ = unsafe { rustix::io::close(data.fd as _) };
-            data.fd = -1;
-        }
-    })
-    .process(move |stream, ()| {
-        if let Some(mut buffer) = stream.dequeue_buffer() {
-            let datas = buffer.datas_mut();
-            //let data = datas[0].get_mut();
-            //if data.len() == width as usize * height as usize * 4 {
-            let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
-            // TODO error
-            wayland_helper.capture_output_shm_fd(
-                &output,
-                overlay_cursor,
-                fd,
-                Some(width * height * 4),
-            );
-            //if frame.width == width && frame.height == height {
-            //}
-        }
-    })
-    .create()?;
+            for data in datas {
+                let _ = unsafe { rustix::io::close(data.fd as _) };
+                data.fd = -1;
+            }
+        })
+        .process(move |stream, ()| {
+            if let Some(mut buffer) = stream.dequeue_buffer() {
+                let datas = buffer.datas_mut();
+                //let data = datas[0].get_mut();
+                //if data.len() == width as usize * height as usize * 4 {
+                let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
+                // TODO error
+                wayland_helper.capture_output_shm_fd(
+                    &output,
+                    overlay_cursor,
+                    fd,
+                    Some(width * height * 4),
+                );
+                //if frame.width == width && frame.height == height {
+                //}
+            }
+        })
+        .register()?;
     // DRIVER, ALLOC_BUFFERS
     // ??? define formats (shm, dmabuf)
     let format = format(width, height);
     let buffers = buffers(width as u32, height as u32);
     let params = &mut [
-        buffers.as_slice() as *const _ as _,
-        format.as_slice() as *const _ as _,
+        Pod::from_bytes(buffers.as_slice()).unwrap(),
+        Pod::from_bytes(format.as_slice()).unwrap(),
     ];
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
     let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
+    println!("not connected {}", stream.node_id());
     stream.connect(spa::Direction::Output, None, flags, params)?;
+    println!("connected? {}", stream.node_id());
     *stream_cell.borrow_mut() = Some(stream);
 
-    Ok((loop_, node_id_rx))
+    Ok((loop_, listener, context, node_id_rx))
 }
 
 fn value_to_bytes(value: pod::Value) -> Vec<u8> {
