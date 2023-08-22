@@ -1,6 +1,7 @@
 use std::{collections::HashMap, future};
 use zbus::zvariant;
 
+mod buffer;
 mod documents;
 mod screenshot;
 use screenshot::Screenshot;

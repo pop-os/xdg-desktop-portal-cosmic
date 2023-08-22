@@ -1,6 +1,8 @@
 // Thread to get frames from compositor and redirect to pipewire
 // TODO: Things other than outputs, handle disconnected output, resolution change
 
+// Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
+
 use pipewire::{
     spa::{
         self,
@@ -19,7 +21,10 @@ use std::{
 use tokio::sync::oneshot;
 use wayland_client::protocol::wl_output;
 
-use crate::wayland::WaylandHelper;
+use crate::{
+    buffer::{self, Dmabuf, Plane},
+    wayland::{DmabufHelper, WaylandHelper},
+};
 
 pub struct ScreencastThread {
     node_id: u32,
@@ -93,6 +98,16 @@ fn start_stream(
         None => (0, 0), // XXX
     };
 
+    let dmabuf_helper = wayland_helper.dmabuf();
+    let dmabuf_helper2 = dmabuf_helper.clone(); // XXX
+    let dmabuf_helper3 = dmabuf_helper.clone(); // XXX
+
+    // XXX
+    // Should use implicit modifier if none set?
+    let modifier = Rc::new(RefCell::new(gbm::Modifier::Linear));
+    let modifier2 = modifier.clone();
+    let modifier3 = modifier.clone();
+
     let stream = pipewire::stream::Stream::new(
         &core,
         &name,
@@ -123,13 +138,50 @@ fn start_stream(
                 _ => {}
             }
         })
-        .param_changed(|_, id, (), pod| {
+        .param_changed(move |stream, id, (), pod| {
             if id != spa_sys::SPA_PARAM_Format {
                 return;
             }
             if let Some(pod) = pod {
                 let value = PodDeserializer::deserialize_from::<pod::Value>(pod.as_bytes());
-                println!("param-changed: {} {:?}", id, value);
+                if let Ok((_, pod::Value::Object(object))) = &value {
+                    if let Some(modifier_prop) = object
+                        .properties
+                        .iter()
+                        .find(|p| p.key == spa_sys::SPA_FORMAT_VIDEO_modifier)
+                    {
+                        if let pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(
+                            _,
+                            spa::utils::ChoiceEnum::Enum {
+                                default,
+                                alternatives,
+                            },
+                        ))) = &modifier_prop.value
+                        {
+                            println!(
+                                "modifier param-changed: (default: {}, alternatives: {:?})",
+                                default, alternatives
+                            );
+                            if let Ok(modifier_val) = gbm::Modifier::try_from(*default as u64) {
+                                *modifier.borrow_mut() = modifier_val;
+
+                                let params = params(
+                                    width as u32,
+                                    height as u32,
+                                    dmabuf_helper3.as_ref(),
+                                    Some(modifier_val),
+                                );
+                                let mut params: Vec<_> = params
+                                    .iter()
+                                    .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
+                                    .collect();
+                                stream.update_params(&mut params);
+                            }
+                        }
+                    }
+                    //println!("{object:?}");
+                }
+                //println!("param-changed: {} {:?}", id, value);
             }
         })
         .add_buffer(move |buffer| {
@@ -137,26 +189,44 @@ fn start_stream(
             let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
             // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
 
-            for data in datas {
-                use std::ffi::CStr;
+            // TODO test multi-planar
+            println!("type: {}", datas[0].type_);
+            if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
+                println!("Allocate dmabuf buffer");
+                let gbm = dmabuf_helper2.as_ref().unwrap().gbm().lock().unwrap();
+                let dmabuf = buffer::create_dmabuf(&gbm, *modifier2.borrow(), width, height);
 
-                let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
-                let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
-                rustix::fs::ftruncate(&fd, (width * height * 4) as _);
+                assert!(dmabuf.planes.len() == datas.len());
+                for (data, plane) in datas.iter_mut().zip(dmabuf.planes) {
+                    data.type_ = spa_sys::SPA_DATA_DmaBuf;
+                    data.flags = 0;
+                    data.fd = plane.fd.into_raw_fd() as _;
+                    data.data = std::ptr::null_mut();
+                    data.maxsize = 0; // XXX
+                    data.mapoffset = 0;
 
-                // TODO test `data.type_`
+                    let chunk = unsafe { &mut *data.chunk };
+                    chunk.size = height * plane.stride;
+                    chunk.offset = plane.offset;
+                    chunk.stride = plane.stride as i32;
+                }
+            } else {
+                println!("Allocate shm buffer");
+                for data in datas {
+                    let fd = buffer::create_memfd(width, height);
 
-                data.type_ = spa_sys::SPA_DATA_MemFd;
-                data.flags = 0;
-                data.fd = fd.into_raw_fd() as _;
-                data.data = std::ptr::null_mut();
-                data.maxsize = width * height * 4;
-                data.mapoffset = 0;
+                    data.type_ = spa_sys::SPA_DATA_MemFd;
+                    data.flags = 0;
+                    data.fd = fd.into_raw_fd() as _;
+                    data.data = std::ptr::null_mut();
+                    data.maxsize = width * height * 4;
+                    data.mapoffset = 0;
 
-                let chunk = unsafe { &mut *data.chunk };
-                chunk.size = width * height * 4;
-                chunk.offset = 0;
-                chunk.stride = 4 * width as i32;
+                    let chunk = unsafe { &mut *data.chunk };
+                    chunk.size = width * height * 4;
+                    chunk.offset = 0;
+                    chunk.stride = 4 * width as i32;
+                }
             }
         })
         .remove_buffer(|buffer| {
@@ -171,37 +241,74 @@ fn start_stream(
         .process(move |stream, ()| {
             if let Some(mut buffer) = stream.dequeue_buffer() {
                 let datas = buffer.datas_mut();
-                //let data = datas[0].get_mut();
-                //if data.len() == width as usize * height as usize * 4 {
-                let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
-                // TODO error
-                wayland_helper.capture_output_shm_fd(
-                    &output,
-                    overlay_cursor,
-                    fd,
-                    Some(width * height * 4),
-                );
-                //if frame.width == width && frame.height == height {
-                //}
+                if datas[0].type_() == spa::data::DataType::DmaBuf {
+                    let dmabuf = Dmabuf {
+                        format: gbm::Format::Abgr8888,
+                        modifier: *modifier3.borrow(),
+                        width,
+                        height,
+                        planes: datas
+                            .iter()
+                            .map(|data| Plane {
+                                // TODO avoid dup
+                                fd: unsafe { BorrowedFd::borrow_raw(data.as_raw().fd as _) }
+                                    .try_clone_to_owned()
+                                    .unwrap(),
+                                offset: data.chunk().offset(),
+                                stride: data.chunk().stride() as u32,
+                            })
+                            .collect(),
+                    };
+                    wayland_helper.capture_output_dmabuf_fd(&output, overlay_cursor, &dmabuf);
+                } else {
+                    //let data = datas[0].get_mut();
+                    //if data.len() == width as usize * height as usize * 4 {
+                    let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
+                    // TODO error
+                    wayland_helper.capture_output_shm_fd(
+                        &output,
+                        overlay_cursor,
+                        fd,
+                        Some(width * height * 4),
+                    );
+                    //if frame.width == width && frame.height == height {
+                    //}
+                }
             }
         })
         .register()?;
     // DRIVER, ALLOC_BUFFERS
-    // ??? define formats (shm, dmabuf)
-    let format = format(width, height);
-    let buffers = buffers(width as u32, height as u32);
-    let params = &mut [
-        Pod::from_bytes(buffers.as_slice()).unwrap(),
-        Pod::from_bytes(format.as_slice()).unwrap(),
-    ];
+
+    let params = params(width as u32, height as u32, dmabuf_helper.as_ref(), None);
+    let mut params: Vec<_> = params
+        .iter()
+        .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
+        .collect();
+
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
     let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
-    println!("not connected {}", stream.node_id());
-    stream.connect(spa::Direction::Output, None, flags, params)?;
-    println!("connected? {}", stream.node_id());
+    stream.connect(spa::Direction::Output, None, flags, &mut params)?;
     *stream_cell.borrow_mut() = Some(stream);
 
     Ok((loop_, listener, context, node_id_rx))
+}
+
+fn params(
+    width: u32,
+    height: u32,
+    dmabuf: Option<&DmabufHelper>,
+    fixated_modifier: Option<gbm::Modifier>,
+) -> Vec<Vec<u8>> {
+    [
+        Some(buffers(width, height)),
+        fixated_modifier.map(|x| format(width, height, None, Some(x))),
+        // Favor dmabuf over shm by listing it first
+        dmabuf.map(|x| format(width, height, Some(x), None)),
+        Some(format(width, height, None, None)),
+    ]
+    .into_iter()
+    .filter_map(|x| x)
+    .collect()
 }
 
 fn value_to_bytes(value: pod::Value) -> Vec<u8> {
@@ -216,19 +323,17 @@ fn buffers(width: u32, height: u32) -> Vec<u8> {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
         properties: vec![
-            /*
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_dataType,
                 flags: pod::PropertyFlags::empty(),
                 value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
                     spa::utils::ChoiceFlags::empty(),
                     spa::utils::ChoiceEnum::Flags {
-                        default: 1 << spa_sys::SPA_DATA_MemFd,
-                        flags: vec![],
+                        default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
+                        flags: vec![1 << spa_sys::SPA_DATA_MemFd, 1 << spa_sys::SPA_DATA_DmaBuf],
                     },
                 ))),
             },
-            */
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_size,
                 flags: pod::PropertyFlags::empty(),
@@ -265,38 +370,73 @@ fn buffers(width: u32, height: u32) -> Vec<u8> {
     }))
 }
 
-fn format(width: u32, height: u32) -> Vec<u8> {
+// If `dmabuf` is passed, format will be for dmabuf with modifiers
+fn format(
+    width: u32,
+    height: u32,
+    dmabuf: Option<&DmabufHelper>,
+    fixated_modifier: Option<gbm::Modifier>,
+) -> Vec<u8> {
+    let mut properties = vec![
+        pod::Property {
+            key: spa_sys::SPA_FORMAT_mediaType,
+            flags: pod::PropertyFlags::empty(),
+            value: pod::Value::Id(Id(spa_sys::SPA_MEDIA_TYPE_video)),
+        },
+        pod::Property {
+            key: spa_sys::SPA_FORMAT_mediaSubtype,
+            flags: pod::PropertyFlags::empty(),
+            value: pod::Value::Id(Id(spa_sys::SPA_MEDIA_SUBTYPE_raw)),
+        },
+        pod::Property {
+            key: spa_sys::SPA_FORMAT_VIDEO_format,
+            flags: pod::PropertyFlags::empty(),
+            value: pod::Value::Id(Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)), // XXX support others?
+        },
+        pod::Property {
+            key: spa_sys::SPA_FORMAT_VIDEO_size,
+            flags: pod::PropertyFlags::empty(),
+            value: pod::Value::Rectangle(spa::utils::Rectangle { width, height }),
+        },
+        pod::Property {
+            key: spa_sys::SPA_FORMAT_VIDEO_framerate,
+            flags: pod::PropertyFlags::empty(),
+            value: pod::Value::Fraction(spa::utils::Fraction { num: 60, denom: 1 }),
+        },
+        // TODO max framerate
+    ];
+    if let Some(modifier) = fixated_modifier {
+        properties.push(pod::Property {
+            key: spa_sys::SPA_FORMAT_VIDEO_modifier,
+            flags: pod::PropertyFlags::MANDATORY,
+            value: pod::Value::Long(u64::from(modifier) as i64),
+        });
+    } else if let Some(dmabuf) = dmabuf {
+        let mut modifiers: Vec<_> = dmabuf
+            .modifiers_for_format(gbm::Format::Abgr8888 as u32)
+            .map(|x| x as i64)
+            .collect();
+        if modifiers.is_empty() {
+            // TODO
+            modifiers.push(u64::from(gbm::Modifier::Invalid) as _);
+        }
+        let default = *modifiers.iter().next().unwrap();
+
+        properties.push(pod::Property {
+            key: spa_sys::SPA_FORMAT_VIDEO_modifier,
+            flags: pod::PropertyFlags::MANDATORY | pod::PropertyFlags::DONT_FIXATE,
+            value: pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default,
+                    alternatives: modifiers,
+                },
+            ))),
+        });
+    }
     value_to_bytes(pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_Format,
         id: spa_sys::SPA_PARAM_EnumFormat,
-        properties: vec![
-            pod::Property {
-                key: spa_sys::SPA_FORMAT_mediaType,
-                flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Id(Id(spa_sys::SPA_MEDIA_TYPE_video)),
-            },
-            pod::Property {
-                key: spa_sys::SPA_FORMAT_mediaSubtype,
-                flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Id(Id(spa_sys::SPA_MEDIA_SUBTYPE_raw)),
-            },
-            pod::Property {
-                key: spa_sys::SPA_FORMAT_VIDEO_format,
-                flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Id(Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
-            },
-            // XXX modifiers
-            pod::Property {
-                key: spa_sys::SPA_FORMAT_VIDEO_size,
-                flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Rectangle(spa::utils::Rectangle { width, height }),
-            },
-            pod::Property {
-                key: spa_sys::SPA_FORMAT_VIDEO_framerate,
-                flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Fraction(spa::utils::Fraction { num: 60, denom: 1 }),
-            },
-            // TODO max framerate
-        ],
+        properties,
     }))
 }

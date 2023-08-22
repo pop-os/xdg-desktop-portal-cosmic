@@ -8,14 +8,19 @@ use cosmic_client_toolkit::{
     },
     sctk::{
         self,
+        dmabuf::{DmabufFeedback, DmabufFormat, DmabufHandler, DmabufState},
         output::{OutputHandler, OutputState},
         registry::{ProvidesRegistryState, RegistryState},
         shm::{Shm, ShmHandler},
     },
 };
 use std::{
-    io::Write,
-    os::fd::{AsFd, OwnedFd},
+    fs,
+    io::{self, Write},
+    os::{
+        fd::{AsFd, OwnedFd},
+        unix::fs::MetadataExt,
+    },
     process,
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread,
@@ -25,6 +30,41 @@ use wayland_client::{
     protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
 };
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{
+    zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
+    zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+    zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+};
+
+use crate::buffer;
+
+#[derive(Clone)]
+pub struct DmabufHelper {
+    feedback: Arc<DmabufFeedback>,
+    gbm: Arc<Mutex<gbm::Device<fs::File>>>,
+}
+
+impl DmabufHelper {
+    // TODO: consider scanout flag?
+    // Consider tranches in some way?
+    fn feedback_formats(&self) -> impl Iterator<Item = &DmabufFormat> {
+        self.feedback
+            .tranches()
+            .iter()
+            .flat_map(|x| x.formats.iter())
+            .filter_map(|x| self.feedback.format_table().get(*x as usize))
+    }
+
+    pub fn modifiers_for_format(&self, format: u32) -> impl Iterator<Item = u64> + '_ {
+        self.feedback_formats()
+            .filter(move |x| x.format == format)
+            .map(|x| x.modifier)
+    }
+
+    pub fn gbm(&self) -> &Mutex<gbm::Device<fs::File>> {
+        &self.gbm
+    }
+}
 
 struct WaylandHelperInner {
     conn: wayland_client::Connection,
@@ -32,6 +72,8 @@ struct WaylandHelperInner {
     qh: QueueHandle<AppData>,
     screencopy_manager: zcosmic_screencopy_manager_v1::ZcosmicScreencopyManagerV1,
     wl_shm: wl_shm::WlShm,
+    dmabuf: Mutex<Option<DmabufHelper>>,
+    zwp_dmabuf: ZwpLinuxDmabufV1,
 }
 
 // TODO seperate state object from what is passed to threads
@@ -46,6 +88,7 @@ struct AppData {
     screencopy_state: ScreencopyState,
     output_state: OutputState,
     shm_state: Shm,
+    dmabuf_state: DmabufState,
 }
 
 #[derive(Default)]
@@ -94,6 +137,7 @@ impl WaylandHelper {
         let registry_state = RegistryState::new(&globals);
         let screencopy_state = ScreencopyState::new(&globals, &qh);
         let shm_state = Shm::bind(&globals, &qh).unwrap();
+        let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).unwrap();
         let wayland_helper = WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
                 conn,
@@ -101,14 +145,19 @@ impl WaylandHelper {
                 qh: qh.clone(),
                 screencopy_manager: screencopy_state.screencopy_manager.clone(),
                 wl_shm: shm_state.wl_shm().clone(),
+                dmabuf: Mutex::new(None),
+                zwp_dmabuf,
             }),
         };
+        let dmabuf_state = DmabufState::new(&globals, &qh);
+        let _ = dmabuf_state.get_default_feedback(&qh);
         let mut data = AppData {
             shm_state,
             wayland_helper: wayland_helper.clone(),
             output_state: OutputState::new(&globals, &qh),
             screencopy_state,
             registry_state,
+            dmabuf_state,
         };
         event_queue.flush().unwrap();
 
@@ -121,9 +170,74 @@ impl WaylandHelper {
         wayland_helper
     }
 
+    pub fn dmabuf(&self) -> Option<DmabufHelper> {
+        self.inner.dmabuf.lock().unwrap().clone()
+    }
+
     pub fn outputs(&self) -> Vec<wl_output::WlOutput> {
         // TODO Good way to avoid allocation?
         self.inner.outputs.lock().unwrap().clone()
+    }
+
+    pub fn capture_output_dmabuf_fd(
+        &self,
+        output: &wl_output::WlOutput,
+        _overlay_cursor: bool,
+        dmabuf: &buffer::Dmabuf,
+    ) {
+        // TODO ensure dmabuf is valid format with right number of planes?
+        // - params.add can raise protocol error
+        let params = self
+            .inner
+            .zwp_dmabuf
+            .create_params(&self.inner.qh, sctk::globals::GlobalData);
+        let modifier = u64::from(dmabuf.modifier);
+        let modifier_hi = (modifier >> 32) as u32;
+        let modifier_lo = (modifier & 0xffffffff) as u32;
+        for (i, plane) in dmabuf.planes.iter().enumerate() {
+            params.add(
+                plane.fd.as_fd(),
+                i as u32,
+                plane.offset,
+                plane.stride,
+                modifier_hi,
+                modifier_lo,
+            );
+        }
+        // XXX use create
+        let buffer = params.create_immed(
+            dmabuf.width as i32,
+            dmabuf.height as i32,
+            dmabuf.format as u32,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+            &self.inner.qh,
+            (),
+        );
+
+        // TODO buffer_infos
+
+        let session = Arc::new(Session::default());
+        let screencopy_session = self.inner.screencopy_manager.capture_output(
+            &output,
+            zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
+            &self.inner.qh,
+            SessionData {
+                session: session.clone(),
+                session_data: Default::default(),
+            },
+        );
+
+        screencopy_session.attach_buffer(&buffer, None, 0); // XXX age?
+        screencopy_session.commit(zcosmic_screencopy_session_v1::Options::empty());
+        self.inner.conn.flush().unwrap();
+
+        // TODO: wait for server to release buffer?
+        let res = session
+            .wait_while(|data| data.res.is_none())
+            .res
+            .take()
+            .unwrap();
+        buffer.destroy();
     }
 
     pub fn capture_output_shm(
@@ -341,6 +455,71 @@ impl ScreencopyHandler for AppData {
     }
 }
 
+impl DmabufHandler for AppData {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_feedback(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _proxy: &ZwpLinuxDmabufFeedbackV1,
+        feedback: DmabufFeedback,
+    ) {
+        // We only create default feedback, so we assume that's what compositor is sending
+
+        let mut dmabuf = self.wayland_helper.inner.dmabuf.lock().unwrap();
+        let gbm = match dmabuf.take() {
+            // Change to main device is not likely to happen
+            Some(dmabuf) if dmabuf.feedback.main_device() == feedback.main_device() => dmabuf.gbm,
+            _ => match gbm_device(feedback.main_device()) {
+                Ok(Some(gbm)) => Arc::new(Mutex::new(gbm)),
+                Ok(None) => {
+                    eprintln!(
+                        "GBM device not found for main device '{}'",
+                        feedback.main_device()
+                    );
+                    return;
+                }
+                Err(err) => {
+                    eprintln!("Failed to open GBM device: {}", err);
+                    return;
+                }
+            },
+        };
+        *dmabuf = Some(DmabufHelper {
+            feedback: Arc::new(feedback),
+            gbm,
+        });
+    }
+
+    fn created(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _params: &ZwpLinuxBufferParamsV1,
+        _buffer: wl_buffer::WlBuffer,
+    ) {
+    }
+
+    fn failed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _params: &ZwpLinuxBufferParamsV1,
+    ) {
+    }
+
+    fn released(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _buffer: &wl_buffer::WlBuffer,
+    ) {
+    }
+}
+
 impl Dispatch<wl_shm_pool::WlShmPool, ()> for AppData {
     fn event(
         _app_data: &mut Self,
@@ -378,6 +557,21 @@ pub fn connect_to_wayland() -> wayland_client::Connection {
     wayland_connection
 }
 
+fn gbm_device(rdev: u64) -> io::Result<Option<gbm::Device<fs::File>>> {
+    for i in fs::read_dir("/dev/dri")? {
+        let i = i?;
+        if i.metadata()?.rdev() == rdev {
+            let file = fs::File::options()
+                .read(true)
+                .write(true)
+                .open(i.path())
+                .unwrap();
+            return Ok(Some(gbm::Device::new(file)?));
+        }
+    }
+    Ok(None)
+}
+
 impl ScreencopySessionDataExt for SessionData {
     fn screencopy_session_data(&self) -> &ScreencopySessionData {
         &self.session_data
@@ -387,4 +581,5 @@ impl ScreencopySessionDataExt for SessionData {
 sctk::delegate_shm!(AppData);
 sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);
+sctk::delegate_dmabuf!(AppData);
 cosmic_client_toolkit::delegate_screencopy!(AppData, session: [SessionData]);
