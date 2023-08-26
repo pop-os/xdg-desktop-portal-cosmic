@@ -12,13 +12,11 @@ cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols" }
 futures = "0.3"
 memmap2 = "0.6.1"
-# pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
-pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
+pipewire = "0.7.2"
 png = "0.17.5"
 rustix = { version = "0.37.19", features = ["fs"] }
 serde = "1.0.143"
-# spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
-spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
+spa_sys = { package = "libspa-sys", version = "0.7.2" }
 tempfile = "3.5.0"
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.30.0" }
