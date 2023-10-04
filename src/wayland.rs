@@ -15,7 +15,7 @@ use cosmic_client_toolkit::{
 };
 use std::{
     io::Write,
-    os::fd::{AsFd, AsRawFd, OwnedFd},
+    os::fd::{AsFd, OwnedFd},
     process,
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread,
@@ -186,12 +186,10 @@ impl WaylandHelper {
         } else {
             rustix::fs::ftruncate(&fd, buf_len as _);
         };
-        let pool = self.inner.wl_shm.create_pool(
-            fd.as_fd().as_raw_fd(),
-            buf_len as i32,
-            &self.inner.qh,
-            (),
-        );
+        let pool = self
+            .inner
+            .wl_shm
+            .create_pool(fd.as_fd(), buf_len as i32, &self.inner.qh, ());
         let buffer = pool.create_buffer(
             0,
             buffer_info.width as i32,
