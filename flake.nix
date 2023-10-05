@@ -36,6 +36,7 @@
             libxkbcommon
             libglvnd
           ];
+          installCargoArtifactsMode = "use-zstd";
         };
 
         cargoArtifacts = craneLib.buildDepsOnly pkgDef;
