@@ -155,7 +155,7 @@ impl ScreenCast {
                 outputs.truncate(1);
             }
         } else {
-            eprintln!("No output");
+            log::error!("No output");
             return PortalResponse::Other;
         }
 
@@ -175,7 +175,7 @@ impl ScreenCast {
             match res {
                 Ok(thread) => screencast_threads.push(thread),
                 Err(err) => {
-                    eprintln!("Screencast thread failed: {}", err);
+                    log::error!("Screencast thread failed: {}", err);
                     failed = true;
                 }
             }

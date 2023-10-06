@@ -119,7 +119,7 @@ fn start_stream(
     let listener = stream
         .add_local_listener()
         .state_changed(move |old, new| {
-            println!("state-changed '{:?}' -> '{:?}'", old, new);
+            log::info!("state-changed '{:?}' -> '{:?}'", old, new);
             match new {
                 StreamState::Paused => {
                     let stream = stream_cell_clone.borrow_mut();
@@ -158,9 +158,10 @@ fn start_stream(
                             },
                         ))) = &modifier_prop.value
                         {
-                            println!(
+                            log::info!(
                                 "modifier param-changed: (default: {}, alternatives: {:?})",
-                                default, alternatives
+                                default,
+                                alternatives
                             );
                             if let Ok(modifier_val) = gbm::Modifier::try_from(*default as u64) {
                                 *modifier.borrow_mut() = modifier_val;
@@ -179,7 +180,6 @@ fn start_stream(
                             }
                         }
                     }
-                    //println!("{object:?}");
                 }
                 //println!("param-changed: {} {:?}", id, value);
             }
@@ -190,9 +190,8 @@ fn start_stream(
             // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
 
             // TODO test multi-planar
-            println!("type: {}", datas[0].type_);
             if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
-                println!("Allocate dmabuf buffer");
+                log::info!("Allocate dmabuf buffer");
                 let gbm = dmabuf_helper2.as_ref().unwrap().gbm().lock().unwrap();
                 let dmabuf = buffer::create_dmabuf(&gbm, *modifier2.borrow(), width, height);
 
@@ -211,7 +210,7 @@ fn start_stream(
                     chunk.stride = plane.stride as i32;
                 }
             } else {
-                println!("Allocate shm buffer");
+                log::info!("Allocate shm buffer");
                 for data in datas {
                     let fd = buffer::create_memfd(width, height);
 

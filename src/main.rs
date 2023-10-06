@@ -88,6 +88,8 @@ impl Session {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> zbus::Result<()> {
+    env_logger::init();
+
     let wayland_connection = wayland::connect_to_wayland();
     let wayland_helper = wayland::WaylandHelper::new(wayland_connection);
 

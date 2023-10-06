@@ -476,14 +476,14 @@ impl DmabufHandler for AppData {
             _ => match gbm_device(feedback.main_device()) {
                 Ok(Some(gbm)) => Arc::new(Mutex::new(gbm)),
                 Ok(None) => {
-                    eprintln!(
+                    log::error!(
                         "GBM device not found for main device '{}'",
                         feedback.main_device()
                     );
                     return;
                 }
                 Err(err) => {
-                    eprintln!("Failed to open GBM device: {}", err);
+                    log::error!("Failed to open GBM device: {}", err);
                     return;
                 }
             },
@@ -549,7 +549,7 @@ pub fn connect_to_wayland() -> wayland_client::Connection {
     let wayland_connection = match wayland_client::Connection::connect_to_env() {
         Ok(connection) => connection,
         Err(err) => {
-            eprintln!("Error: {}", err);
+            log::error!("{}", err);
             process::exit(1)
         }
     };

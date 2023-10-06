@@ -104,14 +104,14 @@ impl Screenshot {
 
         // XXX way to select best output? Multiple?
         let Some(output) = self.wayland_helper.outputs().first().cloned() else {
-            eprintln!("No output");
+            log::error!("No output");
             return PortalResponse::Other;
         };
 
         let doc_path = match self.screenshot_inner(output, app_id).await {
             Ok(res) => res,
             Err(err) => {
-                eprintln!("Failed to capture screenshot: {}", err);
+                log::error!("Failed to capture screenshot: {}", err);
                 return PortalResponse::Other;
             }
         };
