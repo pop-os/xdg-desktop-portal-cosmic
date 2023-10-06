@@ -179,11 +179,11 @@ impl WaylandHelper {
         self.inner.outputs.lock().unwrap().clone()
     }
 
-    pub fn capture_output_dmabuf_fd(
+    pub fn capture_output_dmabuf_fd<Fd: AsFd>(
         &self,
         output: &wl_output::WlOutput,
         _overlay_cursor: bool,
-        dmabuf: &buffer::Dmabuf,
+        dmabuf: &buffer::Dmabuf<Fd>,
     ) {
         // TODO ensure dmabuf is valid format with right number of planes?
         // - params.add can raise protocol error

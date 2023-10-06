@@ -3,18 +3,18 @@ use std::{
     os::fd::{AsFd, OwnedFd},
 };
 
-pub struct Plane {
-    pub fd: OwnedFd,
+pub struct Plane<Fd: AsFd> {
+    pub fd: Fd,
     pub offset: u32,
     pub stride: u32,
 }
 
-pub struct Dmabuf {
+pub struct Dmabuf<Fd: AsFd> {
     pub format: gbm::Format,
     pub modifier: gbm::Modifier,
     pub width: u32,
     pub height: u32,
-    pub planes: Vec<Plane>,
+    pub planes: Vec<Plane<Fd>>,
 }
 
 pub fn create_memfd(width: u32, height: u32) -> OwnedFd {
@@ -30,7 +30,7 @@ pub fn create_dmabuf<T: AsFd>(
     modifier: gbm::Modifier,
     width: u32,
     height: u32,
-) -> Dmabuf {
+) -> Dmabuf<OwnedFd> {
     let buffer = device
         .create_buffer_object_with_modifiers2::<()>(
             width,

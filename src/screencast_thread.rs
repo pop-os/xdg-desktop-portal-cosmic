@@ -250,10 +250,7 @@ fn start_stream(
                         planes: datas
                             .iter()
                             .map(|data| Plane {
-                                // TODO avoid dup
-                                fd: unsafe { BorrowedFd::borrow_raw(data.as_raw().fd as _) }
-                                    .try_clone_to_owned()
-                                    .unwrap(),
+                                fd: unsafe { BorrowedFd::borrow_raw(data.as_raw().fd as _) },
                                 offset: data.chunk().offset(),
                                 stride: data.chunk().stride() as u32,
                             })
