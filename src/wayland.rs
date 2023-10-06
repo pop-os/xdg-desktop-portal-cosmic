@@ -118,7 +118,7 @@ impl Session {
     }
 
     fn update<F: FnOnce(&mut SessionInner)>(&self, f: F) {
-        f(&mut *self.inner.lock().unwrap());
+        f(&mut self.inner.lock().unwrap());
         self.condvar.notify_all();
     }
 
@@ -218,7 +218,7 @@ impl WaylandHelper {
 
         let session = Arc::new(Session::default());
         let screencopy_session = self.inner.screencopy_manager.capture_output(
-            &output,
+            output,
             zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
             &self.inner.qh,
             SessionData {
@@ -267,7 +267,7 @@ impl WaylandHelper {
 
         let session = Arc::new(Session::default());
         let screencopy_session = self.inner.screencopy_manager.capture_output(
-            &output,
+            output,
             zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
             &self.inner.qh,
             SessionData {
@@ -546,15 +546,10 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for AppData {
 
 // Connect to wayland and start task reading events from socket
 pub fn connect_to_wayland() -> wayland_client::Connection {
-    let wayland_connection = match wayland_client::Connection::connect_to_env() {
-        Ok(connection) => connection,
-        Err(err) => {
-            log::error!("{}", err);
-            process::exit(1)
-        }
-    };
-
-    wayland_connection
+    wayland_client::Connection::connect_to_env().unwrap_or_else(|err| {
+        log::error!("{}", err);
+        process::exit(1)
+    })
 }
 
 fn gbm_device(rdev: u64) -> io::Result<Option<gbm::Device<fs::File>>> {

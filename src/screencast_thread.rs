@@ -68,6 +68,7 @@ impl ScreencastThread {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn start_stream(
     wayland_helper: WaylandHelper,
     output: wl_output::WlOutput,
@@ -167,8 +168,8 @@ fn start_stream(
                                 *modifier.borrow_mut() = modifier_val;
 
                                 let params = params(
-                                    width as u32,
-                                    height as u32,
+                                    width,
+                                    height,
                                     dmabuf_helper3.as_ref(),
                                     Some(modifier_val),
                                 );
@@ -233,7 +234,7 @@ fn start_stream(
             let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
 
             for data in datas {
-                let _ = unsafe { rustix::io::close(data.fd as _) };
+                unsafe { rustix::io::close(data.fd as _) };
                 data.fd = -1;
             }
         })
@@ -278,7 +279,7 @@ fn start_stream(
         .register()?;
     // DRIVER, ALLOC_BUFFERS
 
-    let params = params(width as u32, height as u32, dmabuf_helper.as_ref(), None);
+    let params = params(width, height, dmabuf_helper.as_ref(), None);
     let mut params: Vec<_> = params
         .iter()
         .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
@@ -306,7 +307,7 @@ fn params(
         Some(format(width, height, None, None)),
     ]
     .into_iter()
-    .filter_map(|x| x)
+    .flatten()
     .collect()
 }
 
@@ -419,7 +420,7 @@ fn format(
             // TODO
             modifiers.push(u64::from(gbm::Modifier::Invalid) as _);
         }
-        let default = *modifiers.iter().next().unwrap();
+        let default = *modifiers.first().unwrap();
 
         properties.push(pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_modifier,
