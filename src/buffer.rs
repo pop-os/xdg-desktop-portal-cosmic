@@ -42,7 +42,7 @@ pub fn create_dmabuf<T: AsFd>(
         .unwrap();
     Dmabuf {
         format: gbm::Format::Abgr8888,
-        modifier: gbm::Modifier::Linear,
+        modifier,
         width,
         height,
         planes: (0..buffer.plane_count().unwrap() as i32)
