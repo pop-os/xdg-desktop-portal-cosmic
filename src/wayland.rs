@@ -9,12 +9,13 @@ use cosmic_client_toolkit::{
     sctk::{
         self,
         dmabuf::{DmabufFeedback, DmabufFormat, DmabufHandler, DmabufState},
-        output::{OutputHandler, OutputState},
+        output::{OutputHandler, OutputInfo, OutputState},
         registry::{ProvidesRegistryState, RegistryState},
         shm::{Shm, ShmHandler},
     },
 };
 use std::{
+    collections::HashMap,
     fs,
     io::{self, Write},
     os::{
@@ -69,6 +70,7 @@ impl DmabufHelper {
 struct WaylandHelperInner {
     conn: wayland_client::Connection,
     outputs: Mutex<Vec<wl_output::WlOutput>>,
+    output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
     qh: QueueHandle<AppData>,
     screencopy_manager: zcosmic_screencopy_manager_v1::ZcosmicScreencopyManagerV1,
     wl_shm: wl_shm::WlShm,
@@ -142,6 +144,7 @@ impl WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
                 conn,
                 outputs: Mutex::new(Vec::new()),
+                output_infos: Mutex::new(HashMap::new()),
                 qh: qh.clone(),
                 screencopy_manager: screencopy_state.screencopy_manager.clone(),
                 wl_shm: shm_state.wl_shm().clone(),
@@ -177,6 +180,22 @@ impl WaylandHelper {
     pub fn outputs(&self) -> Vec<wl_output::WlOutput> {
         // TODO Good way to avoid allocation?
         self.inner.outputs.lock().unwrap().clone()
+    }
+
+    pub fn output_info(&self, output: &wl_output::WlOutput) -> Option<OutputInfo> {
+        self.inner.output_infos.lock().unwrap().get(output).cloned()
+    }
+
+    fn set_output_info(&self, output: &wl_output::WlOutput, output_info_opt: Option<OutputInfo>) {
+        let mut output_infos = self.inner.output_infos.lock().unwrap();
+        match output_info_opt {
+            Some(output_info) => {
+                output_infos.insert(output.clone(), output_info);
+            }
+            None => {
+                output_infos.remove(output);
+            }
+        }
     }
 
     pub fn capture_output_dmabuf_fd<Fd: AsFd>(
@@ -348,15 +367,10 @@ pub struct ShmImage<T: AsFd> {
 }
 
 impl<T: AsFd> ShmImage<T> {
-    pub fn write_to_png<W: Write>(&mut self, file: W) -> anyhow::Result<()> {
+    pub fn image(&self) -> anyhow::Result<image::RgbaImage> {
         let mmap = unsafe { memmap2::Mmap::map(&self.fd.as_fd())? };
-        let mut encoder = png::Encoder::new(file, self.width, self.height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(&mmap)?;
-
-        Ok(())
+        image::RgbaImage::from_raw(self.width, self.height, mmap.to_vec())
+            .ok_or_else(|| anyhow::anyhow!("ShmImage had incorrect size"))
     }
 }
 
@@ -385,6 +399,10 @@ impl OutputHandler for AppData {
         _qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
+        let output_info_opt = self.output_state.info(&output);
+        self.wayland_helper
+            .set_output_info(&output, output_info_opt);
+
         self.wayland_helper
             .inner
             .outputs
@@ -397,8 +415,11 @@ impl OutputHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
+        let output_info_opt = self.output_state.info(&output);
+        self.wayland_helper
+            .set_output_info(&output, output_info_opt)
     }
 
     fn output_destroyed(
@@ -407,6 +428,8 @@ impl OutputHandler for AppData {
         _qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
+        self.wayland_helper.set_output_info(&output, None);
+
         let mut outputs = self.wayland_helper.inner.outputs.lock().unwrap();
         let idx = outputs.iter().position(|x| x == &output).unwrap();
         outputs.remove(idx);
