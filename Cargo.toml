@@ -11,6 +11,7 @@ ashpd = { git = "https://github.com/bilelmoussaoui/ashpd" }
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols" }
 futures = "0.3"
+image = "0.24"
 memmap2 = "0.9.0"
 # pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
 pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", features = ["v0_3_33"] }
