@@ -24,7 +24,7 @@ tempfile = "3.5.0"
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.1" }
 zbus = { version = "3.13.0", default-features = false, features = ["tokio"] }
-gbm = "0.13.0"
+gbm = "0.14.0"
 wayland-protocols = "0.31.0"
 env_logger = "0.10.0"
 log = "0.4.20"

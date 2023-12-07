@@ -75,15 +75,15 @@ fn start_stream(
     overlay_cursor: bool,
 ) -> Result<
     (
-        pipewire::MainLoop,
+        pipewire::main_loop::MainLoop,
         pipewire::stream::StreamListener<()>,
-        pipewire::Context,
+        pipewire::context::Context,
         oneshot::Receiver<anyhow::Result<u32>>,
     ),
     pipewire::Error,
 > {
-    let loop_ = pipewire::MainLoop::new()?;
-    let context = pipewire::Context::new(&loop_)?;
+    let loop_ = pipewire::main_loop::MainLoop::new()?;
+    let context = pipewire::context::Context::new(&loop_)?;
     let core = context.connect(None)?;
 
     let name = format!("cosmic-screenshot"); // XXX randomize?
@@ -112,14 +112,14 @@ fn start_stream(
     let stream = pipewire::stream::Stream::new(
         &core,
         &name,
-        pipewire::properties! {
+        pipewire::properties::properties! {
             "media.class" => "Video/Source",
             "node.name" => "cosmic-screenshot", // XXX
         },
     )?;
     let listener = stream
         .add_local_listener()
-        .state_changed(move |old, new| {
+        .state_changed(move |_, _, old, new| {
             log::info!("state-changed '{:?}' -> '{:?}'", old, new);
             match new {
                 StreamState::Paused => {
@@ -139,7 +139,7 @@ fn start_stream(
                 _ => {}
             }
         })
-        .param_changed(move |stream, id, (), pod| {
+        .param_changed(move |stream, (), id, pod| {
             if id != spa_sys::SPA_PARAM_Format {
                 return;
             }
@@ -185,7 +185,7 @@ fn start_stream(
                 //println!("param-changed: {} {:?}", id, value);
             }
         })
-        .add_buffer(move |buffer| {
+        .add_buffer(move |_, _, buffer| {
             let buf = unsafe { &mut *(*buffer).buffer };
             let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
             // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
@@ -229,7 +229,7 @@ fn start_stream(
                 }
             }
         })
-        .remove_buffer(|buffer| {
+        .remove_buffer(|_, _, buffer| {
             let buf = unsafe { &mut *(*buffer).buffer };
             let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
 
@@ -241,7 +241,7 @@ fn start_stream(
         .process(move |stream, ()| {
             if let Some(mut buffer) = stream.dequeue_buffer() {
                 let datas = buffer.datas_mut();
-                if datas[0].type_() == spa::data::DataType::DmaBuf {
+                if datas[0].type_() == spa::buffer::DataType::DmaBuf {
                     let dmabuf = Dmabuf {
                         format: gbm::Format::Abgr8888,
                         modifier: *modifier3.borrow(),
@@ -284,7 +284,7 @@ fn start_stream(
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
     let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
-    stream.connect(spa::Direction::Output, None, flags, &mut params)?;
+    stream.connect(spa::utils::Direction::Output, None, flags, &mut params)?;
     *stream_cell.borrow_mut() = Some(stream);
 
     Ok((loop_, listener, context, node_id_rx))
