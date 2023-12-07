@@ -9,7 +9,8 @@ use pipewire::{
         pod::{self, deserialize::PodDeserializer, serialize::PodSerializer, Pod},
         utils::Id,
     },
-    stream::StreamState,
+    stream::{StreamRef, StreamState},
+    sys::pw_buffer,
 };
 use std::{
     io,
@@ -74,6 +75,170 @@ struct StreamData {
     overlay_cursor: bool,
     width: u32,
     height: u32,
+    node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
+}
+
+impl StreamData {
+    fn state_changed(&mut self, stream: &StreamRef, old: StreamState, new: StreamState) {
+        log::info!("state-changed '{:?}' -> '{:?}'", old, new);
+        match new {
+            StreamState::Paused => {
+                if let Some(node_id_tx) = self.node_id_tx.take() {
+                    node_id_tx.send(Ok(stream.node_id())).unwrap();
+                }
+            }
+            StreamState::Error(msg) => {
+                if let Some(node_id_tx) = self.node_id_tx.take() {
+                    node_id_tx
+                        .send(Err(anyhow::anyhow!("stream error: {}", msg)))
+                        .unwrap();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn param_changed(&mut self, stream: &StreamRef, id: u32, pod: Option<&Pod>) {
+        if id != spa_sys::SPA_PARAM_Format {
+            return;
+        }
+        if let Some(pod) = pod {
+            let value = PodDeserializer::deserialize_from::<pod::Value>(pod.as_bytes());
+            if let Ok((_, pod::Value::Object(object))) = &value {
+                if let Some(modifier_prop) = object
+                    .properties
+                    .iter()
+                    .find(|p| p.key == spa_sys::SPA_FORMAT_VIDEO_modifier)
+                {
+                    if let pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(
+                        _,
+                        spa::utils::ChoiceEnum::Enum {
+                            default,
+                            alternatives,
+                        },
+                    ))) = &modifier_prop.value
+                    {
+                        log::info!(
+                            "modifier param-changed: (default: {}, alternatives: {:?})",
+                            default,
+                            alternatives
+                        );
+                        if let Ok(modifier_val) = gbm::Modifier::try_from(*default as u64) {
+                            self.modifier = modifier_val;
+
+                            let params = params(
+                                self.width,
+                                self.height,
+                                self.dmabuf_helper.as_ref(),
+                                Some(modifier_val),
+                            );
+                            let mut params: Vec<_> = params
+                                .iter()
+                                .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
+                                .collect();
+                            stream.update_params(&mut params);
+                        }
+                    }
+                }
+            }
+            //println!("param-changed: {} {:?}", id, value);
+        }
+    }
+
+    fn add_buffer(&mut self, _stream: &StreamRef, buffer: *mut pw_buffer) {
+        let buf = unsafe { &mut *(*buffer).buffer };
+        let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
+        // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
+
+        // TODO test multi-planar
+        if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
+            log::info!("Allocate dmabuf buffer");
+            let gbm = self.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
+            let dmabuf = buffer::create_dmabuf(&gbm, self.modifier, self.width, self.height);
+
+            assert!(dmabuf.planes.len() == datas.len());
+            for (data, plane) in datas.iter_mut().zip(dmabuf.planes) {
+                data.type_ = spa_sys::SPA_DATA_DmaBuf;
+                data.flags = 0;
+                data.fd = plane.fd.into_raw_fd() as _;
+                data.data = std::ptr::null_mut();
+                data.maxsize = 0; // XXX
+                data.mapoffset = 0;
+
+                let chunk = unsafe { &mut *data.chunk };
+                chunk.size = self.height * plane.stride;
+                chunk.offset = plane.offset;
+                chunk.stride = plane.stride as i32;
+            }
+        } else {
+            log::info!("Allocate shm buffer");
+            for data in datas {
+                let fd = buffer::create_memfd(self.width, self.height);
+
+                data.type_ = spa_sys::SPA_DATA_MemFd;
+                data.flags = 0;
+                data.fd = fd.into_raw_fd() as _;
+                data.data = std::ptr::null_mut();
+                data.maxsize = self.width * self.height * 4;
+                data.mapoffset = 0;
+
+                let chunk = unsafe { &mut *data.chunk };
+                chunk.size = self.width * self.height * 4;
+                chunk.offset = 0;
+                chunk.stride = 4 * self.width as i32;
+            }
+        }
+    }
+
+    fn remove_buffer(&mut self, _stream: &StreamRef, buffer: *mut pw_buffer) {
+        let buf = unsafe { &mut *(*buffer).buffer };
+        let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
+
+        for data in datas {
+            unsafe { rustix::io::close(data.fd as _) };
+            data.fd = -1;
+        }
+    }
+
+    fn process(&mut self, stream: &StreamRef) {
+        if let Some(mut buffer) = stream.dequeue_buffer() {
+            let datas = buffer.datas_mut();
+            if datas[0].type_() == spa::buffer::DataType::DmaBuf {
+                let dmabuf = Dmabuf {
+                    format: gbm::Format::Abgr8888,
+                    modifier: self.modifier,
+                    width: self.width,
+                    height: self.height,
+                    planes: datas
+                        .iter()
+                        .map(|data| Plane {
+                            fd: unsafe { BorrowedFd::borrow_raw(data.as_raw().fd as _) },
+                            offset: data.chunk().offset(),
+                            stride: data.chunk().stride() as u32,
+                        })
+                        .collect(),
+                };
+                self.wayland_helper.capture_output_dmabuf_fd(
+                    &self.output,
+                    self.overlay_cursor,
+                    &dmabuf,
+                );
+            } else {
+                //let data = datas[0].get_mut();
+                //if data.len() == width as usize * height as usize * 4 {
+                let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
+                // TODO error
+                self.wayland_helper.capture_output_shm_fd(
+                    &self.output,
+                    self.overlay_cursor,
+                    fd,
+                    Some(self.width * self.height * 4),
+                );
+                //if frame.width == width && frame.height == height {
+                //}
+            }
+        }
+    }
 }
 
 #[allow(clippy::type_complexity)]
@@ -98,7 +263,6 @@ fn start_stream(
     let name = format!("cosmic-screenshot"); // XXX randomize?
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
-    let mut node_id_tx = Some(node_id_tx);
 
     let (width, height) = match wayland_helper.capture_output_shm(&output, overlay_cursor) {
         Some(frame) => (frame.width, frame.height),
@@ -140,166 +304,16 @@ fn start_stream(
         overlay_cursor,
         width,
         height,
+        node_id_tx: Some(node_id_tx),
     };
 
     let listener = stream
         .add_local_listener_with_user_data(data)
-        .state_changed(move |stream, _, old, new| {
-            log::info!("state-changed '{:?}' -> '{:?}'", old, new);
-            match new {
-                StreamState::Paused => {
-                    if let Some(node_id_tx) = node_id_tx.take() {
-                        node_id_tx.send(Ok(stream.node_id())).unwrap();
-                    }
-                }
-                StreamState::Error(msg) => {
-                    if let Some(node_id_tx) = node_id_tx.take() {
-                        node_id_tx
-                            .send(Err(anyhow::anyhow!("stream error: {}", msg)))
-                            .unwrap();
-                    }
-                }
-                _ => {}
-            }
-        })
-        .param_changed(|stream, data, id, pod| {
-            if id != spa_sys::SPA_PARAM_Format {
-                return;
-            }
-            if let Some(pod) = pod {
-                let value = PodDeserializer::deserialize_from::<pod::Value>(pod.as_bytes());
-                if let Ok((_, pod::Value::Object(object))) = &value {
-                    if let Some(modifier_prop) = object
-                        .properties
-                        .iter()
-                        .find(|p| p.key == spa_sys::SPA_FORMAT_VIDEO_modifier)
-                    {
-                        if let pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(
-                            _,
-                            spa::utils::ChoiceEnum::Enum {
-                                default,
-                                alternatives,
-                            },
-                        ))) = &modifier_prop.value
-                        {
-                            log::info!(
-                                "modifier param-changed: (default: {}, alternatives: {:?})",
-                                default,
-                                alternatives
-                            );
-                            if let Ok(modifier_val) = gbm::Modifier::try_from(*default as u64) {
-                                data.modifier = modifier_val;
-
-                                let params = params(
-                                    data.width,
-                                    data.height,
-                                    data.dmabuf_helper.as_ref(),
-                                    Some(modifier_val),
-                                );
-                                let mut params: Vec<_> = params
-                                    .iter()
-                                    .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
-                                    .collect();
-                                stream.update_params(&mut params);
-                            }
-                        }
-                    }
-                }
-                //println!("param-changed: {} {:?}", id, value);
-            }
-        })
-        .add_buffer(|_, data, buffer| {
-            let buf = unsafe { &mut *(*buffer).buffer };
-            let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
-            // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
-
-            // TODO test multi-planar
-            if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
-                log::info!("Allocate dmabuf buffer");
-                let gbm = data.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
-                let dmabuf = buffer::create_dmabuf(&gbm, data.modifier, data.width, data.height);
-
-                assert!(dmabuf.planes.len() == datas.len());
-                for (buf_data, plane) in datas.iter_mut().zip(dmabuf.planes) {
-                    buf_data.type_ = spa_sys::SPA_DATA_DmaBuf;
-                    buf_data.flags = 0;
-                    buf_data.fd = plane.fd.into_raw_fd() as _;
-                    buf_data.data = std::ptr::null_mut();
-                    buf_data.maxsize = 0; // XXX
-                    buf_data.mapoffset = 0;
-
-                    let chunk = unsafe { &mut *buf_data.chunk };
-                    chunk.size = data.height * plane.stride;
-                    chunk.offset = plane.offset;
-                    chunk.stride = plane.stride as i32;
-                }
-            } else {
-                log::info!("Allocate shm buffer");
-                for buf_data in datas {
-                    let fd = buffer::create_memfd(data.width, data.height);
-
-                    buf_data.type_ = spa_sys::SPA_DATA_MemFd;
-                    buf_data.flags = 0;
-                    buf_data.fd = fd.into_raw_fd() as _;
-                    buf_data.data = std::ptr::null_mut();
-                    buf_data.maxsize = data.width * data.height * 4;
-                    buf_data.mapoffset = 0;
-
-                    let chunk = unsafe { &mut *buf_data.chunk };
-                    chunk.size = data.width * data.height * 4;
-                    chunk.offset = 0;
-                    chunk.stride = 4 * data.width as i32;
-                }
-            }
-        })
-        .remove_buffer(|_, _, buffer| {
-            let buf = unsafe { &mut *(*buffer).buffer };
-            let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
-
-            for data in datas {
-                unsafe { rustix::io::close(data.fd as _) };
-                data.fd = -1;
-            }
-        })
-        .process(|stream, data| {
-            if let Some(mut buffer) = stream.dequeue_buffer() {
-                let datas = buffer.datas_mut();
-                if datas[0].type_() == spa::buffer::DataType::DmaBuf {
-                    let dmabuf = Dmabuf {
-                        format: gbm::Format::Abgr8888,
-                        modifier: data.modifier,
-                        width: data.width,
-                        height: data.height,
-                        planes: datas
-                            .iter()
-                            .map(|data| Plane {
-                                fd: unsafe { BorrowedFd::borrow_raw(data.as_raw().fd as _) },
-                                offset: data.chunk().offset(),
-                                stride: data.chunk().stride() as u32,
-                            })
-                            .collect(),
-                    };
-                    data.wayland_helper.capture_output_dmabuf_fd(
-                        &data.output,
-                        data.overlay_cursor,
-                        &dmabuf,
-                    );
-                } else {
-                    //let data = datas[0].get_mut();
-                    //if data.len() == width as usize * height as usize * 4 {
-                    let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
-                    // TODO error
-                    data.wayland_helper.capture_output_shm_fd(
-                        &data.output,
-                        data.overlay_cursor,
-                        fd,
-                        Some(data.width * data.height * 4),
-                    );
-                    //if frame.width == width && frame.height == height {
-                    //}
-                }
-            }
-        })
+        .state_changed(|stream, data, old, new| data.state_changed(stream, old, new))
+        .param_changed(|stream, data, id, pod| data.param_changed(stream, id, pod))
+        .add_buffer(|stream, data, buffer| data.add_buffer(stream, buffer))
+        .remove_buffer(|stream, data, buffer| data.remove_buffer(stream, buffer))
+        .process(|stream, data| data.process(stream))
         .register()?;
 
     Ok((loop_, stream, listener, context, node_id_rx))
