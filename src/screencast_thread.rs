@@ -12,10 +12,8 @@ use pipewire::{
     stream::StreamState,
 };
 use std::{
-    cell::RefCell,
     io,
     os::fd::{BorrowedFd, IntoRawFd},
-    rc::Rc,
     slice,
 };
 use tokio::sync::oneshot;
@@ -41,7 +39,7 @@ impl ScreencastThread {
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
         std::thread::spawn(
             move || match start_stream(wayland_helper, output, overlay_cursor) {
-                Ok((loop_, _listener, _context, node_id_rx)) => {
+                Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
                     let _receiver = thread_stop_rx.attach(&loop_, move |()| {
@@ -68,6 +66,16 @@ impl ScreencastThread {
     }
 }
 
+struct StreamData {
+    dmabuf_helper: Option<DmabufHelper>,
+    wayland_helper: WaylandHelper,
+    output: wl_output::WlOutput,
+    modifier: gbm::Modifier,
+    overlay_cursor: bool,
+    width: u32,
+    height: u32,
+}
+
 #[allow(clippy::type_complexity)]
 fn start_stream(
     wayland_helper: WaylandHelper,
@@ -76,7 +84,8 @@ fn start_stream(
 ) -> Result<
     (
         pipewire::main_loop::MainLoop,
-        pipewire::stream::StreamListener<()>,
+        pipewire::stream::Stream,
+        pipewire::stream::StreamListener<StreamData>,
         pipewire::context::Context,
         oneshot::Receiver<anyhow::Result<u32>>,
     ),
@@ -88,9 +97,6 @@ fn start_stream(
 
     let name = format!("cosmic-screenshot"); // XXX randomize?
 
-    let stream_cell: Rc<RefCell<Option<pipewire::stream::Stream>>> = Rc::new(RefCell::new(None));
-    let stream_cell_clone = stream_cell.clone();
-
     let (node_id_tx, node_id_rx) = oneshot::channel();
     let mut node_id_tx = Some(node_id_tx);
 
@@ -100,14 +106,6 @@ fn start_stream(
     };
 
     let dmabuf_helper = wayland_helper.dmabuf();
-    let dmabuf_helper2 = dmabuf_helper.clone(); // XXX
-    let dmabuf_helper3 = dmabuf_helper.clone(); // XXX
-
-    // XXX
-    // Should use implicit modifier if none set?
-    let modifier = Rc::new(RefCell::new(gbm::Modifier::Linear));
-    let modifier2 = modifier.clone();
-    let modifier3 = modifier.clone();
 
     let stream = pipewire::stream::Stream::new(
         &core,
@@ -117,14 +115,39 @@ fn start_stream(
             "node.name" => "cosmic-screenshot", // XXX
         },
     )?;
+
+    let initial_params = params(width, height, dmabuf_helper.as_ref(), None);
+    let mut initial_params: Vec<_> = initial_params
+        .iter()
+        .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
+        .collect();
+
+    //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
+    let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
+    stream.connect(
+        spa::utils::Direction::Output,
+        None,
+        flags,
+        &mut initial_params,
+    )?;
+
+    let data = StreamData {
+        dmabuf_helper,
+        wayland_helper,
+        output,
+        // XXX Should use implicit modifier if none set?
+        modifier: gbm::Modifier::Linear,
+        overlay_cursor,
+        width,
+        height,
+    };
+
     let listener = stream
-        .add_local_listener()
-        .state_changed(move |_, _, old, new| {
+        .add_local_listener_with_user_data(data)
+        .state_changed(move |stream, _, old, new| {
             log::info!("state-changed '{:?}' -> '{:?}'", old, new);
             match new {
                 StreamState::Paused => {
-                    let stream = stream_cell_clone.borrow_mut();
-                    let stream = stream.as_ref().unwrap();
                     if let Some(node_id_tx) = node_id_tx.take() {
                         node_id_tx.send(Ok(stream.node_id())).unwrap();
                     }
@@ -139,7 +162,7 @@ fn start_stream(
                 _ => {}
             }
         })
-        .param_changed(move |stream, (), id, pod| {
+        .param_changed(|stream, data, id, pod| {
             if id != spa_sys::SPA_PARAM_Format {
                 return;
             }
@@ -165,12 +188,12 @@ fn start_stream(
                                 alternatives
                             );
                             if let Ok(modifier_val) = gbm::Modifier::try_from(*default as u64) {
-                                *modifier.borrow_mut() = modifier_val;
+                                data.modifier = modifier_val;
 
                                 let params = params(
-                                    width,
-                                    height,
-                                    dmabuf_helper3.as_ref(),
+                                    data.width,
+                                    data.height,
+                                    data.dmabuf_helper.as_ref(),
                                     Some(modifier_val),
                                 );
                                 let mut params: Vec<_> = params
@@ -185,7 +208,7 @@ fn start_stream(
                 //println!("param-changed: {} {:?}", id, value);
             }
         })
-        .add_buffer(move |_, _, buffer| {
+        .add_buffer(|_, data, buffer| {
             let buf = unsafe { &mut *(*buffer).buffer };
             let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
             // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
@@ -193,39 +216,39 @@ fn start_stream(
             // TODO test multi-planar
             if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
                 log::info!("Allocate dmabuf buffer");
-                let gbm = dmabuf_helper2.as_ref().unwrap().gbm().lock().unwrap();
-                let dmabuf = buffer::create_dmabuf(&gbm, *modifier2.borrow(), width, height);
+                let gbm = data.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
+                let dmabuf = buffer::create_dmabuf(&gbm, data.modifier, data.width, data.height);
 
                 assert!(dmabuf.planes.len() == datas.len());
-                for (data, plane) in datas.iter_mut().zip(dmabuf.planes) {
-                    data.type_ = spa_sys::SPA_DATA_DmaBuf;
-                    data.flags = 0;
-                    data.fd = plane.fd.into_raw_fd() as _;
-                    data.data = std::ptr::null_mut();
-                    data.maxsize = 0; // XXX
-                    data.mapoffset = 0;
+                for (buf_data, plane) in datas.iter_mut().zip(dmabuf.planes) {
+                    buf_data.type_ = spa_sys::SPA_DATA_DmaBuf;
+                    buf_data.flags = 0;
+                    buf_data.fd = plane.fd.into_raw_fd() as _;
+                    buf_data.data = std::ptr::null_mut();
+                    buf_data.maxsize = 0; // XXX
+                    buf_data.mapoffset = 0;
 
-                    let chunk = unsafe { &mut *data.chunk };
-                    chunk.size = height * plane.stride;
+                    let chunk = unsafe { &mut *buf_data.chunk };
+                    chunk.size = data.height * plane.stride;
                     chunk.offset = plane.offset;
                     chunk.stride = plane.stride as i32;
                 }
             } else {
                 log::info!("Allocate shm buffer");
-                for data in datas {
-                    let fd = buffer::create_memfd(width, height);
+                for buf_data in datas {
+                    let fd = buffer::create_memfd(data.width, data.height);
 
-                    data.type_ = spa_sys::SPA_DATA_MemFd;
-                    data.flags = 0;
-                    data.fd = fd.into_raw_fd() as _;
-                    data.data = std::ptr::null_mut();
-                    data.maxsize = width * height * 4;
-                    data.mapoffset = 0;
+                    buf_data.type_ = spa_sys::SPA_DATA_MemFd;
+                    buf_data.flags = 0;
+                    buf_data.fd = fd.into_raw_fd() as _;
+                    buf_data.data = std::ptr::null_mut();
+                    buf_data.maxsize = data.width * data.height * 4;
+                    buf_data.mapoffset = 0;
 
-                    let chunk = unsafe { &mut *data.chunk };
-                    chunk.size = width * height * 4;
+                    let chunk = unsafe { &mut *buf_data.chunk };
+                    chunk.size = data.width * data.height * 4;
                     chunk.offset = 0;
-                    chunk.stride = 4 * width as i32;
+                    chunk.stride = 4 * data.width as i32;
                 }
             }
         })
@@ -238,15 +261,15 @@ fn start_stream(
                 data.fd = -1;
             }
         })
-        .process(move |stream, ()| {
+        .process(|stream, data| {
             if let Some(mut buffer) = stream.dequeue_buffer() {
                 let datas = buffer.datas_mut();
                 if datas[0].type_() == spa::buffer::DataType::DmaBuf {
                     let dmabuf = Dmabuf {
                         format: gbm::Format::Abgr8888,
-                        modifier: *modifier3.borrow(),
-                        width,
-                        height,
+                        modifier: data.modifier,
+                        width: data.width,
+                        height: data.height,
                         planes: datas
                             .iter()
                             .map(|data| Plane {
@@ -256,17 +279,21 @@ fn start_stream(
                             })
                             .collect(),
                     };
-                    wayland_helper.capture_output_dmabuf_fd(&output, overlay_cursor, &dmabuf);
+                    data.wayland_helper.capture_output_dmabuf_fd(
+                        &data.output,
+                        data.overlay_cursor,
+                        &dmabuf,
+                    );
                 } else {
                     //let data = datas[0].get_mut();
                     //if data.len() == width as usize * height as usize * 4 {
                     let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
                     // TODO error
-                    wayland_helper.capture_output_shm_fd(
-                        &output,
-                        overlay_cursor,
+                    data.wayland_helper.capture_output_shm_fd(
+                        &data.output,
+                        data.overlay_cursor,
                         fd,
-                        Some(width * height * 4),
+                        Some(data.width * data.height * 4),
                     );
                     //if frame.width == width && frame.height == height {
                     //}
@@ -274,20 +301,8 @@ fn start_stream(
             }
         })
         .register()?;
-    // DRIVER, ALLOC_BUFFERS
 
-    let params = params(width, height, dmabuf_helper.as_ref(), None);
-    let mut params: Vec<_> = params
-        .iter()
-        .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
-        .collect();
-
-    //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
-    let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
-    stream.connect(spa::utils::Direction::Output, None, flags, &mut params)?;
-    *stream_cell.borrow_mut() = Some(stream);
-
-    Ok((loop_, listener, context, node_id_rx))
+    Ok((loop_, stream, listener, context, node_id_rx))
 }
 
 fn params(
