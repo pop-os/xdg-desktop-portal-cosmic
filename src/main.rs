@@ -1,6 +1,8 @@
 use std::{collections::HashMap, future};
 use zbus::zvariant;
 
+mod access;
+use access::Access;
 mod buffer;
 mod documents;
 mod screenshot;
@@ -95,6 +97,7 @@ async fn main() -> zbus::Result<()> {
 
     let _connection = zbus::ConnectionBuilder::session()?
         .name(DBUS_NAME)?
+        .serve_at(DBUS_PATH, Access::new(wayland_helper.clone()))?
         .serve_at(DBUS_PATH, Screenshot::new(wayland_helper.clone()))?
         .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper))?
         .build()
