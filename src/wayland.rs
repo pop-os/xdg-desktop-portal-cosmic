@@ -14,13 +14,14 @@ use cosmic_client_toolkit::{
         shm::{Shm, ShmHandler},
     },
 };
+use rustix::fd::{FromRawFd, RawFd};
 use std::{
     collections::HashMap,
     fs,
     io::{self, Write},
     os::{
         fd::{AsFd, OwnedFd},
-        unix::fs::MetadataExt,
+        unix::{fs::MetadataExt, net::UnixStream},
     },
     process,
     sync::{Arc, Condvar, Mutex, MutexGuard},
@@ -569,7 +570,14 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for AppData {
 
 // Connect to wayland and start task reading events from socket
 pub fn connect_to_wayland() -> wayland_client::Connection {
-    wayland_client::Connection::connect_to_env().unwrap_or_else(|err| {
+    let portal_socket = std::env::var("PORTAL_WAYLAND_SOCKET")
+        .ok()
+        .and_then(|x| x.parse::<RawFd>().ok())
+        .map(|fd| unsafe { UnixStream::from_raw_fd(fd) })
+        .expect("Failed to connect to PORTAL_WAYLAND_SOCKET");
+
+    wayland_client::Connection::from_socket(portal_socket).unwrap_or_else(|err| {
+        eprintln!("oops");
         log::error!("{}", err);
         process::exit(1)
     })
