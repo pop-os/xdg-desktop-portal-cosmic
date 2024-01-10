@@ -506,16 +506,12 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                             layer: Layer::Overlay,
                             keyboard_interactivity: KeyboardInteractivity::OnDemand,
                             pointer_interactivity: true,
-                            anchor: Anchor::empty(),
+                            anchor: Anchor::all(),
                             output: IcedOutput::Output(output.clone()),
                             namespace: "screenshot".to_string(),
-                            size: Some((Some(logical_size.0 as u32), Some(logical_size.1 as u32))),
+                            size: Some((None, None)),
                             exclusive_zone: -1,
-                            size_limits: Limits::NONE
-                                .min_height(1.0)
-                                .min_width(1.0)
-                                .max_height(logical_size.1 as f32)
-                                .max_width(logical_size.0 as f32),
+                            size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
                             ..Default::default()
                         })
                     },
