@@ -1,16 +1,17 @@
-use std::{collections::HashMap, future};
+use std::collections::HashMap;
 use zbus::zvariant;
 
 mod access;
-use access::Access;
+mod app;
 mod buffer;
 mod documents;
-mod screenshot;
-use screenshot::Screenshot;
+mod localize;
 mod screencast;
-use screencast::ScreenCast;
 mod screencast_thread;
+mod screenshot;
+mod subscription;
 mod wayland;
+mod widget;
 
 static DBUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cosmic";
 static DBUS_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -89,21 +90,8 @@ impl Session {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> zbus::Result<()> {
+async fn main() -> cosmic::iced::Result {
     env_logger::init();
-
-    let wayland_connection = wayland::connect_to_wayland();
-    let wayland_helper = wayland::WaylandHelper::new(wayland_connection);
-
-    let _connection = zbus::ConnectionBuilder::session()?
-        .name(DBUS_NAME)?
-        .serve_at(DBUS_PATH, Access::new(wayland_helper.clone()))?
-        .serve_at(DBUS_PATH, Screenshot::new(wayland_helper.clone()))?
-        .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper))?
-        .build()
-        .await?;
-
-    future::pending::<()>().await;
-
-    Ok(())
+    localize::localize();
+    app::run()
 }
