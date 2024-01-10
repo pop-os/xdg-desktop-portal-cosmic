@@ -5,6 +5,7 @@ libexecdir = $(prefix)/libexec
 includedir = $(prefix)/include
 datarootdir = $(prefix)/share
 datadir = $(datarootdir)
+iconsdir = $(datarootdir)/icons/hicolor
 
 TARGET = debug
 DEBUG ?= 0
@@ -36,6 +37,11 @@ install:
 	install -Dm0755 target/$(TARGET)/$(BIN) $(DESTDIR)$(libexecdir)/$(BIN)
 	install -Dm0644 data/$(DBUS_NAME).service $(DESTDIR)/$(datadir)/dbus-1/services/$(DBUS_NAME).service
 	install -Dm0644 data/cosmic.portal $(DESTDIR)/$(datadir)/xdg-desktop-portal/portals/cosmic.portal
+	find 'data'/'icons' -type f -exec echo {} \; \
+		| rev \
+		| cut -d'/' -f-3 \
+		| rev \
+		| xargs -d '\n' -I {} install -Dm0644 'data'/'icons'/{} $(DESTDIR)$(iconsdir)/{}
 
 ## Cargo Vendoring
 
