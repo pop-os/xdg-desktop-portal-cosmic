@@ -108,7 +108,9 @@ impl cosmic::Application for CosmicPortal {
             Msg::Output(o_event, wl_output) => {
                 match o_event {
                     OutputEvent::Created(Some(info))
-                        if info.name.is_some() && info.logical_size.is_some() =>
+                        if info.name.is_some()
+                            && info.logical_size.is_some()
+                            && info.logical_position.is_some() =>
                     {
                         self.outputs.push(OutputState {
                             output: wl_output,
@@ -119,7 +121,9 @@ impl cosmic::Application for CosmicPortal {
                     }
                     OutputEvent::Removed => self.outputs.retain(|o| o.output != wl_output),
                     OutputEvent::InfoUpdate(info)
-                        if info.name.is_some() && info.logical_size.is_some() =>
+                        if info.name.is_some()
+                            && info.logical_size.is_some()
+                            && info.logical_position.is_some() =>
                     {
                         if let Some(state) = self.outputs.iter_mut().find(|o| o.output == wl_output)
                         {
@@ -161,7 +165,12 @@ impl cosmic::Application for CosmicPortal {
                     }
                     _ => None,
                 },
-
+                cosmic::iced_core::Event::Keyboard(
+                    cosmic::iced_core::keyboard::Event::KeyPressed {
+                        key_code: cosmic::iced_core::keyboard::KeyCode::Escape,
+                        ..
+                    },
+                ) => Some(Msg::Screenshot(screenshot::Msg::Cancel)),
                 _ => None,
             }),
         ])
