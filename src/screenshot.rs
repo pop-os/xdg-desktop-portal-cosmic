@@ -1,18 +1,17 @@
 #![allow(dead_code, unused_variables)]
 
+use cosmic::iced::wayland::actions::data_device::ActionInner;
 use cosmic::iced::wayland::actions::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::{window, Limits};
 use cosmic::iced_core::Length;
+use cosmic::iced_sctk::commands::data_device;
 use cosmic::iced_sctk::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
-use cosmic::iced_widget::graphics::text::cosmic_text::rustybuzz::ttf_parser::name;
-use cosmic::widget::divider::horizontal;
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use image::RgbaImage;
 use std::sync::Arc;
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
-use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_surface::WlSurface;
 use zbus::zvariant;
@@ -22,6 +21,14 @@ use crate::wayland::WaylandHelper;
 use crate::{subscription, PortalResponse};
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
+#[derive(Clone)]
+pub struct DndCommand(pub Arc<Box<dyn Send + Sync + Fn() -> ActionInner>>);
+
+impl Debug for DndCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DndCommand").finish()
+    }
+}
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
 #[zvariant(signature = "a{sv}")]
@@ -53,6 +60,32 @@ pub struct Rect {
     pub right: i32,
     pub bottom: i32,
 }
+
+// impl Add<Rect> for Rect {
+//     type Output = Rect;
+
+//     fn add(self, rhs: Rect) -> Self::Output {
+//         Rect {
+//             left: self.left + rhs.left,
+//             top: self.top + rhs.top,
+//             right: self.right + rhs.right,
+//             bottom: self.bottom + rhs.bottom,
+//         }
+//     }
+// }
+
+// impl Sub<Rect> for Rect {
+//     type Output = Rect;
+
+//     fn sub(self, rhs: Rect) -> Self::Output {
+//         Rect {
+//             left: self.left - rhs.left,
+//             top: self.top - rhs.top,
+//             right: self.right - rhs.right,
+//             bottom: self.bottom - rhs.bottom,
+//         }
+//     }
+// }
 
 pub struct Screenshot {
     wayland_helper: WaylandHelper,
@@ -193,6 +226,7 @@ pub enum Msg {
     Cancel,
     Choice(Choice),
     OutputChanged(WlOutput),
+    DragCommand(DndCommand),
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +304,7 @@ impl Screenshot {
                 .interactive_screenshot_inner(outputs, app_id)
                 .await
                 .unwrap_or_default();
+
             if let Err(err) = self
                 .tx
                 .send(subscription::Event::Screenshot(Args {
@@ -288,7 +323,12 @@ impl Screenshot {
                     // TODO get last choice
                     // Could maybe be stored using cosmic config state?
                     // TODO cover all outputs at start of rectangle?
-                    choice: Choice::Output(first_output), // will be updated
+                    choice: Choice::Rectangle(Rect {
+                        left: 0,
+                        top: 0,
+                        right: 2100,
+                        bottom: 100,
+                    }), // will be updated
                 }))
                 .await
             {
@@ -343,6 +383,14 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         return horizontal_space(Length::Fixed(1.0)).into();
     };
     let name = output.info.name.clone().unwrap_or_default();
+    let output_size = output.info.logical_size.unwrap_or_default();
+    let output_pos = output.info.logical_position.unwrap_or_default();
+    let output_rect = Rect {
+        left: output_pos.0,
+        top: output_pos.1,
+        right: output_pos.0 + output_size.0,
+        bottom: output_pos.1 + output_size.1,
+    };
 
     let raw_image = args.images.get(&name).unwrap();
     crate::widget::screenshot::ScreenshotSelection::new(
@@ -350,8 +398,11 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         raw_image.clone(),
         Msg::Capture,
         Msg::Cancel,
-        output.output.clone(),
+        (output.output.clone(), output_rect),
+        id,
         Msg::OutputChanged,
+        |r| Msg::Choice(Choice::Rectangle(r)),
+        Msg::DragCommand,
     )
     .into()
 }
@@ -433,7 +484,6 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             cosmic::Command::batch(cmds)
         }
         Msg::Cancel => {
-            eprintln!("Canceling screenshot");
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
             let Some(args) = portal.screenshot_args.take() else {
                 return cosmic::Command::batch(cmds);
@@ -469,6 +519,10 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             portal.active_output = Some(wl_output);
             cosmic::Command::none()
         }
+        Msg::DragCommand(DndCommand(cmd)) => {
+            let action = cmd();
+            return data_device::action(action);
+        }
     }
 }
 
@@ -501,10 +555,11 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                             );
                             (1920, 1080)
                         });
+                        dbg!(logical_size);
                         get_layer_surface(SctkLayerSurfaceSettings {
                             id: *id,
                             layer: Layer::Overlay,
-                            keyboard_interactivity: KeyboardInteractivity::OnDemand,
+                            keyboard_interactivity: KeyboardInteractivity::Exclusive,
                             pointer_interactivity: true,
                             anchor: Anchor::all(),
                             output: IcedOutput::Output(output.clone()),

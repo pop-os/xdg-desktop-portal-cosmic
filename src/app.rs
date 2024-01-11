@@ -163,6 +163,10 @@ impl cosmic::Application for CosmicPortal {
                     cosmic::iced_core::event::wayland::Event::Output(o_event, wl_output) => {
                         Some(Msg::Output(o_event, wl_output))
                     }
+                    cosmic::iced_core::event::wayland::Event::DndOffer(e) => {
+                        dbg!(e);
+                        None
+                    }
                     _ => None,
                 },
                 cosmic::iced_core::Event::Keyboard(
