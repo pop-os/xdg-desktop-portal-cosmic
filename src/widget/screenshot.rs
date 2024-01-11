@@ -2,7 +2,8 @@ use std::{borrow::Cow, sync::Arc};
 
 use ::image::{EncodableLayout, RgbaImage};
 use cosmic::{
-    iced_core::{layout, widget::Tree, Layout, Length, Overlay, Point, Size},
+    iced::window,
+    iced_core::{layout, widget::Tree, Layout, Length, Point, Size},
     iced_widget::row,
     widget::{button, divider::vertical, icon, image, text},
     Element,
@@ -11,10 +12,10 @@ use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::{
     fl,
-    screenshot::{Choice, Rect},
+    screenshot::{Choice, DndCommand, Rect},
 };
 
-use super::output_selection::OutputSelection;
+use super::{output_selection::OutputSelection, rectangle_selection::RectangleSelection};
 
 // TODO: place window images in a Row dense layout
 
@@ -66,18 +67,26 @@ where
         raw_image: Arc<RgbaImage>,
         on_capture: Msg,
         on_cancel: Msg,
-        output: WlOutput,
+        output: (WlOutput, Rect),
+        window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
+        on_rectangle_selection: impl Fn(Rect) -> Msg + 'static,
+        on_drag_cmd_produced: impl Fn(DndCommand) -> Msg + 'static,
     ) -> Self {
         let space_s = 8.0;
         let space_xs = 4.0;
         let space_xxs = 2.0;
-        if !matches!(choice, Choice::Output(_)) {
-            panic!("only output choice is supported for now");
-        };
+
         let fg_element = match choice {
-            Choice::Rectangle(_) => todo!(),
-            Choice::Output(_) => OutputSelection::new(on_output_change(output)).into(),
+            Choice::Rectangle(r) => RectangleSelection::new(
+                output.1,
+                r,
+                window_id,
+                on_rectangle_selection,
+                on_drag_cmd_produced,
+            )
+            .into(),
+            Choice::Output(_) => OutputSelection::new(on_output_change(output.0)).into(),
             Choice::Window(_) => todo!(),
         };
         Self {
@@ -184,8 +193,10 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
             &mut self.fg_element,
             &mut self.menu_element,
         ];
+
         let layout = layout.children().collect::<Vec<_>>();
         // draw children in order
+        let mut status = cosmic::iced_core::event::Status::Ignored;
         for (i, (layout, child)) in layout
             .into_iter()
             .zip(children.into_iter())
@@ -193,7 +204,8 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
             .rev()
         {
             let tree = &mut tree.children[i];
-            let status = child.as_widget_mut().on_event(
+
+            status = child.as_widget_mut().on_event(
                 tree,
                 event.clone(),
                 layout,
@@ -203,12 +215,15 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
                 shell,
                 viewport,
             );
+            if matches!(event, cosmic::iced_core::event::Event::PlatformSpecific(_)) {
+                dbg!(i, &event);
+                continue;
+            }
             if matches!(status, cosmic::iced_core::event::Status::Captured) {
                 return status;
             }
         }
-
-        cosmic::iced_core::event::Status::Ignored
+        status
     }
 
     fn mouse_interaction(

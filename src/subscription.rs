@@ -95,13 +95,10 @@ pub(crate) async fn process_changes(
                 .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper))?
                 .build()
                 .await?;
-            eprintln!("Got Connection");
             *state = State::Waiting(connection, rx);
         }
         State::Waiting(_, rx) => {
-            eprintln!("Waiting for event");
             while let Some(event) = rx.recv().await {
-                eprintln!("Got event");
                 match event {
                     Event::Access(args) => {
                         output.send(Event::Access(args)).await.unwrap();
