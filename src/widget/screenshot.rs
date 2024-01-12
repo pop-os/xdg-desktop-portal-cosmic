@@ -15,7 +15,10 @@ use crate::{
     screenshot::{Choice, DndCommand, Rect},
 };
 
-use super::{output_selection::OutputSelection, rectangle_selection::RectangleSelection};
+use super::{
+    output_selection::OutputSelection,
+    rectangle_selection::{DragState, RectangleSelection},
+};
 
 // TODO: place window images in a Row dense layout
 
@@ -67,26 +70,30 @@ where
         raw_image: Arc<RgbaImage>,
         on_capture: Msg,
         on_cancel: Msg,
-        output: (WlOutput, Rect),
+        output: (WlOutput, Rect, String),
         window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
-        on_rectangle_selection: impl Fn(Rect) -> Msg + 'static,
+        on_choice_change: impl Fn(Choice) -> Msg + 'static + Clone,
         on_drag_cmd_produced: impl Fn(DndCommand) -> Msg + 'static,
     ) -> Self {
         let space_s = 8.0;
         let space_xs = 4.0;
         let space_xxs = 2.0;
 
+        let on_choice_change_clone = on_choice_change.clone();
         let fg_element = match choice {
-            Choice::Rectangle(r) => RectangleSelection::new(
+            Choice::Rectangle(r, drag_state) => RectangleSelection::new(
                 output.1,
                 r,
+                drag_state,
                 window_id,
-                on_rectangle_selection,
+                move |s, r| on_choice_change_clone(Choice::Rectangle(r, s)),
                 on_drag_cmd_produced,
             )
             .into(),
-            Choice::Output(_) => OutputSelection::new(on_output_change(output.0)).into(),
+            Choice::Output(_) => {
+                OutputSelection::new(on_output_change(output.0), on_capture.clone()).into()
+            }
             Choice::Window(_) => todo!(),
         };
         Self {
@@ -114,6 +121,10 @@ where
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
                         )
+                        .on_press(on_choice_change(Choice::Rectangle(
+                            Rect::default(),
+                            DragState::None
+                        )))
                         .padding(space_xs),
                         button(
                             icon::Icon::from(
@@ -130,6 +141,7 @@ where
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
                         )
+                        .on_press(on_choice_change(Choice::Output(output.2.clone())))
                         .padding(space_xs)
                     ]
                     .spacing(space_s)
@@ -216,7 +228,6 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
                 viewport,
             );
             if matches!(event, cosmic::iced_core::event::Event::PlatformSpecific(_)) {
-                dbg!(i, &event);
                 continue;
             }
             if matches!(status, cosmic::iced_core::event::Status::Captured) {

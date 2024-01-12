@@ -214,8 +214,10 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             let args = portal.access_args.take().unwrap();
             let tx = args.tx.clone();
             tokio::spawn(async move {
-                tx.send(PortalResponse::Cancelled::<AccessDialogResult>)
-                    .await
+                tx.send(PortalResponse::Success(AccessDialogResult {
+                    choices: vec![],
+                }))
+                .await
             });
 
             args.destroy_surface()

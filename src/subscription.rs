@@ -42,6 +42,7 @@ impl Debug for Event {
                 window_imgs,
                 choice: choice,
                 action: action,
+                location,
                 tx: _tx,
             }) => f
                 .debug_struct("Screenshot")
@@ -53,6 +54,7 @@ impl Debug for Event {
                 .field("window_imgs", window_imgs)
                 .field("choice", choice)
                 .field("action", action)
+                .field("location", location)
                 .finish(),
         }
     }
@@ -101,11 +103,14 @@ pub(crate) async fn process_changes(
             while let Some(event) = rx.recv().await {
                 match event {
                     Event::Access(args) => {
-                        output.send(Event::Access(args)).await.unwrap();
+                        if let Err(err) = output.send(Event::Access(args)).await {
+                            log::error!("Error sending access event: {:?}", err);
+                        };
                     }
                     Event::Screenshot(args) => {
-                        eprintln!("Screenshot args");
-                        output.send(Event::Screenshot(args)).await.unwrap();
+                        if let Err(err) = output.send(Event::Screenshot(args)).await {
+                            log::error!("Error sending screenshot event: {:?}", err);
+                        };
                     }
                 }
             }
