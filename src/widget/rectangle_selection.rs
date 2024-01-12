@@ -62,8 +62,6 @@ impl From<u8> for DragState {
     }
 }
 
-static DRAG_STATE: AtomicU8 = AtomicU8::new(DragState::None as u8);
-
 const EDGE_GRAB_THICKNESS: f32 = 8.0;
 const CORNER_DIAMETER: f32 = 16.0;
 
@@ -71,20 +69,23 @@ pub struct RectangleSelection<Msg> {
     pub output_rect: Rect,
     pub rectangle_selection: Rect,
     pub window_id: iced_core::window::Id,
-    pub on_rectangle: Box<dyn Fn(Rect) -> Msg>,
+    pub on_rectangle: Box<dyn Fn(DragState, Rect) -> Msg>,
     pub drag_cmd_produced: Box<dyn Fn(DndCommand) -> Msg>,
+    pub drag_state: DragState,
 }
 
 impl<Msg> RectangleSelection<Msg> {
     pub fn new(
         output_rect: Rect,
         rectangle_selection: Rect,
+        drag_direction: DragState,
         window_id: iced_core::window::Id,
-        on_rectangle: impl Fn(Rect) -> Msg + 'static,
+        on_rectangle: impl Fn(DragState, Rect) -> Msg + 'static,
         drag_cmd_produced: impl Fn(DndCommand) -> Msg + 'static,
     ) -> Self {
         Self {
             on_rectangle: Box::new(on_rectangle),
+            drag_state: drag_direction,
             rectangle_selection,
             output_rect,
             window_id,
@@ -166,7 +167,7 @@ impl<Msg> RectangleSelection<Msg> {
             Size::new(inner_rect.width, EDGE_GRAB_THICKNESS),
         );
         if cursor.is_over(s_edge_rect) {
-            return DragState::N;
+            return DragState::S;
         };
 
         let w_edge_rect = Rectangle::new(
@@ -190,64 +191,51 @@ impl<Msg> RectangleSelection<Msg> {
         DragState::None
     }
 
-    fn handle_drag_pos(&self, mut drag: Point, shell: &mut iced_core::Shell<'_, Msg>) {
-        let inner_rect = Rectangle::new(
-            Point::new(
-                self.rectangle_selection.left as f32,
-                self.rectangle_selection.top as f32,
-            ),
-            Size::new(
-                (self.rectangle_selection.right - self.rectangle_selection.left).abs() as f32,
-                (self.rectangle_selection.bottom - self.rectangle_selection.top).abs() as f32,
-            ),
-        );
-        drag.x += self.output_rect.left as f32;
-        drag.y += self.output_rect.top as f32;
+    fn handle_drag_pos(&mut self, x: i32, y: i32, shell: &mut iced_core::Shell<'_, Msg>) {
+        let prev = self.rectangle_selection;
 
-        let prev_state = DragState::from(DRAG_STATE.load(std::sync::atomic::Ordering::Relaxed));
+        let d_x = self.output_rect.left + x;
+        let d_y = self.output_rect.top + y;
 
+        let prev_state = self.drag_state;
         // the point of reflection is where, when crossed, the drag state changes to the opposit direction
         // for edge drags, only one of the x or y coordinate is used, for corner drags, both are used
         // the new dimensions are calculated by subtracting the reflection point from the drag point
         let reflection_point = match prev_state {
             DragState::None => return,
-            DragState::NW => Point::new(
-                inner_rect.x + inner_rect.width,
-                inner_rect.y + inner_rect.height,
-            ),
-            DragState::N => Point::new(0.0, inner_rect.y + inner_rect.height),
-            DragState::NE => Point::new(inner_rect.x, inner_rect.y + inner_rect.height),
-            DragState::E => Point::new(inner_rect.x, 0.0),
-            DragState::SE => Point::new(inner_rect.x, inner_rect.y),
-
-            DragState::S => Point::new(0.0, inner_rect.y),
-            DragState::SW => Point::new(inner_rect.x + inner_rect.width, inner_rect.y),
-            DragState::W => Point::new(inner_rect.x + inner_rect.width, 0.0),
+            DragState::NW => (prev.right, prev.bottom),
+            DragState::N => (0, prev.bottom),
+            DragState::NE => (prev.left, prev.bottom),
+            DragState::E => (prev.left, 0),
+            DragState::SE => (prev.left, prev.top),
+            DragState::S => (0, prev.top),
+            DragState::SW => (prev.right, prev.top),
+            DragState::W => (prev.right, 0),
         };
 
         let new_drag_state = match prev_state {
             DragState::SE | DragState::NW | DragState::NE | DragState::SW => {
-                if drag.x < reflection_point.x && drag.y < reflection_point.y {
+                if d_x < reflection_point.0 && d_y < reflection_point.1 {
                     DragState::NW
-                } else if drag.x > reflection_point.x && drag.y > reflection_point.y {
+                } else if d_x > reflection_point.0 && d_y > reflection_point.1 {
                     DragState::SE
-                } else if drag.x > reflection_point.x && drag.y < reflection_point.y {
+                } else if d_x > reflection_point.0 && d_y < reflection_point.1 {
                     DragState::NE
-                } else if drag.x < reflection_point.x && drag.y > reflection_point.y {
+                } else if d_x < reflection_point.0 && d_y > reflection_point.1 {
                     DragState::SW
                 } else {
                     prev_state
                 }
             }
             DragState::N | DragState::S => {
-                if drag.y < reflection_point.y {
+                if d_y < reflection_point.1 {
                     DragState::N
                 } else {
                     DragState::S
                 }
             }
             DragState::E | DragState::W => {
-                if drag.x > reflection_point.x {
+                if d_x > reflection_point.0 {
                     DragState::E
                 } else {
                     DragState::W
@@ -256,49 +244,39 @@ impl<Msg> RectangleSelection<Msg> {
 
             DragState::None => DragState::None,
         };
-        DRAG_STATE.store(new_drag_state as u8, std::sync::atomic::Ordering::Relaxed);
-
         let top_left = match new_drag_state {
-            DragState::NW => Point::new(drag.x, drag.y),
-            DragState::NE => Point::new(reflection_point.x, drag.y),
-            DragState::SE => Point::new(reflection_point.x, reflection_point.y),
-            DragState::SW => Point::new(drag.x, reflection_point.y),
-            DragState::N => Point::new(inner_rect.x, drag.y),
-            DragState::E => Point::new(reflection_point.x, inner_rect.y),
-            DragState::S => Point::new(inner_rect.x, reflection_point.y),
-            DragState::W => Point::new(drag.x, inner_rect.y),
-            DragState::None => Point::new(inner_rect.x, inner_rect.y),
+            DragState::NW => (d_x, d_y),
+            DragState::NE => (reflection_point.0, d_y),
+            DragState::SE => (reflection_point.0, reflection_point.1),
+            DragState::SW => (d_x, reflection_point.1),
+            DragState::N => (prev.left, d_y),
+            DragState::E => (reflection_point.0, prev.top),
+            DragState::S => (prev.left, reflection_point.1),
+            DragState::W => (d_x, prev.top),
+            DragState::None => (prev.left, prev.top),
         };
 
-        let mut new_rect = Rectangle::new(top_left, inner_rect.size());
-        if matches!(
-            new_drag_state,
-            DragState::E
-                | DragState::NE
-                | DragState::SE
-                | DragState::W
-                | DragState::NW
-                | DragState::SW
-        ) {
-            new_rect.width = (reflection_point.x - drag.x).abs();
-        }
-        if matches!(
-            new_drag_state,
-            DragState::N
-                | DragState::NE
-                | DragState::NW
-                | DragState::S
-                | DragState::SE
-                | DragState::SW
-        ) {
-            new_rect.height = (reflection_point.y - drag.y).abs();
-        }
-        shell.publish((self.on_rectangle)(Rect {
-            left: new_rect.x as i32,
-            top: new_rect.y as i32,
-            right: (new_rect.x + new_rect.width) as i32,
-            bottom: (new_rect.y + new_rect.height) as i32,
-        }));
+        let bottom_right = match new_drag_state {
+            DragState::NW => (reflection_point.0, reflection_point.1),
+            DragState::NE => (d_x, reflection_point.1),
+            DragState::SE => (d_x, d_y),
+            DragState::SW => (reflection_point.0, d_y),
+            DragState::N => (prev.right, reflection_point.1),
+            DragState::E => (d_x, prev.bottom),
+            DragState::S => (prev.right, d_y),
+            DragState::W => (reflection_point.0, prev.bottom),
+            DragState::None => (prev.right, prev.bottom),
+        };
+        let new_rect = Rect {
+            left: top_left.0,
+            top: top_left.1,
+            right: bottom_right.0,
+            bottom: bottom_right.1,
+        };
+        self.rectangle_selection = new_rect;
+        self.drag_state = new_drag_state;
+
+        shell.publish((self.on_rectangle)(new_drag_state, new_rect));
     }
 }
 
@@ -335,16 +313,14 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
     ) -> iced_core::mouse::Interaction {
         match self.drag_state(cursor) {
             DragState::None => {
-                let state = DragState::from(DRAG_STATE.load(std::sync::atomic::Ordering::Relaxed));
-                if state == DragState::None {
+                if self.drag_state == DragState::None {
                     iced_core::mouse::Interaction::Crosshair
                 } else {
                     iced_core::mouse::Interaction::Grabbing
                 }
             }
             DragState::NW | DragState::NE | DragState::SE | DragState::SW => {
-                let state = DragState::from(DRAG_STATE.load(std::sync::atomic::Ordering::Relaxed));
-                if state == DragState::None {
+                if self.drag_state == DragState::None {
                     iced_core::mouse::Interaction::Grab
                 } else {
                     iced_core::mouse::Interaction::Grabbing
@@ -370,46 +346,36 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
             cosmic::iced_core::Event::PlatformSpecific(PlatformSpecific::Wayland(
                 iced_core::event::wayland::Event::DndOffer(e),
             )) => {
-                if DragState::from(DRAG_STATE.load(std::sync::atomic::Ordering::Relaxed))
-                    == DragState::None
-                {
+                if self.drag_state == DragState::None {
                     return cosmic::iced_core::event::Status::Ignored;
                 }
+                // Don't need to accept mime types or actions
                 match e {
-                    DndOfferEvent::Enter { x, y, mime_types } => {
-                        eprintln!("DndOfferEvent::Enter {{ x: {}, y: {} }}", x, y);
+                    DndOfferEvent::Enter { x, y, .. } => {
+                        let p = Point::new(x as f32, y as f32);
+                        let cursor = mouse::Cursor::Available(p);
                         if !cursor.is_over(layout.bounds()) {
                             return cosmic::iced_core::event::Status::Ignored;
                         }
-                        if DragState::from(DRAG_STATE.load(std::sync::atomic::Ordering::Relaxed))
-                            == DragState::None
-                        {
-                            shell.publish((self.drag_cmd_produced)(DndCommand(Arc::new(
-                                Box::new(move || ActionInner::Accept(mime_types.get(0).cloned())),
-                            ))));
-                        } else {
-                            shell.publish((self.drag_cmd_produced)(DndCommand(Arc::new(
-                                Box::new(move || ActionInner::Accept(None)),
-                            ))));
-                        }
-                        self.handle_drag_pos(Point::new(x as f32, y as f32), shell);
+
+                        self.handle_drag_pos(x as i32, y as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
                     DndOfferEvent::Motion { x, y } => {
-                        eprintln!("DndOfferEvent::Motion {{ x: {}, y: {} }}", x, y);
+                        let p = Point::new(x as f32, y as f32);
+                        let cursor = mouse::Cursor::Available(p);
                         if !cursor.is_over(layout.bounds()) {
                             return cosmic::iced_core::event::Status::Ignored;
                         }
-                        self.handle_drag_pos(Point::new(x as f32, y as f32), shell);
+                        self.handle_drag_pos(x as i32, y as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
-                    DndOfferEvent::SourceActions(a) => {
-                        shell.publish((self.drag_cmd_produced)(DndCommand(Arc::new(Box::new(
-                            move || ActionInner::SetActions {
-                                preferred: DndAction::Move,
-                                accepted: a,
-                            },
-                        )))));
+                    DndOfferEvent::DropPerformed => {
+                        self.drag_state = DragState::None;
+                        shell.publish((self.on_rectangle)(
+                            DragState::None,
+                            self.rectangle_selection,
+                        ));
                         cosmic::iced_core::event::Status::Captured
                     }
                     _ => cosmic::iced_core::event::Status::Ignored,
@@ -418,10 +384,17 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
             cosmic::iced_core::Event::PlatformSpecific(PlatformSpecific::Wayland(
                 iced_core::event::wayland::Event::DataSource(e),
             )) => {
-                if matches!(e, DataSourceEvent::DndFinished | DataSourceEvent::Cancelled) {
-                    DRAG_STATE.store(DragState::None as u8, std::sync::atomic::Ordering::Relaxed);
-                } else if let DataSourceEvent::DndFinished = e {
-                    DRAG_STATE.store(DragState::None as u8, std::sync::atomic::Ordering::Relaxed);
+                if matches!(
+                    e,
+                    DataSourceEvent::DndFinished
+                        | DataSourceEvent::Cancelled
+                        | DataSourceEvent::DndDropPerformed
+                ) {
+                    self.drag_state = DragState::None;
+                    shell.publish((self.on_rectangle)(
+                        DragState::None,
+                        self.rectangle_selection,
+                    ));
                 }
 
                 cosmic::iced_core::event::Status::Ignored
@@ -433,41 +406,35 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
 
                 // on press start internal DnD and set drag state
                 if let iced_core::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) = e {
-                    let state =
-                        DragState::from(DRAG_STATE.load(std::sync::atomic::Ordering::Relaxed));
-                    if state == DragState::None {
-                        let window_id = self.window_id;
-                        shell.publish((self.drag_cmd_produced)(DndCommand(Arc::new(Box::new(
-                            move || ActionInner::StartDnd {
-                                mime_types: vec!["x-cosmic-screenshot".to_string()],
-                                actions: DndAction::all(),
-                                origin_id: window_id,
-                                icon_id: None,
-                                data: Box::new(MyData),
-                            },
-                        )))));
-                        let mut pos = cursor.position().unwrap_or_default();
-                        match self.drag_state(cursor) {
-                            DragState::None => {
-                                pos.x += self.output_rect.left as f32;
-                                pos.y += self.output_rect.top as f32;
-                                shell.publish((self.on_rectangle)(Rect {
-                                    left: pos.x as i32,
-                                    top: pos.y as i32,
-                                    right: pos.x as i32 + 1,
-                                    bottom: pos.y as i32 + 1,
-                                }));
-                                DRAG_STATE.store(
-                                    DragState::SE as u8,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                            }
-                            s => {
-                                DRAG_STATE.store(s as u8, std::sync::atomic::Ordering::Relaxed);
-                            }
-                        }
+                    let window_id = self.window_id;
+                    shell.publish((self.drag_cmd_produced)(DndCommand(Arc::new(Box::new(
+                        move || ActionInner::StartDnd {
+                            mime_types: vec!["x-cosmic-screenshot".to_string()],
+                            actions: DndAction::all(),
+                            origin_id: window_id,
+                            icon_id: None,
+                            data: Box::new(MyData),
+                        },
+                    )))));
 
-                        return cosmic::iced_core::event::Status::Ignored;
+                    let s = self.drag_state(cursor);
+                    if let DragState::None = s {
+                        let mut pos = cursor.position().unwrap_or_default();
+                        pos.x += self.output_rect.left as f32;
+                        pos.y += self.output_rect.top as f32;
+                        self.drag_state = DragState::SE;
+                        shell.publish((self.on_rectangle)(
+                            DragState::SE,
+                            Rect {
+                                left: pos.x as i32,
+                                top: pos.y as i32,
+                                right: pos.x as i32 + 1,
+                                bottom: pos.y as i32 + 1,
+                            },
+                        ));
+                    } else {
+                        self.drag_state = s;
+                        shell.publish((self.on_rectangle)(s, self.rectangle_selection));
                     }
                     return cosmic::iced_core::event::Status::Captured;
                 }

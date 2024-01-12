@@ -15,11 +15,12 @@ use cosmic::{
 
 pub struct OutputSelection<Msg> {
     on_enter: Msg,
+    on_press: Msg,
 }
 
 impl<Msg> OutputSelection<Msg> {
-    pub fn new(on_enter: Msg) -> Self {
-        Self { on_enter }
+    pub fn new(on_enter: Msg, on_press: Msg) -> Self {
+        Self { on_enter, on_press }
     }
 }
 
@@ -130,6 +131,13 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Renderer> for OutputSelection<Msg
                 cosmic::iced_core::Event::Mouse(mouse::Event::CursorMoved { .. })
                 | cosmic::iced_core::Event::Mouse(mouse::Event::CursorEntered) => {
                     shell.publish(self.on_enter.clone());
+                    cosmic::iced_core::event::Status::Captured
+                }
+                cosmic::iced_core::Event::Mouse(mouse::Event::ButtonPressed(
+                    mouse::Button::Left,
+                )) => {
+                    dbg!("output pressed");
+                    shell.publish(self.on_press.clone());
                     cosmic::iced_core::event::Status::Captured
                 }
                 _ => cosmic::iced_core::event::Status::Ignored,

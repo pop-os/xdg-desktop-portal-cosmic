@@ -22,7 +22,6 @@ pub struct CosmicPortal {
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
 
     pub screenshot_args: Option<screenshot::Args>,
-    pub screenshot_choice: Option<screenshot::Choice>,
 
     pub outputs: Vec<OutputState>,
     pub prev_rectangle: Option<screenshot::Rect>,
@@ -162,10 +161,6 @@ impl cosmic::Application for CosmicPortal {
                 ) => match w_e {
                     cosmic::iced_core::event::wayland::Event::Output(o_event, wl_output) => {
                         Some(Msg::Output(o_event, wl_output))
-                    }
-                    cosmic::iced_core::event::wayland::Event::DndOffer(e) => {
-                        dbg!(e);
-                        None
                     }
                     _ => None,
                 },

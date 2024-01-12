@@ -34,6 +34,8 @@ gbm = "0.14.0"
 wayland-protocols = "0.31.0"
 env_logger = "0.10.0"
 log = "0.4.20"
+dirs = "5.0.1"
+time = { version = "0.3.31", features = ["local-offset", "formatting", "macros"] }
 # i18n
 i18n-embed = { version = "0.14.1", features = ["fluent-system", "desktop-requester"] }
 i18n-embed-fl = "0.7.0"
@@ -44,3 +46,5 @@ rust-embed = "8.2.0"
 
 # [patch."https://github.com/smithay/client-toolkit"]
 # smithay-client-toolkit = { path = "../fork/client-toolkit" }
+[profile.release]
+debug = true
