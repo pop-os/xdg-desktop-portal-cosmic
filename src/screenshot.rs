@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
+use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::cosmic_theme::composite::over;
 use cosmic::iced::wayland::actions::data_device::ActionInner;
 use cosmic::iced::wayland::actions::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
@@ -12,11 +13,9 @@ use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivit
 use image::RgbaImage;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
-use time::format_description;
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::{self, WlOutput};
-use wayland_client::protocol::wl_surface::WlSurface;
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
@@ -93,9 +92,10 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageSaveLocation {
     // Clipboard, // TODO
+    #[default]
     Pictures,
     Documents,
     // Custom(PathBuf), // TODO
@@ -111,7 +111,26 @@ impl Screenshot {
         Self { wayland_helper, tx }
     }
 
-    async fn interactive_screenshot_inner(
+    async fn interactive_toplevel_images(
+        &self,
+        outputs: Vec<(wl_output::WlOutput, (i32, i32), String)>,
+    ) -> anyhow::Result<HashMap<String, Vec<Arc<RgbaImage>>>> {
+        let wayland_helper = self.wayland_helper.clone();
+
+        let mut map: HashMap<String, Vec<Arc<RgbaImage>>> = HashMap::with_capacity(outputs.len());
+        for (output, _, name) in outputs {
+            let frame = wayland_helper
+                .capture_output_toplevels_shm(&output, false)
+                .into_iter()
+                .filter_map(|img| img.image().ok().map(|img| Arc::new(img)))
+                .collect();
+            map.insert(name.clone(), frame);
+        }
+
+        Ok(map)
+    }
+
+    async fn interactive_output_images(
         &self,
         outputs: Vec<(wl_output::WlOutput, (i32, i32), String)>,
         app_id: &str,
@@ -132,7 +151,6 @@ impl Screenshot {
     }
 
     pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
-        dbg!("saving to {:?}", path);
         let mut encoder =
             png::Encoder::new(std::fs::File::create(&path)?, img.width(), img.height());
         encoder.set_color(png::ColorType::Rgba);
@@ -271,13 +289,15 @@ pub enum Msg {
     Choice(Choice),
     OutputChanged(WlOutput),
     DragCommand(DndCommand),
+    WindowChosen(String, usize),
+    Location(ImageSaveLocation),
 }
 
 #[derive(Debug, Clone)]
 pub enum Choice {
     Output(String),
     Rectangle(Rect, DragState),
-    Window(WlSurface),
+    Window(String, Option<usize>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -297,8 +317,8 @@ pub struct Args {
     pub app_id: String,
     pub parent_window: String,
     pub options: ScreenshotOptions,
-    pub images: HashMap<String, Arc<RgbaImage>>,
-    pub window_imgs: HashMap<String, PathBuf>,
+    pub output_images: HashMap<String, Arc<RgbaImage>>,
+    pub toplevel_images: HashMap<String, Vec<Arc<RgbaImage>>>,
     pub tx: Sender<PortalResponse<ScreenshotResult>>,
     pub choice: Choice,
     pub location: ImageSaveLocation,
@@ -318,7 +338,6 @@ impl Screenshot {
         // connection.object_server().at(&handle, Request);
 
         // TODO create handle, show dialog
-        eprintln!("screenshot Request");
         let mut outputs = Vec::new();
         for output in self.wayland_helper.outputs() {
             let Some(info) = self.wayland_helper.output_info(&output) else {
@@ -342,11 +361,14 @@ impl Screenshot {
 
         // if interactive, send image to be used by screenshot editor & await response via channel
         if options.interactive.unwrap_or_default() {
-            eprintln!("sending request to subscription");
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
             let first_output = outputs[0].2.clone();
-            let images = self
-                .interactive_screenshot_inner(outputs, app_id)
+            let output_images = self
+                .interactive_output_images(outputs.clone(), app_id)
+                .await
+                .unwrap_or_default();
+            let toplevel_images = self
+                .interactive_toplevel_images(outputs.clone())
                 .await
                 .unwrap_or_default();
 
@@ -362,8 +384,8 @@ impl Screenshot {
                         Action::ReturnPath
                     },
                     options,
-                    images,
-                    window_imgs: HashMap::new(),
+                    output_images,
+                    toplevel_images,
                     tx,
                     location: ImageSaveLocation::Pictures,
                     // TODO get last choice
@@ -377,11 +399,9 @@ impl Screenshot {
                 log::error!("Failed to send screenshot event, {}", err);
                 return PortalResponse::Other;
             }
-            eprintln!("sent msg to subscription and awaiting response");
             if let Some(res) = rx.recv().await {
                 return res;
             } else {
-                dbg!("GOT CANCEL");
                 return PortalResponse::Cancelled::<ScreenshotResult>;
             }
         }
@@ -427,17 +447,8 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
     let Some(args) = portal.screenshot_args.as_ref() else {
         return horizontal_space(Length::Fixed(1.0)).into();
     };
-    let name = output.info.name.clone().unwrap_or_default();
-    let output_size = output.info.logical_size.unwrap_or_default();
-    let output_pos = output.info.logical_position.unwrap_or_default();
-    let output_rect = Rect {
-        left: output_pos.0,
-        top: output_pos.1,
-        right: output_pos.0 + output_size.0,
-        bottom: output_pos.1 + output_size.1,
-    };
 
-    let Some(raw_image) = args.images.get(&name) else {
+    let Some(raw_image) = args.output_images.get(&output.name) else {
         return horizontal_space(Length::Fixed(1.0)).into();
     };
     crate::widget::screenshot::ScreenshotSelection::new(
@@ -445,11 +456,15 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         raw_image.clone(),
         Msg::Capture,
         Msg::Cancel,
-        (output.output.clone(), output_rect, name),
+        output,
         id,
         Msg::OutputChanged,
         |c| Msg::Choice(c),
         Msg::DragCommand,
+        &args.toplevel_images,
+        Msg::WindowChosen,
+        &portal.screenshot_save_dropdown,
+        Msg::Location,
     )
     .into()
 }
@@ -462,15 +477,13 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 return cosmic::Command::batch(cmds);
             };
             let outputs = portal.outputs.clone();
-            // TODO process screenshot using choice
             let Args {
                 tx,
                 choice,
-                mut images,
+                output_images: mut images,
                 location,
                 ..
             } = args;
-            // TODO process based on choice
 
             let mut success = true;
             let image_path = if let Some(location) = Screenshot::get_img_path(location) {
@@ -482,7 +495,6 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
 
             match choice {
                 Choice::Output(name) => {
-                    dbg!("OUTPUT: {}", &name);
                     if let Some(img) = images.remove(&name) {
                         if let Err(err) = Screenshot::save_rgba(&img, &image_path) {
                             log::error!("Failed to capture screenshot: {:?}", err);
@@ -493,7 +505,6 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     }
                 }
                 Choice::Rectangle(r, s) => {
-                    dbg!("RECTANGLE");
                     // Construct Rgba image with size of rect
                     // then overlay the part of each image that intersects with the rect
                     let mut img = RgbaImage::new(
@@ -501,24 +512,21 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                         (r.bottom - r.top).unsigned_abs(),
                     );
                     for (name, raw_img) in images {
-                        let Some(output) =
-                            outputs.iter().find(|o| o.info.name.as_ref() == Some(&name))
-                        else {
+                        let Some(output) = outputs.iter().find(|o| o.name == name) else {
                             continue;
                         };
-                        let pos = output.info.logical_position.unwrap_or_default();
+                        let pos = output.logical_pos;
                         let output_rect = Rect {
                             left: pos.0,
                             top: pos.1,
-                            right: pos.0 + output.info.logical_size.unwrap_or_default().0,
-                            bottom: pos.1 + output.info.logical_size.unwrap_or_default().1,
+                            right: pos.0 + output.logical_size.0 as i32,
+                            bottom: pos.1 + output.logical_size.1 as i32,
                         };
 
                         let Some(intersect) = r.intersect(output_rect) else {
                             continue;
                         };
                         let translated_intersect = intersect.translate(-pos.0, -pos.1);
-                        dbg!(intersect, translated_intersect);
                         let overlay = image::imageops::crop_imm(
                             raw_img.as_ref(),
                             u32::try_from(translated_intersect.left).unwrap_or_default(),
@@ -527,16 +535,6 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                             (translated_intersect.bottom - translated_intersect.top).unsigned_abs(),
                         );
 
-                        // let mut path = image_path.clone();
-                        // path.set_file_name(format!(
-                        //     "{}-{}",
-                        //     name,
-                        //     path.file_name().unwrap_or_default().to_string_lossy()
-                        // ));
-                        // write each sub image to a file with the output name appended to the path
-                        // Screenshot::save_rgba(&overlay.to_image(), &path);
-
-                        dbg!("OVERLAYING");
                         image::imageops::overlay(
                             &mut img,
                             &*overlay,
@@ -545,17 +543,27 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                         );
                     }
                     if let Err(err) = Screenshot::save_rgba(&img, &image_path) {
-                        dbg!(err);
                         success = false;
                     }
                 }
-                Choice::Window(_) => {
-                    // TODO
+                Choice::Window(output, Some(window_i)) => {
+                    if let Some(img) = args
+                        .toplevel_images
+                        .get(&output)
+                        .and_then(|imgs| imgs.get(window_i))
+                    {
+                        if let Err(err) = Screenshot::save_rgba(&img, &image_path) {
+                            log::error!("Failed to capture screenshot: {:?}", err);
+                            success = false;
+                        };
+                    } else {
+                        success = false;
+                    }
+                }
+                _ => {
                     success = false;
                 }
             }
-
-            dbg!(success);
 
             let response = if success {
                 PortalResponse::Success(ScreenshotResult {
@@ -575,12 +583,14 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             let Some(args) = portal.screenshot_args.take() else {
                 return cosmic::Command::batch(cmds);
             };
+            let Args { tx, .. } = args;
             tokio::spawn(async move {
-                let Args { tx, .. } = args;
                 if let Err(err) = tx.send(PortalResponse::Cancelled).await {
                     log::error!("Failed to send screenshot event");
                 }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             });
+
             cosmic::Command::batch(cmds)
         }
         Msg::Choice(c) => {
@@ -599,7 +609,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     .outputs
                     .iter()
                     .find(|o| o.output == wl_output)
-                    .and_then(|o| o.info.name.clone()),
+                    .map(|o| o.name.clone()),
             ) {
                 args.choice = Choice::Output(o);
             }
@@ -609,6 +619,19 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         Msg::DragCommand(DndCommand(cmd)) => {
             let action = cmd();
             return data_device::action(action);
+        }
+        Msg::WindowChosen(name, i) => {
+            if let Some(args) = portal.screenshot_args.as_mut() {
+                args.choice = Choice::Window(name, Some(i));
+            }
+            update_msg(portal, Msg::Capture)
+        }
+        Msg::Location(loc) => {
+            if let Some(args) = portal.screenshot_args.as_mut() {
+                portal.screenshot_save_dropdown.selected = Some(loc);
+                args.location = portal.screenshot_save_dropdown.selected.unwrap_or_default();
+            }
+            cosmic::Command::none()
         }
     }
 }
@@ -621,29 +644,46 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                 app_id,
                 parent_window,
                 options,
-                images,
-                window_imgs,
+                output_images: images,
                 tx,
                 choice,
                 action,
                 location,
+                toplevel_images,
             } = &args;
+
+            // update output bg sources
+            if let Ok(c) = cosmic::cosmic_config::Config::new_state(
+                cosmic_bg_config::NAME,
+                cosmic_bg_config::state::State::version(),
+            ) {
+                let bg_state = match cosmic_bg_config::state::State::get_entry(&c) {
+                    Ok(state) => state,
+                    Err((err, s)) => {
+                        log::error!("Failed to get bg config state: {:?}", err);
+                        s
+                    }
+                };
+                for o in &mut portal.outputs {
+                    let source = bg_state.wallpapers.iter().find(|s| s.0 == o.name);
+                    o.bg_source = Some(source.cloned().map(|s| s.1).unwrap_or_else(|| {
+                        cosmic_bg_config::Source::Path(
+                            "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png"
+                                .into(),
+                        )
+                    }));
+                }
+            }
+
             // iterate over outputs and create a layer surface for each
             let cmds: Vec<_> = portal
                 .outputs
                 .iter()
-                .map(
+                .filter_map(
                     |OutputState {
-                         output, id, info, ..
+                         output, id, name, ..
                      }| {
-                        let logical_size = info.logical_size.unwrap_or_else(|| {
-                            log::warn!(
-                                "Output {} has no logical size",
-                                info.name.clone().unwrap_or_default()
-                            );
-                            (1920, 1080)
-                        });
-                        get_layer_surface(SctkLayerSurfaceSettings {
+                        Some(get_layer_surface(SctkLayerSurfaceSettings {
                             id: *id,
                             layer: Layer::Overlay,
                             keyboard_interactivity: KeyboardInteractivity::Exclusive,
@@ -655,7 +695,7 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                             exclusive_zone: -1,
                             size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
                             ..Default::default()
-                        })
+                        }))
                     },
                 )
                 .collect();

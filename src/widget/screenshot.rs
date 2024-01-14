@@ -1,18 +1,29 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, rc::Rc, sync::Arc};
 
 use ::image::{EncodableLayout, RgbaImage};
 use cosmic::{
     iced::window,
-    iced_core::{layout, widget::Tree, Layout, Length, Point, Size},
-    iced_widget::row,
-    widget::{button, divider::vertical, icon, image, text},
+    iced_core::{
+        gradient::Linear, layout, widget::Tree, Background, ContentFit, Degrees, Layout, Length,
+        Point, Size,
+    },
+    iced_widget::{canvas::Path, row},
+    widget::{
+        button,
+        cosmic_container::container,
+        divider::vertical,
+        dropdown::{self, multi::dropdown},
+        horizontal_space, icon, image, text, Row,
+    },
     Element,
 };
+use cosmic_bg_config::Source;
 use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::{
+    app::OutputState,
     fl,
-    screenshot::{Choice, DndCommand, Rect},
+    screenshot::{Choice, DndCommand, ImageSaveLocation, Rect},
 };
 
 use super::{
@@ -70,20 +81,33 @@ where
         raw_image: Arc<RgbaImage>,
         on_capture: Msg,
         on_cancel: Msg,
-        output: (WlOutput, Rect, String),
+        output: &OutputState,
         window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
         on_choice_change: impl Fn(Choice) -> Msg + 'static + Clone,
         on_drag_cmd_produced: impl Fn(DndCommand) -> Msg + 'static,
+        toplevel_images: &HashMap<String, Vec<Arc<RgbaImage>>>,
+        toplevel_chosen: impl Fn(String, usize) -> Msg,
+        model: &'a dropdown::multi::Model<String, crate::screenshot::ImageSaveLocation>,
+        dropdown_selected: impl Fn(ImageSaveLocation) -> Msg + 'static + Clone,
     ) -> Self {
+        // TODO: use theme spacing
+        let space_l = 16.0;
         let space_s = 8.0;
         let space_xs = 4.0;
         let space_xxs = 2.0;
 
+        let output_rect = Rect {
+            left: output.logical_pos.0,
+            top: output.logical_pos.1,
+            right: output.logical_pos.0 + output.logical_size.0 as i32,
+            bottom: output.logical_pos.1 + output.logical_size.1 as i32,
+        };
+
         let on_choice_change_clone = on_choice_change.clone();
         let fg_element = match choice {
             Choice::Rectangle(r, drag_state) => RectangleSelection::new(
-                output.1,
+                output_rect,
                 r,
                 drag_state,
                 window_id,
@@ -92,24 +116,115 @@ where
             )
             .into(),
             Choice::Output(_) => {
-                OutputSelection::new(on_output_change(output.0), on_capture.clone()).into()
+                OutputSelection::new(on_output_change(output.output.clone()), on_capture.clone())
+                    .into()
             }
-            Choice::Window(_) => todo!(),
+            Choice::Window(..) => {
+                let imgs = toplevel_images
+                    .get(&output.name)
+                    .cloned()
+                    .unwrap_or_default();
+                let img_buttons = imgs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, img)| {
+                        cosmic::widget::button(
+                            image::Image::new(image::Handle::from_pixels(
+                                img.width(),
+                                img.height(),
+                                MyImage(img),
+                            ))
+                            .content_fit(ContentFit::ScaleDown),
+                        )
+                        .on_press(toplevel_chosen(output.name.clone(), i))
+                        .style(cosmic::theme::Button::Image)
+                        .into()
+                    })
+                    .collect();
+                container(
+                    Row::with_children(img_buttons)
+                        .spacing(space_l)
+                        .align_items(cosmic::iced_core::Alignment::Center)
+                        .padding(space_l),
+                )
+                .align_x(cosmic::iced_core::alignment::Horizontal::Center)
+                .align_y(cosmic::iced_core::alignment::Vertical::Center)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+            }
         };
+
+        let bg_element = match choice {
+            Choice::Output(_) | Choice::Rectangle(..) => {
+                image::Image::new(image::Handle::from_pixels(
+                    raw_image.width(),
+                    raw_image.height(),
+                    MyImage(raw_image),
+                ))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+            }
+            Choice::Window(..) => match output.bg_source.clone() {
+                Some(Source::Path(path)) => image::Image::new(image::Handle::from_path(path))
+                    .content_fit(ContentFit::Cover)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                Some(Source::Color(color)) => container(horizontal_space(Length::Fill))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(cosmic::theme::Container::Custom(Box::new(move |_| {
+                        let color = color.clone();
+                        cosmic::iced_style::container::Appearance {
+                            background: Some(match color {
+                                cosmic_bg_config::Color::Single(c) => Background::Color(
+                                    cosmic::iced::Color::new(c[0], c[1], c[2], 1.0).into(),
+                                ),
+                                cosmic_bg_config::Color::Gradient(cosmic_bg_config::Gradient {
+                                    colors,
+                                    radius,
+                                }) => {
+                                    let stop_increment = 1.0 / (colors.len() - 1) as f32;
+                                    let mut stop = 0.0;
+
+                                    let mut linear = Linear::new(Degrees(radius));
+
+                                    for &[r, g, b] in colors.iter() {
+                                        linear = linear
+                                            .add_stop(stop, cosmic::iced::Color::from_rgb(r, g, b));
+                                        stop += stop_increment;
+                                    }
+
+                                    Background::Gradient(cosmic::iced_core::Gradient::Linear(
+                                        linear,
+                                    ))
+                                }
+                            }),
+                            ..Default::default()
+                        }
+                    })))
+                    .into(),
+                None => image::Image::new(image::Handle::from_path(
+                    "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png",
+                ))
+                .content_fit(ContentFit::Cover)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            },
+        };
+        let active_icon =
+            cosmic::theme::Svg::Custom(Rc::new(|t| cosmic::iced_style::svg::Appearance {
+                color: Some(t.cosmic().accent_color().into()),
+            }));
         Self {
             id: cosmic::widget::Id::unique(),
-            choice,
             choices: Vec::new(),
             output_logical_geo: Vec::new(),
             choice_labels: Vec::new(),
-            bg_element: image::Image::new(image::Handle::from_pixels(
-                raw_image.width(),
-                raw_image.height(),
-                MyImage(raw_image),
-            ))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
+            bg_element,
             fg_element,
             menu_element: cosmic::widget::container(
                 row![
@@ -120,7 +235,16 @@ where
                             )
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
+                            .style(
+                                if matches!(choice, Choice::Rectangle(..)) {
+                                    active_icon.clone()
+                                } else {
+                                    cosmic::theme::Svg::default()
+                                }
+                            )
                         )
+                        .selected(matches!(choice, Choice::Rectangle(..)))
+                        .style(cosmic::theme::Button::Icon)
                         .on_press(on_choice_change(Choice::Rectangle(
                             Rect::default(),
                             DragState::None
@@ -130,9 +254,17 @@ where
                             icon::Icon::from(
                                 icon::from_name("screenshot-window-symbolic").size(64)
                             )
+                            .style(if matches!(choice, Choice::Window(..)) {
+                                active_icon.clone()
+                            } else {
+                                cosmic::theme::Svg::default()
+                            })
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
                         )
+                        .selected(matches!(choice, Choice::Window(..)))
+                        .style(cosmic::theme::Button::Icon)
+                        .on_press(on_choice_change(Choice::Window(output.name.clone(), None)))
                         .padding(space_xs),
                         button(
                             icon::Icon::from(
@@ -140,8 +272,17 @@ where
                             )
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
+                            .style(
+                                if matches!(choice, Choice::Output(..)) {
+                                    active_icon.clone()
+                                } else {
+                                    cosmic::theme::Svg::default()
+                                }
+                            )
                         )
-                        .on_press(on_choice_change(Choice::Output(output.2.clone())))
+                        .selected(matches!(choice, Choice::Output(..)))
+                        .style(cosmic::theme::Button::Icon)
+                        .on_press(on_choice_change(Choice::Output(output.name.clone())))
                         .padding(space_xs)
                     ]
                     .spacing(space_s)
@@ -149,7 +290,7 @@ where
                     vertical::light().height(Length::Fixed(64.0)),
                     button(text(fl!("capture"))).on_press(on_capture),
                     vertical::light().height(Length::Fixed(64.0)),
-                    button("todo menu"),
+                    dropdown(model, dropdown_selected),
                     vertical::light().height(Length::Fixed(64.0)),
                     button(
                         icon::Icon::from(icon::from_name("window-close-symbolic").size(63))
@@ -164,6 +305,7 @@ where
             )
             .style(cosmic::theme::Container::Background)
             .into(),
+            choice,
         }
     }
 }

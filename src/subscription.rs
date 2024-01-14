@@ -38,12 +38,12 @@ impl Debug for Event {
                 app_id,
                 parent_window,
                 options,
-                images,
-                window_imgs,
-                choice: choice,
-                action: action,
+                output_images: images,
+                choice,
+                action,
                 location,
                 tx: _tx,
+                toplevel_images,
             }) => f
                 .debug_struct("Screenshot")
                 .field("handle", handle)
@@ -51,10 +51,10 @@ impl Debug for Event {
                 .field("parent_window", parent_window)
                 .field("images", &images.keys().collect::<Vec<_>>())
                 .field("options", options)
-                .field("window_imgs", window_imgs)
                 .field("choice", choice)
                 .field("action", action)
                 .field("location", location)
+                .field("toplevel_images", toplevel_images)
                 .finish(),
         }
     }

@@ -22,7 +22,7 @@ use wayland_client::protocol::wl_output;
 
 use crate::{
     buffer::{self, Dmabuf, Plane},
-    wayland::{DmabufHelper, WaylandHelper},
+    wayland::{CaptureSource, DmabufHelper, WaylandHelper},
 };
 
 pub struct ScreencastThread {
@@ -228,8 +228,8 @@ impl StreamData {
                 //if data.len() == width as usize * height as usize * 4 {
                 let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
                 // TODO error
-                self.wayland_helper.capture_output_shm_fd(
-                    &self.output,
+                self.wayland_helper.capture_source_shm_fd(
+                    CaptureSource::Output(&self.output),
                     self.overlay_cursor,
                     fd,
                     Some(self.width * self.height * 4),
