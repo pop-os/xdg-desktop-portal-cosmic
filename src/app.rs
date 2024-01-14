@@ -1,19 +1,20 @@
-use crate::{access, screenshot, subscription};
+use crate::{access, fl, screenshot, subscription};
 use cosmic::iced_core::event::wayland::OutputEvent;
+use cosmic::widget::dropdown;
 use cosmic::{
     app,
     iced::window,
     iced_futures::{event::listen_with, Subscription},
 };
-use cosmic_client_toolkit::sctk::output::OutputInfo;
 use wayland_client::protocol::wl_output::WlOutput;
 
 pub(crate) fn run() -> cosmic::iced::Result {
-    let settings = cosmic::app::Settings::default().no_main_window(true);
+    let settings = cosmic::app::Settings::default()
+        .no_main_window(true)
+        .exit_on_close(false);
     cosmic::app::run::<CosmicPortal>(settings, ())
 }
 
-#[derive(Default, Clone)]
 // run iced app with no main surface
 pub struct CosmicPortal {
     pub core: app::Core,
@@ -22,9 +23,10 @@ pub struct CosmicPortal {
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
 
     pub screenshot_args: Option<screenshot::Args>,
+    pub screenshot_save_dropdown: dropdown::multi::Model<String, screenshot::ImageSaveLocation>,
+    pub prev_rectangle: Option<screenshot::Rect>,
 
     pub outputs: Vec<OutputState>,
-    pub prev_rectangle: Option<screenshot::Rect>,
     pub active_output: Option<WlOutput>,
 }
 
@@ -32,8 +34,11 @@ pub struct CosmicPortal {
 pub struct OutputState {
     pub output: WlOutput,
     pub id: window::Id,
-    pub info: OutputInfo,
+    pub name: String,
+    pub logical_size: (u32, u32),
+    pub logical_pos: (i32, i32),
     pub has_pointer: bool,
+    pub bg_source: Option<cosmic_bg_config::Source>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,10 +70,31 @@ impl cosmic::Application for CosmicPortal {
         core: app::Core,
         _flags: Self::Flags,
     ) -> (Self, cosmic::iced::Command<app::Message<Self::Message>>) {
+        let mut model = cosmic::widget::dropdown::multi::model();
+        model.insert(dropdown::multi::list(
+            Some(fl!("save-to")),
+            vec![
+                (
+                    fl!("save-to", "pictures"),
+                    screenshot::ImageSaveLocation::Pictures,
+                ),
+                (
+                    fl!("save-to", "documents"),
+                    screenshot::ImageSaveLocation::Documents,
+                ),
+            ],
+        ));
+        model.selected = Some(screenshot::ImageSaveLocation::default());
         (
             Self {
                 core,
-                ..Default::default()
+                access_args: Default::default(),
+                access_choices: Default::default(),
+                screenshot_args: Default::default(),
+                screenshot_save_dropdown: model,
+                prev_rectangle: Default::default(),
+                outputs: Default::default(),
+                active_output: Default::default(),
             },
             cosmic::iced::Command::none(),
         )
@@ -99,7 +125,6 @@ impl cosmic::Application for CosmicPortal {
                     access::update_args(self, args).map(cosmic::app::Message::App)
                 }
                 subscription::Event::Screenshot(args) => {
-                    eprintln!("Updating screenshot args");
                     screenshot::update_args(self, args).map(cosmic::app::Message::App)
                 }
             },
@@ -114,8 +139,14 @@ impl cosmic::Application for CosmicPortal {
                         self.outputs.push(OutputState {
                             output: wl_output,
                             id: window::Id::unique(),
-                            info,
+                            name: info.name.unwrap(),
+                            logical_size: info
+                                .logical_size
+                                .map(|(w, h)| (w as u32, h as u32))
+                                .unwrap(),
+                            logical_pos: info.logical_position.unwrap(),
                             has_pointer: false,
+                            bg_source: None,
                         })
                     }
                     OutputEvent::Removed => self.outputs.retain(|o| o.output != wl_output),
@@ -126,7 +157,12 @@ impl cosmic::Application for CosmicPortal {
                     {
                         if let Some(state) = self.outputs.iter_mut().find(|o| o.output == wl_output)
                         {
-                            state.info = info;
+                            state.name = info.name.unwrap();
+                            state.logical_size = info
+                                .logical_size
+                                .map(|(w, h)| (w as u32, h as u32))
+                                .unwrap();
+                            state.logical_pos = info.logical_position.unwrap();
                         }
                     }
                     e => {
@@ -137,12 +173,14 @@ impl cosmic::Application for CosmicPortal {
                 if self.prev_rectangle.is_none() {
                     let mut rect = screenshot::Rect::default();
                     for output in &self.outputs {
-                        let logical_pos = output.info.logical_position.unwrap_or_default();
-                        rect.left = rect.left.min(logical_pos.0);
-                        rect.top = rect.top.min(logical_pos.1);
-                        let logical_size = output.info.logical_size.unwrap_or_default();
-                        rect.right = rect.right.max(logical_pos.0 + logical_size.0);
-                        rect.bottom = rect.bottom.max(logical_pos.1 + logical_size.1);
+                        rect.left = rect.left.min(output.logical_pos.0);
+                        rect.top = rect.top.min(output.logical_pos.1);
+                        rect.right = rect
+                            .right
+                            .max(output.logical_pos.0 + output.logical_size.0 as i32);
+                        rect.bottom = rect
+                            .bottom
+                            .max(output.logical_pos.1 + output.logical_size.1 as i32);
                     }
                     self.prev_rectangle = Some(rect);
                 }

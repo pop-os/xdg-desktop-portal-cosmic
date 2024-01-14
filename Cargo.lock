@@ -731,6 +731,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
+name = "colorgrad"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a5f405d474b9d05e0a093d3120e77e9bf26461b57a84b40aa2a221ac5617fb6"
+dependencies = [
+ "csscolorparser",
+]
+
+[[package]]
 name = "com-rs"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -801,6 +810,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmic-bg-config"
+version = "0.1.0"
+source = "git+https://github.com/pop-os/cosmic-bg#6a6fe4e387e46c2e159df56a9768220a6269ccf4"
+dependencies = [
+ "colorgrad",
+ "cosmic-config",
+ "derive_setters",
+ "image",
+ "ron",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "cosmic-client-toolkit"
 version = "0.1.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=c1b6516#c1b651630c2b71cd8dfd2eb4ab47ede9dbd63840"
@@ -816,6 +839,7 @@ version = "0.1.0"
 source = "git+https://github.com/pop-os/libcosmic#9fb3d874e18ce36fadea931e16488fdbf28d3d02"
 dependencies = [
  "atomicwrites",
+ "calloop",
  "cosmic-config-derive",
  "dirs 5.0.1",
  "iced_futures",
@@ -5355,6 +5379,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ashpd 0.7.0",
+ "cosmic-bg-config",
  "cosmic-client-toolkit",
  "cosmic-protocols",
  "dirs 5.0.1",

@@ -1,7 +1,7 @@
-use std::sync::{atomic::AtomicU8, Arc};
+use std::sync::Arc;
 
 use cosmic::{
-    cosmic_theme::palette::cast::into_array,
+    cosmic_theme::palette::white_point::C,
     iced::{mouse, wayland::actions::data_device::DataFromMimeType},
     iced_core::{
         self,
@@ -14,8 +14,6 @@ use cosmic::{
         Color, Length, Point, Rectangle, Renderer, Size,
     },
     iced_runtime::command::platform_specific::wayland::data_device::ActionInner,
-    iced_sctk::{commands::data_device::start_drag, event_loop::state::Dnd},
-    theme::iced,
     widget::Widget,
 };
 use wayland_client::protocol::wl_data_device_manager::DndAction;
@@ -116,8 +114,11 @@ impl<Msg> RectangleSelection<Msg> {
         let inner_rect = self.translated_inner_rect();
 
         let nw_corner_rect = Rectangle::new(
-            Point::new(inner_rect.x - 8.0, inner_rect.y - 8.0),
-            Size::new(16.0, 16.0),
+            Point::new(
+                inner_rect.x - CORNER_DIAMETER / 2.0,
+                inner_rect.y - CORNER_DIAMETER / 2.0,
+            ),
+            Size::new(CORNER_DIAMETER, CORNER_DIAMETER),
         );
         // TODO need NW, NE, SW, SE resize cursors
         if cursor.is_over(nw_corner_rect) {
@@ -125,16 +126,22 @@ impl<Msg> RectangleSelection<Msg> {
         };
 
         let ne_corner_rect = Rectangle::new(
-            Point::new(inner_rect.x + inner_rect.width - 8.0, inner_rect.y - 8.0),
-            Size::new(16.0, 16.0),
+            Point::new(
+                inner_rect.x + inner_rect.width - CORNER_DIAMETER / 2.0,
+                inner_rect.y - CORNER_DIAMETER / 2.0,
+            ),
+            Size::new(CORNER_DIAMETER, CORNER_DIAMETER),
         );
         if cursor.is_over(ne_corner_rect) {
             return DragState::NE;
         };
 
         let sw_corner_rect = Rectangle::new(
-            Point::new(inner_rect.x - 8.0, inner_rect.y + inner_rect.height - 8.0),
-            Size::new(16.0, 16.0),
+            Point::new(
+                inner_rect.x - CORNER_DIAMETER / 2.0,
+                inner_rect.y + inner_rect.height - CORNER_DIAMETER / 2.0,
+            ),
+            Size::new(CORNER_DIAMETER, CORNER_DIAMETER),
         );
         if cursor.is_over(sw_corner_rect) {
             return DragState::SW;
@@ -142,10 +149,10 @@ impl<Msg> RectangleSelection<Msg> {
 
         let se_corner_rect = Rectangle::new(
             Point::new(
-                inner_rect.x + inner_rect.width - 8.0,
-                inner_rect.y + inner_rect.height - 8.0,
+                inner_rect.x + inner_rect.width - CORNER_DIAMETER / 2.,
+                inner_rect.y + inner_rect.height - CORNER_DIAMETER / 2.,
             ),
-            Size::new(16.0, 16.0),
+            Size::new(CORNER_DIAMETER, CORNER_DIAMETER),
         );
         if cursor.is_over(se_corner_rect) {
             return DragState::SE;
@@ -563,8 +570,11 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
             let translated_x = x - outer_rect.x;
             let translated_y = y - outer_rect.y;
             let bounds = Rectangle::new(
-                Point::new(translated_x - 8.0, translated_y - 8.0),
-                Size::new(16.0, 16.0),
+                Point::new(
+                    translated_x - CORNER_DIAMETER / 2.0,
+                    translated_y - CORNER_DIAMETER / 2.0,
+                ),
+                Size::new(CORNER_DIAMETER, CORNER_DIAMETER),
             );
             let quad = Quad {
                 bounds,
