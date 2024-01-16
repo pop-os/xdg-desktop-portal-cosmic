@@ -2,6 +2,7 @@ use std::{borrow::Cow, collections::HashMap, rc::Rc, sync::Arc};
 
 use ::image::{EncodableLayout, RgbaImage};
 use cosmic::{
+    cosmic_theme::Spacing,
     iced::window,
     iced_core::{
         gradient::Linear, layout, overlay, widget::Tree, Background, ContentFit, Degrees, Layout,
@@ -27,8 +28,6 @@ use super::{
     output_selection::OutputSelection,
     rectangle_selection::{DragState, RectangleSelection},
 };
-
-// TODO: place window images in a Row dense layout
 
 pub struct ScreenshotSelection<'a, Msg> {
     id: cosmic::widget::Id,
@@ -88,12 +87,12 @@ where
         save_locations: &'a Vec<String>,
         selected_save_location: usize,
         dropdown_selected: impl Fn(usize) -> Msg + 'static + Clone,
+        spacing: Spacing,
     ) -> Self {
-        // TODO: use theme spacing
-        let space_l = 16.0;
-        let space_s = 8.0;
-        let space_xs = 4.0;
-        let space_xxs = 2.0;
+        let space_l = spacing.space_l;
+        let space_s = spacing.space_s;
+        let space_xs = spacing.space_xs;
+        let space_xxs = spacing.space_xxs;
 
         let output_rect = Rect {
             left: output.logical_pos.0,
@@ -362,10 +361,6 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
         shell: &mut cosmic::iced_core::Shell<'_, Msg>,
         viewport: &cosmic::iced_core::Rectangle,
     ) -> cosmic::iced_core::event::Status {
-        // TODO delegate to children
-        // first check if over menu
-        // then check if over fg
-        // then check if over bg
         let children = [
             &mut self.bg_element,
             &mut self.fg_element,
@@ -411,10 +406,6 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
         viewport: &cosmic::iced_core::Rectangle,
         renderer: &cosmic::Renderer,
     ) -> cosmic::iced_core::mouse::Interaction {
-        // TODO delegate to children
-        // first check if over menu
-        // then check if over fg
-        // then check if over bg
         let children = [&self.bg_element, &self.fg_element, &self.menu_element];
         let layout = layout.children().collect::<Vec<_>>();
         for (i, (layout, child)) in layout
