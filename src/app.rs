@@ -23,7 +23,7 @@ pub struct CosmicPortal {
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
 
     pub screenshot_args: Option<screenshot::Args>,
-    pub screenshot_save_dropdown: dropdown::multi::Model<String, screenshot::ImageSaveLocation>,
+    pub location_options: Vec<String>,
     pub prev_rectangle: Option<screenshot::Rect>,
 
     pub outputs: Vec<OutputState>,
@@ -91,7 +91,7 @@ impl cosmic::Application for CosmicPortal {
                 access_args: Default::default(),
                 access_choices: Default::default(),
                 screenshot_args: Default::default(),
-                screenshot_save_dropdown: model,
+                location_options: Vec::new(),
                 prev_rectangle: Default::default(),
                 outputs: Default::default(),
                 active_output: Default::default(),

@@ -20,7 +20,7 @@ use zbus::zvariant;
 use crate::app::{CosmicPortal, OutputState};
 use crate::wayland::WaylandHelper;
 use crate::widget::rectangle_selection::DragState;
-use crate::{subscription, PortalResponse};
+use crate::{fl, subscription, PortalResponse};
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
 #[derive(Clone)]
@@ -289,7 +289,7 @@ pub enum Msg {
     OutputChanged(WlOutput),
     DragCommand(DndCommand),
     WindowChosen(String, usize),
-    Location(ImageSaveLocation),
+    Location(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -462,7 +462,8 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         Msg::DragCommand,
         &args.toplevel_images,
         Msg::WindowChosen,
-        &portal.screenshot_save_dropdown,
+        &portal.location_options,
+        args.location as usize,
         Msg::Location,
     )
     .into()
@@ -632,8 +633,16 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         }
         Msg::Location(loc) => {
             if let Some(args) = portal.screenshot_args.as_mut() {
-                portal.screenshot_save_dropdown.selected = Some(loc);
-                args.location = portal.screenshot_save_dropdown.selected.unwrap_or_default();
+                let loc = match loc {
+                    loc if loc == ImageSaveLocation::Pictures as usize => {
+                        ImageSaveLocation::Pictures
+                    }
+                    loc if loc == ImageSaveLocation::Documents as usize => {
+                        ImageSaveLocation::Documents
+                    }
+                    _ => args.location,
+                };
+                args.location = loc;
             }
             cosmic::Command::none()
         }
@@ -678,6 +687,7 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                     }));
                 }
             }
+            portal.location_options = vec![fl!("save-to", "pictures"), fl!("save-to", "documents")];
 
             if portal.screenshot_args.replace(args).is_none() {
                 // iterate over outputs and create a layer surface for each
