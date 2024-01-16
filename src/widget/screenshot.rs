@@ -4,16 +4,13 @@ use ::image::{EncodableLayout, RgbaImage};
 use cosmic::{
     iced::window,
     iced_core::{
-        gradient::Linear, layout, widget::Tree, Background, ContentFit, Degrees, Layout, Length,
-        Point, Size,
+        gradient::Linear, layout, overlay, widget::Tree, Background, ContentFit, Degrees, Layout,
+        Length, Point, Size,
     },
-    iced_widget::{canvas::Path, row},
+    iced_widget::row,
     widget::{
-        button,
-        cosmic_container::container,
-        divider::vertical,
-        dropdown::{self, multi::dropdown},
-        horizontal_space, icon, image, text, Row,
+        button, cosmic_container::container, divider::vertical, dropdown, horizontal_space, icon,
+        image, text, Row,
     },
     Element,
 };
@@ -23,7 +20,7 @@ use wayland_client::protocol::wl_output::WlOutput;
 use crate::{
     app::OutputState,
     fl,
-    screenshot::{Choice, DndCommand, ImageSaveLocation, Rect},
+    screenshot::{Choice, DndCommand, Rect},
 };
 
 use super::{
@@ -88,8 +85,9 @@ where
         on_drag_cmd_produced: impl Fn(DndCommand) -> Msg + 'static,
         toplevel_images: &HashMap<String, Vec<Arc<RgbaImage>>>,
         toplevel_chosen: impl Fn(String, usize) -> Msg,
-        model: &'a dropdown::multi::Model<String, crate::screenshot::ImageSaveLocation>,
-        dropdown_selected: impl Fn(ImageSaveLocation) -> Msg + 'static + Clone,
+        save_locations: &'a Vec<String>,
+        selected_save_location: usize,
+        dropdown_selected: impl Fn(usize) -> Msg + 'static + Clone,
     ) -> Self {
         // TODO: use theme spacing
         let space_l = 16.0;
@@ -290,7 +288,11 @@ where
                     vertical::light().height(Length::Fixed(64.0)),
                     button(text(fl!("capture"))).on_press(on_capture),
                     vertical::light().height(Length::Fixed(64.0)),
-                    dropdown(model, dropdown_selected),
+                    dropdown(
+                        save_locations.as_slice(),
+                        Some(selected_save_location),
+                        dropdown_selected
+                    ),
                     vertical::light().height(Length::Fixed(64.0)),
                     button(
                         icon::Icon::from(icon::from_name("window-close-symbolic").size(63))
@@ -325,6 +327,28 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
             &mut self.fg_element,
             &mut self.menu_element,
         ])
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        state: &'b mut Tree,
+        layout: Layout<'_>,
+        renderer: &cosmic::Renderer,
+    ) -> Option<cosmic::iced_core::overlay::Element<'b, Msg, cosmic::Renderer>> {
+        let children = [
+            &mut self.bg_element,
+            &mut self.fg_element,
+            &mut self.menu_element,
+        ]
+        .into_iter()
+        .zip(&mut state.children)
+        .zip(layout.children())
+        .filter_map(|((child, state), layout)| {
+            child.as_widget_mut().overlay(state, layout, renderer)
+        })
+        .collect::<Vec<_>>();
+
+        (!children.is_empty()).then(|| overlay::Group::with_children(children).overlay())
     }
 
     fn on_event(
