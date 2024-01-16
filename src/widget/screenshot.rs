@@ -298,13 +298,22 @@ where
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
                     )
+                    .style(cosmic::theme::Button::Icon)
                     .on_press(on_cancel),
                 ]
                 .align_items(cosmic::iced_core::Alignment::Center)
                 .spacing(space_s)
                 .padding([space_xxs, space_s, space_xxs, space_s]),
             )
-            .style(cosmic::theme::Container::Background)
+            .style(cosmic::theme::Container::Custom(Box::new(|theme| {
+                let theme = theme.cosmic();
+                cosmic::iced_style::container::Appearance {
+                    background: Some(Background::Color(theme.background.component.base.into())),
+                    text_color: Some(theme.background.component.on.into()),
+                    border_radius: theme.corner_radii.radius_s.into(),
+                    ..Default::default()
+                }
+            })))
             .into(),
             choice,
         }
