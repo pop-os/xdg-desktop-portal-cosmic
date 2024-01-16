@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use cosmic::{
-    cosmic_theme::palette::white_point::C,
     iced::{mouse, wayland::actions::data_device::DataFromMimeType},
     iced_core::{
         self,
@@ -14,6 +13,7 @@ use cosmic::{
         Color, Length, Point, Rectangle, Renderer, Size,
     },
     iced_runtime::command::platform_specific::wayland::data_device::ActionInner,
+    iced_widget::graphics::color::pack,
     widget::Widget,
 };
 use wayland_client::protocol::wl_data_device_manager::DndAction;
@@ -486,7 +486,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
         };
         #[cfg(feature = "wgpu")]
         {
-            use iced_widget::graphics::{
+            use cosmic::iced_widget::graphics::{
                 color::Packed,
                 mesh::{Indexed, SolidVertex2D},
                 Mesh,
@@ -496,6 +496,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
 
             let outer_bottom_right = (outer_size.width, outer_size.height);
             let inner_top_left = (inner_rect.x, inner_rect.y);
+            let outer_top_left = (outer_rect.x, outer_rect.y);
             let inner_bottom_right = (
                 inner_rect.x + inner_rect.width,
                 inner_rect.y + inner_rect.height,
@@ -529,7 +530,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
                         .into_iter()
                         .map(|v| SolidVertex2D {
                             position: [v.0, v.1],
-                            color: iced_graphics::color::pack(overlay),
+                            color: pack(overlay),
                         })
                         .collect(),
                     indices,

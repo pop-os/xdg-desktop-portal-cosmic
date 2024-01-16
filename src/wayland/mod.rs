@@ -1,4 +1,3 @@
-use cosmic::cosmic_theme::palette::stimulus::IntoStimulus;
 use cosmic_client_toolkit::{
     cosmic_protocols::screencopy::v1::client::{
         zcosmic_screencopy_manager_v1, zcosmic_screencopy_session_v1,
@@ -21,13 +20,10 @@ use cosmic_protocols::{
     toplevel_info::v1::client::zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1,
     workspace::v1::client::zcosmic_workspace_handle_v1,
 };
-use image::imageops::interpolate_nearest;
-use rustix::fd::{self, FromRawFd, RawFd};
+use rustix::fd::{FromRawFd, RawFd};
 use std::{
     collections::HashMap,
-    env, fs,
-    hash::Hash,
-    io::{self, Write},
+    env, fs, io,
     os::{
         fd::{AsFd, OwnedFd},
         unix::{fs::MetadataExt, net::UnixStream},

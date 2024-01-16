@@ -6,7 +6,6 @@ use cosmic::{
     iced::window,
     iced_futures::{event::listen_with, Subscription},
 };
-use rustix::event::epoll::create;
 use wayland_client::protocol::wl_output::WlOutput;
 
 pub(crate) fn run() -> cosmic::iced::Result {
