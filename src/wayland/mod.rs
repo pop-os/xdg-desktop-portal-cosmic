@@ -25,7 +25,7 @@ use image::imageops::interpolate_nearest;
 use rustix::fd::{self, FromRawFd, RawFd};
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     hash::Hash,
     io::{self, Write},
     os::{
@@ -696,7 +696,26 @@ pub fn connect_to_wayland() -> wayland_client::Connection {
     let portal_socket = std::env::var("PORTAL_WAYLAND_SOCKET")
         .ok()
         .and_then(|x| x.parse::<RawFd>().ok())
-        .map(|fd| unsafe { UnixStream::from_raw_fd(fd) })
+        .and_then(|fd| {
+            env::remove_var("PORTAL_WAYLAND_SOCKET");
+            let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+            // set the CLOEXEC flag on this FD
+            let mut flags = rustix::io::fcntl_getfd(&fd).ok()?;
+            flags.insert(rustix::io::FdFlags::CLOEXEC);
+            let result = rustix::io::fcntl_setfd(&fd, flags);
+            match result {
+                Ok(_) => {
+                    // setting the O_CLOEXEC worked
+                    Some(UnixStream::from(fd))
+                }
+                Err(_) => {
+                    // something went wrong in F_GETFD or F_SETFD
+                    drop(fd);
+                    log::error!("Failed to set CLOEXEC on portal socket");
+                    return None;
+                }
+            }
+        })
         .expect("Failed to connect to PORTAL_WAYLAND_SOCKET");
 
     wayland_client::Connection::from_socket(portal_socket).unwrap_or_else(|err| {
