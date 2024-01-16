@@ -679,32 +679,35 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                 }
             }
 
-            // iterate over outputs and create a layer surface for each
-            let cmds: Vec<_> = portal
-                .outputs
-                .iter()
-                .filter_map(
-                    |OutputState {
-                         output, id, name, ..
-                     }| {
-                        Some(get_layer_surface(SctkLayerSurfaceSettings {
-                            id: *id,
-                            layer: Layer::Overlay,
-                            keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                            pointer_interactivity: true,
-                            anchor: Anchor::all(),
-                            output: IcedOutput::Output(output.clone()),
-                            namespace: "screenshot".to_string(),
-                            size: Some((None, None)),
-                            exclusive_zone: -1,
-                            size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
-                            ..Default::default()
-                        }))
-                    },
-                )
-                .collect();
-            portal.screenshot_args = Some(args);
-            cosmic::Command::batch(cmds)
+            if portal.screenshot_args.replace(args).is_none() {
+                // iterate over outputs and create a layer surface for each
+                let cmds: Vec<_> = portal
+                    .outputs
+                    .iter()
+                    .filter_map(
+                        |OutputState {
+                             output, id, name, ..
+                         }| {
+                            Some(get_layer_surface(SctkLayerSurfaceSettings {
+                                id: *id,
+                                layer: Layer::Overlay,
+                                keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                                pointer_interactivity: true,
+                                anchor: Anchor::all(),
+                                output: IcedOutput::Output(output.clone()),
+                                namespace: "screenshot".to_string(),
+                                size: Some((None, None)),
+                                exclusive_zone: -1,
+                                size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
+                                ..Default::default()
+                            }))
+                        },
+                    )
+                    .collect();
+                cosmic::Command::batch(cmds)
+            } else {
+                cosmic::Command::none()
+            }
         }
     }
 }
