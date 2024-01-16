@@ -1,7 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
 use cosmic::cosmic_config::CosmicConfigEntry;
-use cosmic::cosmic_theme::composite::over;
 use cosmic::iced::wayland::actions::data_device::ActionInner;
 use cosmic::iced::wayland::actions::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::{window, Limits};
@@ -489,7 +488,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             let image_path = if let Some(location) = Screenshot::get_img_path(location) {
                 location
             } else {
-                tx.try_send(PortalResponse::Other).unwrap_or_default();
+                tokio::spawn(async move {
+                    if let Err(err) = tx.send(PortalResponse::Other).await {
+                        log::error!("Failed to send screenshot event");
+                    }
+                });
                 return cosmic::Command::batch(cmds);
             };
 
@@ -573,9 +576,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 PortalResponse::Other
             };
 
-            if let Err(err) = tx.try_send(response) {
-                log::error!("Failed to send screenshot event");
-            }
+            tokio::spawn(async move {
+                if let Err(err) = tx.send(response).await {
+                    log::error!("Failed to send screenshot event");
+                }
+            });
             cosmic::Command::batch(cmds)
         }
         Msg::Cancel => {
@@ -588,7 +593,6 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 if let Err(err) = tx.send(PortalResponse::Cancelled).await {
                     log::error!("Failed to send screenshot event");
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             });
 
             cosmic::Command::batch(cmds)
