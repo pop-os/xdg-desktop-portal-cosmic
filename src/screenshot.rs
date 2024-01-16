@@ -450,6 +450,7 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
     let Some(raw_image) = args.output_images.get(&output.name) else {
         return horizontal_space(Length::Fixed(1.0)).into();
     };
+    let theme = portal.core.system_theme().cosmic();
     crate::widget::screenshot::ScreenshotSelection::new(
         args.choice.clone(),
         raw_image.clone(),
@@ -465,6 +466,7 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         &portal.location_options,
         args.location as usize,
         Msg::Location,
+        theme.spacing,
     )
     .into()
 }
