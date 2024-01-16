@@ -65,27 +65,33 @@ pub enum State {
     Waiting(Connection, Receiver<Event>),
 }
 
-pub(crate) fn portal_subscription() -> cosmic::iced::Subscription<Event> {
-    subscription::channel(TypeId::of::<Event>(), 10, |mut output| async move {
-        let mut state = State::Init;
-        loop {
-            if let Err(err) = process_changes(&mut state, &mut output).await {
-                log::debug!("Portal Subscription Error: {:?}", err);
-                future::pending::<()>().await;
+pub(crate) fn portal_subscription(
+    helper: wayland::WaylandHelper,
+) -> cosmic::iced::Subscription<Event> {
+    struct PortalSubscription;
+    subscription::channel(
+        TypeId::of::<PortalSubscription>(),
+        10,
+        |mut output| async move {
+            let mut state = State::Init;
+            loop {
+                if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
+                    log::debug!("Portal Subscription Error: {:?}", err);
+                    future::pending::<()>().await;
+                }
             }
-        }
-    })
+        },
+    )
 }
 
 pub(crate) async fn process_changes(
     state: &mut State,
     output: &mut futures::channel::mpsc::Sender<Event>,
+    wayland_helper: &wayland::WaylandHelper,
 ) -> anyhow::Result<()> {
     match state {
         State::Init => {
             let (tx, rx) = tokio::sync::mpsc::channel(10);
-            let wayland_connection = wayland::connect_to_wayland();
-            let wayland_helper = wayland::WaylandHelper::new(wayland_connection);
 
             let connection = zbus::ConnectionBuilder::session()?
                 .name(DBUS_NAME)?
@@ -94,7 +100,7 @@ pub(crate) async fn process_changes(
                     DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
                 )?
-                .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper))?
+                .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper.clone()))?
                 .build()
                 .await?;
             *state = State::Waiting(connection, rx);

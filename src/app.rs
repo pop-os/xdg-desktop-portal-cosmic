@@ -6,6 +6,7 @@ use cosmic::{
     iced::window,
     iced_futures::{event::listen_with, Subscription},
 };
+use rustix::event::epoll::create;
 use wayland_client::protocol::wl_output::WlOutput;
 
 pub(crate) fn run() -> cosmic::iced::Result {
@@ -25,6 +26,7 @@ pub struct CosmicPortal {
     pub screenshot_args: Option<screenshot::Args>,
     pub location_options: Vec<String>,
     pub prev_rectangle: Option<screenshot::Rect>,
+    pub wayland_helper: crate::wayland::WaylandHelper,
 
     pub outputs: Vec<OutputState>,
     pub active_output: Option<WlOutput>,
@@ -85,6 +87,8 @@ impl cosmic::Application for CosmicPortal {
             ],
         ));
         model.selected = Some(screenshot::ImageSaveLocation::default());
+        let wayland_conn = crate::wayland::connect_to_wayland();
+        let wayland_helper = crate::wayland::WaylandHelper::new(wayland_conn);
         (
             Self {
                 core,
@@ -95,6 +99,7 @@ impl cosmic::Application for CosmicPortal {
                 prev_rectangle: Default::default(),
                 outputs: Default::default(),
                 active_output: Default::default(),
+                wayland_helper,
             },
             cosmic::iced::Command::none(),
         )
@@ -192,7 +197,7 @@ impl cosmic::Application for CosmicPortal {
 
     fn subscription(&self) -> cosmic::iced_futures::Subscription<Self::Message> {
         Subscription::batch(vec![
-            subscription::portal_subscription().map(|e| Msg::Portal(e)),
+            subscription::portal_subscription(self.wayland_helper.clone()).map(|e| Msg::Portal(e)),
             listen_with(|e, _| match e {
                 cosmic::iced_core::Event::PlatformSpecific(
                     cosmic::iced_core::event::PlatformSpecific::Wayland(w_e),
