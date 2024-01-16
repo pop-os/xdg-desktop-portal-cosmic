@@ -702,18 +702,12 @@ pub fn connect_to_wayland() -> wayland_client::Connection {
             // set the CLOEXEC flag on this FD
             let mut flags = rustix::io::fcntl_getfd(&fd).ok()?;
             flags.insert(rustix::io::FdFlags::CLOEXEC);
-            let result = rustix::io::fcntl_setfd(&fd, flags);
-            match result {
-                Ok(_) => {
-                    // setting the O_CLOEXEC worked
-                    Some(UnixStream::from(fd))
-                }
-                Err(_) => {
-                    // something went wrong in F_GETFD or F_SETFD
-                    drop(fd);
-                    log::error!("Failed to set CLOEXEC on portal socket");
-                    return None;
-                }
+            if let Err(err) = rustix::io::fcntl_setfd(&fd, flags) {
+                drop(fd);
+                log::error!("Failed to set CLOEXEC on portal socket: {}", err);
+                return None;
+            } else {
+                Some(UnixStream::from(fd))
             }
         })
         .expect("Failed to connect to PORTAL_WAYLAND_SOCKET");
