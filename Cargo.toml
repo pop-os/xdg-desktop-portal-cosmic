@@ -11,8 +11,8 @@ wgpu = ["libcosmic/wgpu"]
 anyhow = "1.0.60"
 # ashpd = "0.4.0"
 ashpd = { git = "https://github.com/bilelmoussaoui/ashpd" }
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c1b6516" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c1b6516" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e65fa5e" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e65fa5e" }
 futures = "0.3"
 image = "0.24"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = ["wayland", "tokio", "dbus-config"] }
@@ -43,6 +43,7 @@ rust-embed = "8.2.0"
 
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
 
 # [patch."https://github.com/smithay/client-toolkit"]
 # smithay-client-toolkit = { path = "../fork/client-toolkit" }
