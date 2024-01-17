@@ -13,7 +13,6 @@ use cosmic::{
         Color, Length, Point, Rectangle, Renderer, Size,
     },
     iced_runtime::command::platform_specific::wayland::data_device::ActionInner,
-    iced_widget::graphics::color::pack,
     widget::Widget,
 };
 use wayland_client::protocol::wl_data_device_manager::DndAction;
@@ -487,7 +486,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
         #[cfg(feature = "wgpu")]
         {
             use cosmic::iced_widget::graphics::{
-                color::Packed,
+                color::{pack, Packed},
                 mesh::{Indexed, SolidVertex2D},
                 Mesh,
             };
