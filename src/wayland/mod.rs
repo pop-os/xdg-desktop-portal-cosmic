@@ -130,8 +130,8 @@ impl AppData {
                             info.workspace
                                 .iter()
                                 .any(|x| {
-                                    x != &w.handle
-                                        || !w.state.contains(&WEnum::Value(
+                                    x == &w.handle
+                                        && w.state.contains(&WEnum::Value(
                                             zcosmic_workspace_handle_v1::State::Active,
                                         ))
                                 })
