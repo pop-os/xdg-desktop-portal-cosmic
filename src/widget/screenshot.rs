@@ -5,8 +5,8 @@ use cosmic::{
     cosmic_theme::Spacing,
     iced::window,
     iced_core::{
-        gradient::Linear, layout, overlay, widget::Tree, Background, ContentFit, Degrees, Layout,
-        Length, Point, Size,
+        alignment, gradient::Linear, layout, overlay, widget::Tree, Background, ContentFit,
+        Degrees, Layout, Length, Point, Size,
     },
     iced_widget::row,
     widget::{
@@ -125,16 +125,19 @@ where
                     .into_iter()
                     .enumerate()
                     .map(|(i, img)| {
-                        cosmic::widget::button(
-                            image::Image::new(image::Handle::from_pixels(
-                                img.width(),
-                                img.height(),
-                                MyImage(img),
-                            ))
-                            .content_fit(ContentFit::ScaleDown),
+                        container(
+                            cosmic::widget::button(
+                                image::Image::new(image::Handle::from_pixels(
+                                    img.width(),
+                                    img.height(),
+                                    MyImage(img),
+                                ))
+                                .content_fit(ContentFit::ScaleDown),
+                            )
+                            .on_press(toplevel_chosen(output.name.clone(), i))
+                            .style(cosmic::theme::Button::Image),
                         )
-                        .on_press(toplevel_chosen(output.name.clone(), i))
-                        .style(cosmic::theme::Button::Image)
+                        .align_x(alignment::Horizontal::Center)
                         .width(Length::FillPortion(1))
                         .into()
                     })
@@ -142,11 +145,12 @@ where
                 container(
                     Row::with_children(img_buttons)
                         .spacing(space_l)
-                        .align_items(cosmic::iced_core::Alignment::Center)
+                        .width(Length::Shrink)
+                        .align_items(alignment::Alignment::Center)
                         .padding(space_l),
                 )
-                .align_x(cosmic::iced_core::alignment::Horizontal::Center)
-                .align_y(cosmic::iced_core::alignment::Vertical::Center)
+                .align_x(alignment::Horizontal::Center)
+                .align_y(alignment::Vertical::Center)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
