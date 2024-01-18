@@ -135,6 +135,7 @@ where
                         )
                         .on_press(toplevel_chosen(output.name.clone(), i))
                         .style(cosmic::theme::Button::Image)
+                        .width(Length::FillPortion(1))
                         .into()
                     })
                     .collect();
