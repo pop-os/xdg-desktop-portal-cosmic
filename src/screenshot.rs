@@ -476,6 +476,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         Msg::Capture => {
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
             let Some(args) = portal.screenshot_args.take() else {
+                log::error!("Failed to find screenshot Args for Capture message.");
                 return cosmic::Command::batch(cmds);
             };
             let outputs = portal.outputs.clone();
@@ -589,6 +590,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         Msg::Cancel => {
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
             let Some(args) = portal.screenshot_args.take() else {
+                log::error!("Failed to find screenshot Args for Cancel message.");
                 return cosmic::Command::batch(cmds);
             };
             let Args { tx, .. } = args;
@@ -606,6 +608,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 if let Choice::Rectangle(r, s) = &args.choice {
                     portal.prev_rectangle = Some(*r);
                 }
+            } else {
+                log::error!("Failed to find screenshot Args for Choice message.");
             }
             cosmic::Command::none()
         }
@@ -619,6 +623,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     .map(|o| o.name.clone()),
             ) {
                 args.choice = Choice::Output(o);
+            } else {
+                log::error!(
+                    "Failed to find output for OutputChange message: {:?}",
+                    wl_output
+                );
             }
             portal.active_output = Some(wl_output);
             cosmic::Command::none()
@@ -630,6 +639,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         Msg::WindowChosen(name, i) => {
             if let Some(args) = portal.screenshot_args.as_mut() {
                 args.choice = Choice::Window(name, Some(i));
+            } else {
+                log::error!("Failed to find screenshot Args for WindowChosen message.");
             }
             update_msg(portal, Msg::Capture)
         }
@@ -645,6 +656,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     _ => args.location,
                 };
                 args.location = loc;
+            } else {
+                log::error!("Failed to find screenshot Args for Location message.");
             }
             cosmic::Command::none()
         }
@@ -667,6 +680,17 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                 toplevel_images,
             } = &args;
 
+            if portal.outputs.len() != images.len() {
+                log::error!(
+                    "Screenshot output count mismatch: {} != {}",
+                    portal.outputs.len(),
+                    images.len()
+                );
+                log::warn!("Screenshot outputs: {:?}", portal.outputs);
+                log::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
+                return cosmic::Command::none();
+            }
+
             // update output bg sources
             if let Ok(c) = cosmic::cosmic_config::Config::new_state(
                 cosmic_bg_config::NAME,
@@ -687,6 +711,13 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                                 .into(),
                         )
                     }));
+                }
+            } else {
+                log::error!("Failed to get bg config state");
+                for o in &mut portal.outputs {
+                    o.bg_source = Some(cosmic_bg_config::Source::Path(
+                        "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
+                    ));
                 }
             }
             portal.location_options = vec![fl!("save-to", "pictures"), fl!("save-to", "documents")];
@@ -718,6 +749,7 @@ pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crat
                     .collect();
                 cosmic::Command::batch(cmds)
             } else {
+                log::info!("Existing screenshot args updated");
                 cosmic::Command::none()
             }
         }
