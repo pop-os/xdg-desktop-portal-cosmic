@@ -121,10 +121,14 @@ where
                     .get(&output.name)
                     .cloned()
                     .unwrap_or_default();
+                let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
+
                 let img_buttons = imgs
                     .into_iter()
                     .enumerate()
                     .map(|(i, img)| {
+                        let portion =
+                            (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
                         container(
                             cosmic::widget::button(
                                 image::Image::new(image::Handle::from_pixels(
@@ -138,7 +142,7 @@ where
                             .style(cosmic::theme::Button::Image),
                         )
                         .align_x(alignment::Horizontal::Center)
-                        .width(Length::FillPortion(1))
+                        .width(Length::FillPortion(portion as u16))
                         .into()
                     })
                     .collect();
