@@ -194,6 +194,7 @@ impl Session {
     }
 }
 
+#[derive(Debug)]
 pub enum CaptureSource<'a> {
     Output(&'a wl_output::WlOutput),
     Toplevel(&'a ZcosmicToplevelHandleV1),
@@ -351,7 +352,8 @@ impl WaylandHelper {
             x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
                 && x.format == wl_shm::Format::Abgr8888.into()
         }) else {
-            log::error!("No suitable buffer format found");
+            log::error!("No suitable buffer format found for {source:?}");
+            log::warn!("Available formats: {:#?}", buffer_infos);
             return None;
         };
 
