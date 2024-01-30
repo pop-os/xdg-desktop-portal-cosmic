@@ -167,6 +167,20 @@ impl cosmic::Application for CosmicPortal {
                                 .map(|(w, h)| (w as u32, h as u32))
                                 .unwrap();
                             state.logical_pos = info.logical_position.unwrap();
+                        } else {
+                            log::warn!("Updated output {:?} not found", wl_output);
+                            self.outputs.push(OutputState {
+                                output: wl_output,
+                                id: window::Id::unique(),
+                                name: info.name.unwrap(),
+                                logical_size: info
+                                    .logical_size
+                                    .map(|(w, h)| (w as u32, h as u32))
+                                    .unwrap(),
+                                logical_pos: info.logical_position.unwrap(),
+                                has_pointer: false,
+                                bg_source: None,
+                            });
                         }
                     }
                     e => {
