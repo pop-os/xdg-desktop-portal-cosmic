@@ -347,13 +347,13 @@ impl WaylandHelper {
             .unwrap();
 
         // XXX
-        let buffer_info = buffer_infos
-            .iter()
-            .find(|x| {
-                x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
-                    && x.format == wl_shm::Format::Abgr8888.into()
-            })
-            .unwrap();
+        let Some(buffer_info) = buffer_infos.iter().find(|x| {
+            x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
+                && x.format == wl_shm::Format::Abgr8888.into()
+        }) else {
+            log::error!("No suitable buffer format found");
+            return None;
+        };
 
         let buf_len = buffer_info.stride * buffer_info.height;
         if let Some(len) = len {
