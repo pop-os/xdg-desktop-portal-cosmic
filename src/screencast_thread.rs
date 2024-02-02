@@ -246,16 +246,13 @@ fn start_stream(
     wayland_helper: WaylandHelper,
     output: wl_output::WlOutput,
     overlay_cursor: bool,
-) -> Result<
-    (
-        pipewire::main_loop::MainLoop,
-        pipewire::stream::Stream,
-        pipewire::stream::StreamListener<StreamData>,
-        pipewire::context::Context,
-        oneshot::Receiver<anyhow::Result<u32>>,
-    ),
-    pipewire::Error,
-> {
+) -> anyhow::Result<(
+    pipewire::main_loop::MainLoop,
+    pipewire::stream::Stream,
+    pipewire::stream::StreamListener<StreamData>,
+    pipewire::context::Context,
+    oneshot::Receiver<anyhow::Result<u32>>,
+)> {
     let loop_ = pipewire::main_loop::MainLoop::new(None)?;
     let context = pipewire::context::Context::new(&loop_)?;
     let core = context.connect(None)?;
@@ -266,7 +263,7 @@ fn start_stream(
 
     let (width, height) = match wayland_helper.capture_output_shm(&output, overlay_cursor) {
         Some(frame) => (frame.width, frame.height),
-        None => (0, 0), // XXX
+        None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
     };
 
     let dmabuf_helper = wayland_helper.dmabuf();
