@@ -43,7 +43,7 @@ impl ScreencastThread {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
-                    let _receiver = thread_stop_rx.attach(&loop_, move |()| {
+                    let _receiver = thread_stop_rx.attach(loop_.loop_(), move |()| {
                         weak_loop.upgrade().unwrap().quit();
                     });
                     loop_.run();
@@ -256,7 +256,7 @@ fn start_stream(
     ),
     pipewire::Error,
 > {
-    let loop_ = pipewire::main_loop::MainLoop::new()?;
+    let loop_ = pipewire::main_loop::MainLoop::new(None)?;
     let context = pipewire::context::Context::new(&loop_)?;
     let core = context.connect(None)?;
 

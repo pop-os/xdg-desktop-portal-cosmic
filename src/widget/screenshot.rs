@@ -5,7 +5,7 @@ use cosmic::{
     cosmic_theme::Spacing,
     iced::window,
     iced_core::{
-        alignment, gradient::Linear, layout, overlay, widget::Tree, Background, ContentFit,
+        alignment, gradient::Linear, layout, overlay, widget::Tree, Background, Border, ContentFit,
         Degrees, Layout, Length, Point, Size,
     },
     iced_widget::row,
@@ -123,33 +123,30 @@ where
                     .unwrap_or_default();
                 let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
 
-                let img_buttons = imgs
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, img)| {
-                        let portion =
-                            (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
-                        container(
-                            cosmic::widget::button(
-                                image::Image::new(image::Handle::from_pixels(
-                                    img.width(),
-                                    img.height(),
-                                    MyImage(img),
-                                ))
-                                .content_fit(ContentFit::ScaleDown),
-                            )
-                            .on_press(toplevel_chosen(output.name.clone(), i))
-                            .style(cosmic::theme::Button::Image),
+                let img_buttons = imgs.into_iter().enumerate().map(|(i, img)| {
+                    let portion =
+                        (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
+                    container(
+                        cosmic::widget::button(
+                            image::Image::new(image::Handle::from_pixels(
+                                img.width(),
+                                img.height(),
+                                MyImage(img),
+                            ))
+                            .content_fit(ContentFit::ScaleDown),
                         )
-                        .align_x(alignment::Horizontal::Center)
-                        .width(Length::FillPortion(portion as u16))
-                        .into()
-                    })
-                    .collect();
+                        .on_press(toplevel_chosen(output.name.clone(), i))
+                        .style(cosmic::theme::Button::Image),
+                    )
+                    .align_x(alignment::Horizontal::Center)
+                    .width(Length::FillPortion(portion as u16))
+                    .height(Length::Shrink)
+                    .into()
+                });
                 container(
                     Row::with_children(img_buttons)
                         .spacing(space_l)
-                        .width(Length::Shrink)
+                        .width(Length::Fill)
                         .align_items(alignment::Alignment::Center)
                         .padding(space_l),
                 )
@@ -319,7 +316,10 @@ where
                 cosmic::iced_style::container::Appearance {
                     background: Some(Background::Color(theme.background.component.base.into())),
                     text_color: Some(theme.background.component.on.into()),
-                    border_radius: theme.corner_radii.radius_s.into(),
+                    border: Border {
+                        radius: theme.corner_radii.radius_s.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }
             })))
@@ -329,7 +329,9 @@ where
     }
 }
 
-impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelection<'a, Msg> {
+impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
+    for ScreenshotSelection<'a, Msg>
+{
     fn children(&self) -> Vec<cosmic::iced_core::widget::Tree> {
         vec![
             Tree::new(&self.bg_element),
@@ -351,7 +353,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
         state: &'b mut Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
-    ) -> Option<cosmic::iced_core::overlay::Element<'b, Msg, cosmic::Renderer>> {
+    ) -> Option<cosmic::iced_core::overlay::Element<'b, Msg, cosmic::Theme, cosmic::Renderer>> {
         let children = [
             &mut self.bg_element,
             &mut self.fg_element,
@@ -473,12 +475,8 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
         self.id = _id;
     }
 
-    fn width(&self) -> Length {
-        Length::Fill
-    }
-
-    fn height(&self) -> Length {
-        Length::Fill
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
     }
 
     fn layout(
@@ -502,13 +500,13 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Renderer> for ScreenshotSelect
                 .as_widget()
                 .layout(&mut children[2], renderer, limits);
         let menu_bounds = menu_node.bounds();
-        menu_node.move_to(Point {
+        menu_node = menu_node.move_to(Point {
             x: (limits.max().width - menu_bounds.width) / 2.0,
             y: limits.max().height - menu_bounds.height - 32.0,
         });
 
         layout::Node::with_children(
-            limits.resolve(Size::ZERO),
+            limits.resolve(Length::Fill, Length::Fill, Size::ZERO),
             vec![bg_node, fg_node, menu_node],
         )
     }

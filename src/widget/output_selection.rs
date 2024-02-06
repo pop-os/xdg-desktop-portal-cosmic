@@ -8,7 +8,7 @@ use cosmic::{
             tree::{self, State},
             Tree,
         },
-        Background, Color, Length, Renderer, Size,
+        Background, Border, Color, Length, Renderer, Shadow, Size,
     },
     widget::Widget,
 };
@@ -24,13 +24,9 @@ impl<Msg> OutputSelection<Msg> {
     }
 }
 
-impl<Msg: Clone + 'static> Widget<Msg, cosmic::Renderer> for OutputSelection<Msg> {
-    fn width(&self) -> Length {
-        Length::Fill
-    }
-
-    fn height(&self) -> Length {
-        Length::Fill
+impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for OutputSelection<Msg> {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
     }
 
     fn state(&self) -> cosmic::iced_core::widget::tree::State {
@@ -43,14 +39,14 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Renderer> for OutputSelection<Msg
 
     fn layout(&self, _tree: &mut Tree, _renderer: &cosmic::Renderer, limits: &Limits) -> Node {
         let limits = limits.width(Length::Fill).height(Length::Fill);
-        Node::new(limits.resolve(Size::ZERO))
+        Node::new(limits.resolve(Length::Fill, Length::Fill, Size::ZERO))
     }
 
     fn draw(
         &self,
         tree: &Tree,
         renderer: &mut cosmic::Renderer,
-        theme: &<cosmic::Renderer as cosmic::iced_core::Renderer>::Theme,
+        theme: &cosmic::Theme,
         _style: &cosmic::iced_core::renderer::Style,
         layout: cosmic::iced_core::Layout<'_>,
         _cursor: cosmic::iced_core::mouse::Cursor,
@@ -74,9 +70,12 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Renderer> for OutputSelection<Msg
         renderer.fill_quad(
             Quad {
                 bounds,
-                border_radius: radius_s.into(),
-                border_width: 12.0,
-                border_color: accent,
+                border: Border {
+                    radius: radius_s.into(),
+                    width: 12.0,
+                    color: accent,
+                },
+                shadow: Shadow::default(),
             },
             Background::Color(Color::TRANSPARENT),
         );
@@ -86,9 +85,12 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Renderer> for OutputSelection<Msg
         renderer.fill_quad(
             Quad {
                 bounds,
-                border_radius: radius_s.into(),
-                border_width: 4.0,
-                border_color: accent,
+                border: Border {
+                    radius: radius_s.into(),
+                    width: 4.0,
+                    color: accent,
+                },
+                ..Default::default()
             },
             Background::Color(Color::TRANSPARENT),
         );

@@ -1,5 +1,7 @@
 use crate::{access, fl, screenshot, subscription};
+use cosmic::iced::keyboard;
 use cosmic::iced_core::event::wayland::OutputEvent;
+use cosmic::iced_core::keyboard::key::Named;
 use cosmic::widget::dropdown;
 use cosmic::{
     app,
@@ -222,7 +224,7 @@ impl cosmic::Application for CosmicPortal {
                 },
                 cosmic::iced_core::Event::Keyboard(
                     cosmic::iced_core::keyboard::Event::KeyPressed {
-                        key_code: cosmic::iced_core::keyboard::KeyCode::Escape,
+                        key: keyboard::Key::Named(Named::Escape),
                         ..
                     },
                 ) => Some(Msg::Screenshot(screenshot::Msg::Cancel)),
