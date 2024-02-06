@@ -584,6 +584,7 @@ impl ScreencopyHandler for AppData {
         Session::for_session(session).unwrap().update(|data| {
             data.res = Some(Ok(()));
         });
+        session.destroy();
     }
 
     fn failed(
@@ -597,6 +598,7 @@ impl ScreencopyHandler for AppData {
         Session::for_session(session).unwrap().update(|data| {
             data.res = Some(Err(reason));
         });
+        session.destroy();
     }
 }
 
