@@ -10,7 +10,7 @@ use cosmic::{
         },
         layout::Node,
         renderer::Quad,
-        Color, Length, Point, Rectangle, Renderer, Size,
+        Border, Color, Length, Point, Rectangle, Renderer, Shadow, Size,
     },
     iced_runtime::command::platform_specific::wayland::data_device::ActionInner,
     widget::Widget,
@@ -286,13 +286,11 @@ impl<Msg> RectangleSelection<Msg> {
     }
 }
 
-impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<Msg> {
-    fn width(&self) -> cosmic::iced_core::Length {
-        Length::Fill
-    }
-
-    fn height(&self) -> cosmic::iced_core::Length {
-        Length::Fill
+impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
+    for RectangleSelection<Msg>
+{
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
     }
 
     fn layout(
@@ -301,12 +299,11 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
         _renderer: &cosmic::Renderer,
         limits: &cosmic::iced_core::layout::Limits,
     ) -> cosmic::iced_core::layout::Node {
-        Node::new(
-            limits
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .resolve(cosmic::iced_core::Size::ZERO),
-        )
+        Node::new(limits.width(Length::Fill).height(Length::Fill).resolve(
+            Length::Fill,
+            Length::Fill,
+            cosmic::iced_core::Size::ZERO,
+        ))
     }
 
     fn mouse_interaction(
@@ -454,7 +451,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
         &self,
         _tree: &cosmic::iced_core::widget::Tree,
         renderer: &mut cosmic::Renderer,
-        theme: &<cosmic::Renderer as cosmic::iced_core::Renderer>::Theme,
+        theme: &cosmic::Theme,
         _style: &cosmic::iced_core::renderer::Style,
         _layout: cosmic::iced_core::Layout<'_>,
         _cursor: cosmic::iced_core::mouse::Cursor,
@@ -547,9 +544,12 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
         );
         let quad = Quad {
             bounds: translated_clipped_inner_rect,
-            border_radius: 0.0.into(),
-            border_width: 4.0,
-            border_color: accent,
+            border: Border {
+                radius: 0.0.into(),
+                width: 4.0,
+                color: accent,
+            },
+            shadow: Shadow::default(),
         };
         renderer.fill_quad(quad, Color::TRANSPARENT);
 
@@ -578,9 +578,12 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Renderer> for RectangleSelection<
             );
             let quad = Quad {
                 bounds,
-                border_radius: radius_s.into(),
-                border_width: 0.0,
-                border_color: Color::TRANSPARENT,
+                border: Border {
+                    radius: radius_s.into(),
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+                shadow: Shadow::default(),
             };
             renderer.fill_quad(quad, accent);
         }
