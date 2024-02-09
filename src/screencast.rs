@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::{FuturesOrdered, StreamExt};
 use std::{
     collections::HashMap,
     mem,
@@ -160,9 +160,10 @@ impl ScreenCast {
         }
 
         let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
-        let mut res_futures = FuturesUnordered::new();
+        // Use `FuturesOrdered` so streams are in consistent order
+        let mut res_futures = FuturesOrdered::new();
         for output in outputs {
-            res_futures.push(ScreencastThread::new(
+            res_futures.push_back(ScreencastThread::new(
                 self.wayland_helper.clone(),
                 output,
                 overlay_cursor,

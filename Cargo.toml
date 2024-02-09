@@ -10,8 +10,7 @@ wgpu = ["libcosmic/wgpu"]
 
 [dependencies]
 anyhow = "1.0.60"
-# ashpd = "0.4.0"
-ashpd = { git = "https://github.com/bilelmoussaoui/ashpd" }
+ashpd = "0.6.8"
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e65fa5e" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e65fa5e" }
 futures = "0.3"
@@ -42,5 +41,14 @@ i18n-embed = { version = "0.14.1", features = ["fluent-system", "desktop-request
 i18n-embed-fl = "0.7.0"
 rust-embed = "8.2.0"
 
+[dev-dependencies]
+gst = { package = "gstreamer", version = "0.21.3" }
+
+# [patch."https://github.com/pop-os/libcosmic"]
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+
+# [patch."https://github.com/smithay/client-toolkit"]
+# smithay-client-toolkit = { path = "../fork/client-toolkit" }
 [profile.release]
 debug = true

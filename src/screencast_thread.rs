@@ -1,7 +1,9 @@
 // Thread to get frames from compositor and redirect to pipewire
 // TODO: Things other than outputs, handle disconnected output, resolution change
+// TODO use `buffer_infos` to determine supported modifiers, formats
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
+
 
 use pipewire::{
     spa::{
@@ -13,7 +15,7 @@ use pipewire::{
     sys::pw_buffer,
 };
 use std::{
-    io,
+    io, iter,
     os::fd::{BorrowedFd, IntoRawFd},
     slice,
 };
@@ -79,6 +81,45 @@ struct StreamData {
 }
 
 impl StreamData {
+    // Get driver preferred modifier, and plane count
+    fn choose_modifier(&self, modifiers: &[gbm::Modifier]) -> Option<(gbm::Modifier, u32)> {
+        let gbm = self.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
+        if modifiers.iter().all(|x| *x == gbm::Modifier::Invalid) {
+            match gbm.create_buffer_object::<()>(
+                self.width,
+                self.height,
+                gbm::Format::Abgr8888,
+                gbm::BufferObjectFlags::empty(),
+            ) {
+                Ok(bo) => Some((gbm::Modifier::Invalid, bo.plane_count().ok()?)),
+                Err(err) => {
+                    log::error!(
+                        "Failed to choose modifier by creating temporary bo: {}",
+                        err
+                    );
+                    None
+                }
+            }
+        } else {
+            match gbm.create_buffer_object_with_modifiers2::<()>(
+                self.width,
+                self.height,
+                gbm::Format::Abgr8888,
+                modifiers.iter().copied(),
+                gbm::BufferObjectFlags::empty(),
+            ) {
+                Ok(bo) => Some((bo.modifier().ok()?, bo.plane_count().ok()?)),
+                Err(err) => {
+                    log::error!(
+                        "Failed to choose modifier by creating temporary bo: {}",
+                        err
+                    );
+                    None
+                }
+            }
+        }
+    }
+
     fn state_changed(&mut self, stream: &StreamRef, old: StreamState, new: StreamState) {
         log::info!("state-changed '{:?}' -> '{:?}'", old, new);
         match new {
@@ -123,14 +164,22 @@ impl StreamData {
                             default,
                             alternatives
                         );
-                        if let Ok(modifier_val) = gbm::Modifier::try_from(*default as u64) {
-                            self.modifier = modifier_val;
+
+                        // Create temporary bo to get preferred modifier
+                        // Similar to xdg-desktop-portal-wlr
+                        let modifiers = iter::once(default)
+                            .chain(alternatives)
+                            .filter_map(|x| gbm::Modifier::try_from(*x as u64).ok())
+                            .collect::<Vec<_>>();
+                        if let Some((modifier, plane_count)) = self.choose_modifier(&modifiers) {
+                            self.modifier = modifier;
 
                             let params = params(
                                 self.width,
                                 self.height,
+                                plane_count,
                                 self.dmabuf_helper.as_ref(),
-                                Some(modifier_val),
+                                Some(modifier),
                             );
                             let mut params: Vec<_> = params
                                 .iter()
@@ -150,7 +199,6 @@ impl StreamData {
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
         // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
 
-        // TODO test multi-planar
         if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
             log::info!("Allocate dmabuf buffer");
             let gbm = self.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
@@ -246,16 +294,13 @@ fn start_stream(
     wayland_helper: WaylandHelper,
     output: wl_output::WlOutput,
     overlay_cursor: bool,
-) -> Result<
-    (
-        pipewire::main_loop::MainLoop,
-        pipewire::stream::Stream,
-        pipewire::stream::StreamListener<StreamData>,
-        pipewire::context::Context,
-        oneshot::Receiver<anyhow::Result<u32>>,
-    ),
-    pipewire::Error,
-> {
+) -> anyhow::Result<(
+    pipewire::main_loop::MainLoop,
+    pipewire::stream::Stream,
+    pipewire::stream::StreamListener<StreamData>,
+    pipewire::context::Context,
+    oneshot::Receiver<anyhow::Result<u32>>,
+)> {
     let loop_ = pipewire::main_loop::MainLoop::new(None)?;
     let context = pipewire::context::Context::new(&loop_)?;
     let core = context.connect(None)?;
@@ -266,7 +311,7 @@ fn start_stream(
 
     let (width, height) = match wayland_helper.capture_output_shm(&output, overlay_cursor) {
         Some(frame) => (frame.width, frame.height),
-        None => (0, 0), // XXX
+        None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
     };
 
     let dmabuf_helper = wayland_helper.dmabuf();
@@ -280,7 +325,7 @@ fn start_stream(
         },
     )?;
 
-    let initial_params = params(width, height, dmabuf_helper.as_ref(), None);
+    let initial_params = params(width, height, 1, dmabuf_helper.as_ref(), None);
     let mut initial_params: Vec<_> = initial_params
         .iter()
         .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
@@ -322,11 +367,12 @@ fn start_stream(
 fn params(
     width: u32,
     height: u32,
+    blocks: u32,
     dmabuf: Option<&DmabufHelper>,
     fixated_modifier: Option<gbm::Modifier>,
 ) -> Vec<Vec<u8>> {
     [
-        Some(buffers(width, height)),
+        Some(buffers(width, height, blocks)),
         fixated_modifier.map(|x| format(width, height, None, Some(x))),
         // Favor dmabuf over shm by listing it first
         dmabuf.map(|x| format(width, height, Some(x), None)),
@@ -344,7 +390,7 @@ fn value_to_bytes(value: pod::Value) -> Vec<u8> {
     bytes
 }
 
-fn buffers(width: u32, height: u32) -> Vec<u8> {
+fn buffers(width: u32, height: u32, blocks: u32) -> Vec<u8> {
     value_to_bytes(pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
@@ -378,7 +424,7 @@ fn buffers(width: u32, height: u32) -> Vec<u8> {
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_blocks,
                 flags: pod::PropertyFlags::empty(),
-                value: pod::Value::Int(1),
+                value: pod::Value::Int(blocks as i32),
             },
             pod::Property {
                 key: spa_sys::SPA_PARAM_BUFFERS_buffers,

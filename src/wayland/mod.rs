@@ -584,6 +584,7 @@ impl ScreencopyHandler for AppData {
         Session::for_session(session).unwrap().update(|data| {
             data.res = Some(Ok(()));
         });
+        session.destroy();
     }
 
     fn failed(
@@ -597,6 +598,7 @@ impl ScreencopyHandler for AppData {
         Session::for_session(session).unwrap().update(|data| {
             data.res = Some(Err(reason));
         });
+        session.destroy();
     }
 }
 
@@ -689,31 +691,36 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for AppData {
     }
 }
 
+fn portal_wayland_socket() -> Option<UnixStream> {
+    let fd = std::env::var("PORTAL_WAYLAND_SOCKET")
+        .ok()?
+        .parse::<RawFd>()
+        .ok()?;
+    env::remove_var("PORTAL_WAYLAND_SOCKET");
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // set the CLOEXEC flag on this FD
+    let mut flags = rustix::io::fcntl_getfd(&fd).ok()?;
+    flags.insert(rustix::io::FdFlags::CLOEXEC);
+    if let Err(err) = rustix::io::fcntl_setfd(&fd, flags) {
+        drop(fd);
+        log::error!("Failed to set CLOEXEC on portal socket: {}", err);
+        return None;
+    }
+    Some(UnixStream::from(fd))
+}
+
 // Connect to wayland and start task reading events from socket
 pub fn connect_to_wayland() -> wayland_client::Connection {
-    let portal_socket = std::env::var("PORTAL_WAYLAND_SOCKET")
-        .ok()
-        .and_then(|x| x.parse::<RawFd>().ok())
-        .and_then(|fd| {
-            env::remove_var("PORTAL_WAYLAND_SOCKET");
-            let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-            // set the CLOEXEC flag on this FD
-            let mut flags = rustix::io::fcntl_getfd(&fd).ok()?;
-            flags.insert(rustix::io::FdFlags::CLOEXEC);
-            if let Err(err) = rustix::io::fcntl_setfd(&fd, flags) {
-                drop(fd);
-                log::error!("Failed to set CLOEXEC on portal socket: {}", err);
-                return None;
-            } else {
-                Some(UnixStream::from(fd))
-            }
+    if let Some(portal_socket) = portal_wayland_socket() {
+        wayland_client::Connection::from_socket(portal_socket).unwrap_or_else(|err| {
+            log::error!("{}", err);
+            process::exit(1)
         })
-        .expect("Failed to connect to PORTAL_WAYLAND_SOCKET");
-
-    wayland_client::Connection::from_socket(portal_socket).unwrap_or_else(|err| {
-        log::error!("{}", err);
-        process::exit(1)
-    })
+    } else {
+        // Useful fallback for testing and debugging, without `COSMIC_ENABLE_WAYLAND_SECURITY`
+        log::warn!("Failed to find `PORTAL_WAYLAND_SOCKET`; trying default Wayland display");
+        wayland_client::Connection::connect_to_env().unwrap()
+    }
 }
 
 fn gbm_device(rdev: u64) -> io::Result<Option<gbm::Device<fs::File>>> {

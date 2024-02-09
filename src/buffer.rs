@@ -31,15 +31,26 @@ pub fn create_dmabuf<T: AsFd>(
     width: u32,
     height: u32,
 ) -> Dmabuf<OwnedFd> {
-    let buffer = device
-        .create_buffer_object_with_modifiers2::<()>(
-            width,
-            height,
-            gbm::Format::Abgr8888,
-            [modifier].into_iter(),
-            gbm::BufferObjectFlags::empty(),
-        )
-        .unwrap();
+    let buffer = if modifier != gbm::Modifier::Invalid {
+        device
+            .create_buffer_object_with_modifiers2::<()>(
+                width,
+                height,
+                gbm::Format::Abgr8888,
+                [modifier].into_iter(),
+                gbm::BufferObjectFlags::empty(),
+            )
+            .unwrap()
+    } else {
+        device
+            .create_buffer_object::<()>(
+                width,
+                height,
+                gbm::Format::Abgr8888,
+                gbm::BufferObjectFlags::empty(),
+            )
+            .unwrap()
+    };
     Dmabuf {
         format: gbm::Format::Abgr8888,
         modifier,
