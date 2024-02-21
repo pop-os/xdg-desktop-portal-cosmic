@@ -35,9 +35,9 @@ $(BIN): Cargo.toml Cargo.lock src/main.rs vendor-check
 
 install:
 	install -Dm0755 target/$(TARGET)/$(BIN) $(DESTDIR)$(libexecdir)/$(BIN)
-	install -Dm0644 data/$(DBUS_NAME).service $(DESTDIR)/$(datadir)/dbus-1/services/$(DBUS_NAME).service
-	install -Dm0644 data/cosmic.portal $(DESTDIR)/$(datadir)/xdg-desktop-portal/portals/cosmic.portal
-	install -Dm0644 data/cosmic-portals.conf $(DESTDIR)/$(datadir)/xdg-desktop-portal/cosmic-portals.conf
+	install -Dm0644 data/$(DBUS_NAME).service $(DESTDIR)$(datadir)/dbus-1/services/$(DBUS_NAME).service
+	install -Dm0644 data/cosmic.portal $(DESTDIR)$(datadir)/xdg-desktop-portal/portals/cosmic.portal
+	install -Dm0644 data/cosmic-portals.conf $(DESTDIR)$(datadir)/xdg-desktop-portal/cosmic-portals.conf
 	find 'data'/'icons' -type f -exec echo {} \; \
 		| rev \
 		| cut -d'/' -f-3 \
