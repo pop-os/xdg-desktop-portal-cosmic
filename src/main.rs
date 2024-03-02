@@ -221,7 +221,8 @@ impl Settings {
     }
 }
 
-fn main() -> cosmic::iced::Result {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     localize::localize();
     app::run()
