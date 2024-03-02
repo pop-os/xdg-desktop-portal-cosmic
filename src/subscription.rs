@@ -5,19 +5,25 @@ use std::{
     fmt::{Debug, Formatter},
 };
 
-use cosmic::iced::subscription;
+use cosmic::{cosmic_theme::palette::Srgba, iced::subscription};
 use futures::{future, SinkExt};
 use tokio::sync::mpsc::Receiver;
-use zbus::Connection;
+use zbus::{zvariant, Connection};
 
 use crate::{
-    access::Access, screencast::ScreenCast, screenshot::Screenshot, wayland, DBUS_NAME, DBUS_PATH,
+    access::Access, screencast::ScreenCast, screenshot::Screenshot, wayland, ColorScheme, Contrast,
+    Settings, ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME,
+    DBUS_PATH,
 };
 
 #[derive(Clone)]
 pub enum Event {
     Access(crate::access::AccessDialogArgs),
     Screenshot(crate::screenshot::Args),
+    Accent(Srgba),
+    IsDark(bool),
+    HighContrast(bool),
+    Init(tokio::sync::mpsc::Sender<Event>),
 }
 
 impl Debug for Event {
@@ -56,6 +62,10 @@ impl Debug for Event {
                 .field("location", location)
                 .field("toplevel_images", toplevel_images)
                 .finish(),
+            Event::Accent(a) => a.fmt(f),
+            Event::IsDark(t) => t.fmt(f),
+            Event::HighContrast(c) => c.fmt(f),
+            Event::Init(tx) => tx.fmt(f),
         }
     }
 }
@@ -101,11 +111,13 @@ pub(crate) async fn process_changes(
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
                 )?
                 .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper.clone()))?
+                .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
+            _ = output.send(Event::Init(tx)).await;
             *state = State::Waiting(connection, rx);
         }
-        State::Waiting(_, rx) => {
+        State::Waiting(conn, rx) => {
             while let Some(event) = rx.recv().await {
                 match event {
                     Event::Access(args) => {
@@ -118,6 +130,62 @@ pub(crate) async fn process_changes(
                             log::error!("Error sending screenshot event: {:?}", err);
                         };
                     }
+                    Event::Accent(a) => {
+                        let object_server = conn.object_server();
+                        let iface_ref = object_server.interface::<_, Settings>(DBUS_PATH).await?;
+                        let mut iface = iface_ref.get_mut().await;
+                        iface.accent = a.into_format();
+                        iface
+                            .setting_changed(
+                                iface_ref.signal_context(),
+                                APPEARANCE_NAMESPACE,
+                                ACCENT_COLOR_KEY,
+                                zvariant::Array::from(
+                                    [iface.accent.red, iface.accent.green, iface.accent.blue]
+                                        .as_slice(),
+                                )
+                                .into(),
+                            )
+                            .await?;
+                    }
+                    Event::IsDark(is_dark) => {
+                        let object_server = conn.object_server();
+                        let iface_ref = object_server.interface::<_, Settings>(DBUS_PATH).await?;
+                        let mut iface = iface_ref.get_mut().await;
+                        iface.color_scheme = if is_dark {
+                            ColorScheme::PreferDark
+                        } else {
+                            ColorScheme::PreferLight
+                        };
+                        iface
+                            .setting_changed(
+                                iface_ref.signal_context(),
+                                APPEARANCE_NAMESPACE,
+                                COLOR_SCHEME_KEY,
+                                zvariant::Value::from(iface.color_scheme as u32),
+                            )
+                            .await?;
+                    }
+                    Event::HighContrast(is_high_contrast) => {
+                        let object_server = conn.object_server();
+                        let iface_ref = object_server.interface::<_, Settings>(DBUS_PATH).await?;
+                        let mut iface = iface_ref.get_mut().await;
+                        iface.contrast = if is_high_contrast {
+                            Contrast::High
+                        } else {
+                            Contrast::NoPreference
+                        };
+
+                        iface
+                            .setting_changed(
+                                iface_ref.signal_context(),
+                                APPEARANCE_NAMESPACE,
+                                CONTRAST_KEY,
+                                zvariant::Value::from(iface.contrast as u32),
+                            )
+                            .await?;
+                    }
+                    Event::Init(_) => {}
                 }
             }
         }

@@ -1,4 +1,4 @@
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.cosmic
-Interfaces=org.freedesktop.impl.portal.Access;org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.ScreenCast
+Interfaces=org.freedesktop.impl.portal.Access;org.freedesktop.impl.portal.Screenshot;org.freedesktop.impl.portal.Settings;org.freedesktop.impl.portal.ScreenCast
 UseIn=cosmic

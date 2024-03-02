@@ -1,5 +1,6 @@
+use cosmic::cosmic_theme::palette::Srgba;
 use std::collections::HashMap;
-use zbus::zvariant;
+use zbus::zvariant::{self, Array, OwnedValue};
 
 mod access;
 mod app;
@@ -89,8 +90,138 @@ impl Session {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> cosmic::iced::Result {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ColorScheme {
+    /// No preference
+    NoPreference,
+    /// Prefers dark appearance
+    PreferDark,
+    /// Prefers light appearance
+    PreferLight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Contrast {
+    /// No preference
+    NoPreference,
+    /// Higher contrast
+    High,
+}
+
+const APPEARANCE_NAMESPACE: &str = "org.freedesktop.appearance";
+const COLOR_SCHEME_KEY: &str = "color-scheme";
+const ACCENT_COLOR_KEY: &str = "accent-color";
+const CONTRAST_KEY: &str = "contrast";
+
+struct Settings {
+    pub color_scheme: ColorScheme,
+    pub contrast: Contrast,
+    pub accent: Srgba<f64>,
+}
+
+impl Settings {
+    pub fn new() -> Self {
+        let theme = cosmic::theme::system_preference();
+        let cosmic = theme.cosmic();
+        Self {
+            contrast: if cosmic.is_high_contrast {
+                Contrast::High
+            } else {
+                Contrast::NoPreference
+            },
+            color_scheme: if cosmic.is_dark {
+                ColorScheme::PreferDark
+            } else {
+                ColorScheme::PreferLight
+            },
+            accent: cosmic.accent_color().into_format(),
+        }
+    }
+}
+
+#[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Settings")]
+impl Settings {
+    /// Read method
+    async fn read(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zvariant::OwnedValue> {
+        self.read_one(namespace, key)
+            .await
+            .map(|v| OwnedValue::from(v))
+    }
+
+    // TODO globs
+    /// ReadAll method
+    async fn read_all(
+        &self,
+        mut namespace: Vec<&str>,
+    ) -> HashMap<String, HashMap<String, OwnedValue>> {
+        let mut map = HashMap::new();
+        if namespace.is_empty() {
+            namespace = vec![APPEARANCE_NAMESPACE];
+        }
+        for ns in namespace {
+            let mut inner = HashMap::new();
+            if ns != APPEARANCE_NAMESPACE {
+                map.insert(ns.to_string(), inner);
+                continue;
+            }
+            inner.insert(
+                COLOR_SCHEME_KEY.to_string(),
+                zvariant::OwnedValue::from(self.color_scheme as u32),
+            );
+            inner.insert(
+                CONTRAST_KEY.to_string(),
+                zvariant::OwnedValue::from(self.contrast as u32),
+            );
+            inner.insert(
+                ACCENT_COLOR_KEY.to_string(),
+                Array::from([self.accent.red, self.accent.green, self.accent.blue].as_slice())
+                    .into(),
+            );
+            map.insert(APPEARANCE_NAMESPACE.to_string(), inner);
+            break;
+        }
+        map
+    }
+
+    /// ReadOne method
+    async fn read_one(&self, namespace: &str, key: &str) -> zbus::fdo::Result<OwnedValue> {
+        match (namespace, key) {
+            (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => {
+                Ok(zvariant::OwnedValue::from(self.color_scheme as u32))
+            }
+            (APPEARANCE_NAMESPACE, CONTRAST_KEY) => {
+                Ok(zvariant::OwnedValue::from(self.contrast as u32))
+            }
+            (APPEARANCE_NAMESPACE, ACCENT_COLOR_KEY) => Ok(Array::from(
+                [self.accent.red, self.accent.green, self.accent.blue].as_slice(),
+            )
+            .into()),
+            _ => Err(zbus::fdo::Error::Failed(
+                "Unknown namespace or key".to_string(),
+            )),
+        }
+    }
+
+    /// SettingChanged signal
+    #[dbus_interface(signal)]
+    async fn setting_changed(
+        &self,
+        signal_ctxt: &zbus::SignalContext<'_>,
+        namespace: &str,
+        key: &str,
+        value: zvariant::Value<'_>,
+    ) -> zbus::Result<()>;
+
+    /// version property
+    #[dbus_interface(property, name = "version")]
+    fn version(&self) -> u32 {
+        2
+    }
+}
+
+fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     localize::localize();
     app::run()
