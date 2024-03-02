@@ -3,6 +3,7 @@ use cosmic::iced::keyboard;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::iced_core::keyboard::key::Named;
 use cosmic::widget::dropdown;
+use cosmic::Command;
 use cosmic::{
     app,
     iced::window,
@@ -20,6 +21,7 @@ pub(crate) fn run() -> cosmic::iced::Result {
 // run iced app with no main surface
 pub struct CosmicPortal {
     pub core: app::Core,
+    pub tx: Option<tokio::sync::mpsc::Sender<subscription::Event>>,
 
     pub access_args: Option<access::AccessDialogArgs>,
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
@@ -101,6 +103,7 @@ impl cosmic::Application for CosmicPortal {
                 outputs: Default::default(),
                 active_output: Default::default(),
                 wayland_helper,
+                tx: None,
             },
             cosmic::iced::Command::none(),
         )
@@ -132,6 +135,13 @@ impl cosmic::Application for CosmicPortal {
                 }
                 subscription::Event::Screenshot(args) => {
                     screenshot::update_args(self, args).map(cosmic::app::Message::App)
+                }
+                subscription::Event::Accent(_)
+                | subscription::Event::IsDark(_)
+                | subscription::Event::HighContrast(_) => cosmic::iced::Command::none(),
+                subscription::Event::Init(tx) => {
+                    self.tx = Some(tx);
+                    Command::none()
                 }
             },
             Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::app::Message::App),
@@ -231,5 +241,35 @@ impl cosmic::Application for CosmicPortal {
                 _ => None,
             }),
         ])
+    }
+
+    fn system_theme_update(
+        &mut self,
+        _keys: &[&'static str],
+        new_theme: &cosmic::cosmic_theme::Theme,
+    ) -> cosmic::iced::Command<app::Message<Self::Message>> {
+        let old = self.core.system_theme().cosmic();
+        let mut msgs = Vec::with_capacity(3);
+        if old.is_dark != new_theme.is_dark {
+            msgs.push(subscription::Event::IsDark(new_theme.is_dark));
+        }
+        if old.accent_color() != new_theme.accent_color() {
+            msgs.push(subscription::Event::Accent(new_theme.accent_color()));
+        }
+        if old.is_high_contrast != new_theme.is_high_contrast {
+            msgs.push(subscription::Event::HighContrast(
+                new_theme.is_high_contrast,
+            ));
+        }
+        {
+            if let Some(tx) = self.tx.clone() {
+                tokio::spawn(async move {
+                    for msg in msgs {
+                        _ = tx.send(msg).await;
+                    }
+                });
+            }
+        }
+        Command::none()
     }
 }

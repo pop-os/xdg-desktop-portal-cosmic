@@ -44,7 +44,9 @@ rust-embed = "8.2.0"
 [dev-dependencies]
 gst = { package = "gstreamer", version = "0.21.3" }
 
-# [patch."https://github.com/pop-os/libcosmic"]
+[patch."https://github.com/pop-os/libcosmic"]
+libcosmic = { git = "https://github.com/pop-os/libcosmic//", branch = "desktop-portal" }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic//", branch = "desktop-portal" }
 # libcosmic = { path = "../libcosmic" }
 # cosmic-config = { path = "../libcosmic/cosmic-config" }
 
