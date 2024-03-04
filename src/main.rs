@@ -1,6 +1,6 @@
 use cosmic::cosmic_theme::palette::Srgba;
 use std::collections::HashMap;
-use zbus::zvariant::{self, Array, OwnedValue};
+use zbus::zvariant::{self, Array, Dict, OwnedValue, Value};
 
 mod access;
 mod app;
@@ -110,6 +110,13 @@ pub enum Contrast {
     High,
 }
 
+#[derive(Debug, Clone, Copy, zvariant::Value, zvariant::OwnedValue)]
+struct Color {
+    red: f64,
+    green: f64,
+    blue: f64,
+}
+
 const APPEARANCE_NAMESPACE: &str = "org.freedesktop.appearance";
 const COLOR_SCHEME_KEY: &str = "color-scheme";
 const ACCENT_COLOR_KEY: &str = "accent-color";
@@ -143,24 +150,22 @@ impl Settings {
 
 #[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Settings")]
 impl Settings {
-    /// Read method
+    /// Read method (deprecated)
     async fn read(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zvariant::OwnedValue> {
-        self.read_one(namespace, key)
-            .await
-            .map(|v| OwnedValue::from(v))
+        self.read_one(namespace, key).await
     }
 
     // TODO globs
     /// ReadAll method
     async fn read_all(
         &self,
-        mut namespace: Vec<&str>,
+        mut namespaces: Vec<&str>,
     ) -> HashMap<String, HashMap<String, OwnedValue>> {
         let mut map = HashMap::new();
-        if namespace.is_empty() {
-            namespace = vec![APPEARANCE_NAMESPACE];
+        if namespaces.is_empty() {
+            namespaces = vec![APPEARANCE_NAMESPACE];
         }
-        for ns in namespace {
+        for ns in namespaces {
             let mut inner = HashMap::new();
             if ns != APPEARANCE_NAMESPACE {
                 map.insert(ns.to_string(), inner);
@@ -168,19 +173,21 @@ impl Settings {
             }
             inner.insert(
                 COLOR_SCHEME_KEY.to_string(),
-                zvariant::OwnedValue::from(self.color_scheme as u32),
+                OwnedValue::from(self.color_scheme as u32),
             );
             inner.insert(
                 CONTRAST_KEY.to_string(),
-                zvariant::OwnedValue::from(self.contrast as u32),
+                OwnedValue::from(self.contrast as u32),
             );
             inner.insert(
                 ACCENT_COLOR_KEY.to_string(),
-                Array::from([self.accent.red, self.accent.green, self.accent.blue].as_slice())
-                    .into(),
+                OwnedValue::from(Color {
+                    red: self.accent.red,
+                    green: self.accent.green,
+                    blue: self.accent.blue,
+                }),
             );
             map.insert(APPEARANCE_NAMESPACE.to_string(), inner);
-            break;
         }
         map
     }
@@ -189,15 +196,14 @@ impl Settings {
     async fn read_one(&self, namespace: &str, key: &str) -> zbus::fdo::Result<OwnedValue> {
         match (namespace, key) {
             (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => {
-                Ok(zvariant::OwnedValue::from(self.color_scheme as u32))
+                Ok(OwnedValue::from(self.color_scheme as u32))
             }
-            (APPEARANCE_NAMESPACE, CONTRAST_KEY) => {
-                Ok(zvariant::OwnedValue::from(self.contrast as u32))
-            }
-            (APPEARANCE_NAMESPACE, ACCENT_COLOR_KEY) => Ok(Array::from(
-                [self.accent.red, self.accent.green, self.accent.blue].as_slice(),
-            )
-            .into()),
+            (APPEARANCE_NAMESPACE, CONTRAST_KEY) => Ok(OwnedValue::from(self.contrast as u32)),
+            (APPEARANCE_NAMESPACE, ACCENT_COLOR_KEY) => Ok(OwnedValue::from(Color {
+                red: self.accent.red,
+                green: self.accent.green,
+                blue: self.accent.blue,
+            })),
             _ => Err(zbus::fdo::Error::Failed(
                 "Unknown namespace or key".to_string(),
             )),
