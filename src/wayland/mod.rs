@@ -201,22 +201,15 @@ impl Session {
             .unwrap()
     }
 
-    fn attach_and_commit(&self, buffer: &wl_buffer::WlBuffer) {
-        self.0.screencopy_session.attach_buffer(buffer, None, 0); // XXX age?
-        self.0
-            .screencopy_session
-            .commit(zcosmic_screencopy_session_v1::Options::empty());
-    }
-
-    pub fn capture_shm_fd<Fd: AsFd>(&self, fd: Fd, len: Option<u32>) -> Option<ShmImage<Fd>> {
-        // XXX error type?
-        // TODO: way to get cursor metadata?
-
-        self.0.wayland_helper.inner.conn.flush().unwrap();
-
+    /// Block until compoistor sends buffer_infos, then find buffer info matching format
+    fn buffer_info_for_format(
+        &self,
+        type_: zcosmic_screencopy_session_v1::BufferType,
+        format: u32,
+    ) -> Option<BufferInfo> {
         let data = self.wait_while(|data| data.buffer_infos.is_none());
         // XXX
-        let Some(buffer_info) = data
+        if let Some(buffer_info) = data
             .buffer_infos
             .as_ref()
             .unwrap()
@@ -226,15 +219,44 @@ impl Session {
                     && x.format == wl_shm::Format::Abgr8888.into()
             })
             .cloned()
-        else {
+        {
+            Some(buffer_info)
+        } else {
             log::error!(
                 "No suitable buffer format found for {:?}",
                 &self.0.screencopy_session
             );
             log::warn!("Available formats: {:#?}", &data.buffer_infos);
-            return None;
-        };
-        drop(data);
+            None
+        }
+    }
+
+    /// Capture to `wl_buffer`, blocking until capture either succeeds or fails
+    fn capture_wl_buffer(
+        &self,
+        buffer: &wl_buffer::WlBuffer,
+    ) -> Result<(), WEnum<zcosmic_screencopy_session_v1::FailureReason>> {
+        self.0.screencopy_session.attach_buffer(buffer, None, 0); // XXX age?
+        self.0
+            .screencopy_session
+            .commit(zcosmic_screencopy_session_v1::Options::empty());
+        self.0.wayland_helper.inner.conn.flush().unwrap();
+
+        // TODO: wait for server to release buffer?
+        self.wait_while(|data| data.res.is_none())
+            .res
+            .take()
+            .unwrap()
+    }
+
+    pub fn capture_shm_fd<Fd: AsFd>(&self, fd: Fd, len: Option<u32>) -> Option<ShmImage<Fd>> {
+        // XXX error type?
+        // TODO: way to get cursor metadata?
+
+        let buffer_info = self.buffer_info_for_format(
+            zcosmic_screencopy_session_v1::BufferType::WlShm,
+            wl_shm::Format::Abgr8888.into(),
+        )?;
 
         let buf_len = buffer_info.stride * buffer_info.height;
         if let Some(len) = len {
@@ -244,35 +266,16 @@ impl Session {
         } else {
             if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
         };
-        let pool = self.0.wayland_helper.inner.wl_shm.create_pool(
-            fd.as_fd(),
-            buf_len as i32,
-            &self.0.wayland_helper.inner.qh,
-            (),
-        );
-        let buffer = pool.create_buffer(
-            0,
-            buffer_info.width as i32,
-            buffer_info.height as i32,
-            buffer_info.stride as i32,
+        let buffer = self.0.wayland_helper.create_shm_buffer(
+            &fd,
+            buffer_info.width,
+            buffer_info.height,
+            buffer_info.stride,
             wl_shm::Format::Abgr8888,
-            &self.0.wayland_helper.inner.qh,
-            (),
         );
 
-        self.attach_and_commit(&buffer);
-        self.0.wayland_helper.inner.conn.flush().unwrap();
-
-        // TODO: wait for server to release buffer?
-        let res = self
-            .wait_while(|data| data.res.is_none())
-            .res
-            .take()
-            .unwrap();
-        pool.destroy();
+        let res = self.capture_wl_buffer(&buffer);
         buffer.destroy();
-
-        //std::thread::sleep(std::time::Duration::from_millis(16));
 
         if res.is_ok() {
             Some(ShmImage {
@@ -286,48 +289,12 @@ impl Session {
     }
 
     pub fn capture_dmabuf_fd<Fd: AsFd>(&self, dmabuf: &buffer::Dmabuf<Fd>) {
-        // TODO ensure dmabuf is valid format with right number of planes?
-        // - params.add can raise protocol error
-        let params = self
-            .0
-            .wayland_helper
-            .inner
-            .zwp_dmabuf
-            .create_params(&self.0.wayland_helper.inner.qh, sctk::globals::GlobalData);
-        let modifier = u64::from(dmabuf.modifier);
-        let modifier_hi = (modifier >> 32) as u32;
-        let modifier_lo = (modifier & 0xffffffff) as u32;
-        for (i, plane) in dmabuf.planes.iter().enumerate() {
-            params.add(
-                plane.fd.as_fd(),
-                i as u32,
-                plane.offset,
-                plane.stride,
-                modifier_hi,
-                modifier_lo,
-            );
-        }
-        // XXX use create
-        let buffer = params.create_immed(
-            dmabuf.width as i32,
-            dmabuf.height as i32,
-            dmabuf.format as u32,
-            zwp_linux_buffer_params_v1::Flags::empty(),
-            &self.0.wayland_helper.inner.qh,
-            (),
-        );
+        let buffer = self.0.wayland_helper.create_dmabuf_buffer(dmabuf);
 
         // TODO buffer_infos
 
-        self.attach_and_commit(&buffer);
-        self.0.wayland_helper.inner.conn.flush().unwrap();
-
-        // TODO: wait for server to release buffer?
-        let res = self
-            .wait_while(|data| data.res.is_none())
-            .res
-            .take()
-            .unwrap();
+        // TODO handle error
+        let _ = self.capture_wl_buffer(&buffer);
         buffer.destroy();
     }
 }
@@ -458,6 +425,8 @@ impl WaylandHelper {
                 ),
             };
 
+            self.inner.conn.flush().unwrap();
+
             SessionInner {
                 wayland_helper: self.clone(),
                 screencopy_session,
@@ -478,6 +447,66 @@ impl WaylandHelper {
 
         let session = self.capture_source_session(source, overlay_cursor);
         session.capture_shm_fd(fd, None)
+    }
+
+    pub fn create_shm_buffer<Fd: AsFd>(
+        &self,
+        fd: &Fd,
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: wl_shm::Format,
+    ) -> wl_buffer::WlBuffer {
+        let pool = self.inner.wl_shm.create_pool(
+            fd.as_fd(),
+            stride as i32 * height as i32,
+            &self.inner.qh,
+            (),
+        );
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            format,
+            &self.inner.qh,
+            (),
+        );
+
+        pool.destroy();
+
+        buffer
+    }
+
+    fn create_dmabuf_buffer<Fd: AsFd>(&self, dmabuf: &buffer::Dmabuf<Fd>) -> wl_buffer::WlBuffer {
+        // TODO ensure dmabuf is valid format with right number of planes?
+        // - params.add can raise protocol error
+        let params = self
+            .inner
+            .zwp_dmabuf
+            .create_params(&self.inner.qh, sctk::globals::GlobalData);
+        let modifier = u64::from(dmabuf.modifier);
+        let modifier_hi = (modifier >> 32) as u32;
+        let modifier_lo = (modifier & 0xffffffff) as u32;
+        for (i, plane) in dmabuf.planes.iter().enumerate() {
+            params.add(
+                plane.fd.as_fd(),
+                i as u32,
+                plane.offset,
+                plane.stride,
+                modifier_hi,
+                modifier_lo,
+            );
+        }
+        // XXX use create
+        params.create_immed(
+            dmabuf.width as i32,
+            dmabuf.height as i32,
+            dmabuf.format as u32,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+            &self.inner.qh,
+            (),
+        )
     }
 }
 
