@@ -214,24 +214,27 @@ impl Session {
 
         self.0.wayland_helper.inner.conn.flush().unwrap();
 
-        let buffer_infos = self
-            .wait_while(|data| data.buffer_infos.is_none())
-            .buffer_infos
-            .take()
-            .unwrap();
-
+        let data = self.wait_while(|data| data.buffer_infos.is_none());
         // XXX
-        let Some(buffer_info) = buffer_infos.iter().find(|x| {
-            x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
-                && x.format == wl_shm::Format::Abgr8888.into()
-        }) else {
+        let Some(buffer_info) = data
+            .buffer_infos
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|x| {
+                x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
+                    && x.format == wl_shm::Format::Abgr8888.into()
+            })
+            .cloned()
+        else {
             log::error!(
                 "No suitable buffer format found for {:?}",
                 &self.0.screencopy_session
             );
-            log::warn!("Available formats: {:#?}", buffer_infos);
+            log::warn!("Available formats: {:#?}", &data.buffer_infos);
             return None;
         };
+        drop(data);
 
         let buf_len = buffer_info.stride * buffer_info.height;
         if let Some(len) = len {
