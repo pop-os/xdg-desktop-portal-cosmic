@@ -18,7 +18,7 @@ use wayland_client::protocol::wl_output::{self, WlOutput};
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
-use crate::wayland::WaylandHelper;
+use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::widget::rectangle_selection::DragState;
 use crate::{fl, subscription, PortalResponse};
 
@@ -141,7 +141,7 @@ impl Screenshot {
         let mut map = HashMap::with_capacity(outputs.len());
         for (output, _, name) in outputs {
             let frame = wayland_helper
-                .capture_output_shm(&output, false)
+                .capture_source_shm(CaptureSource::Output(&output), false)
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
             map.insert(name, Arc::new(frame.image()?));
         }
@@ -194,7 +194,7 @@ impl Screenshot {
             let mut frames = Vec::with_capacity(outputs.len());
             for (output, (output_x, output_y), _) in outputs {
                 let frame = wayland_helper
-                    .capture_output_shm(&output, false)
+                    .capture_source_shm(CaptureSource::Output(&output), false)
                     .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
                 let rect = Rect {
                     left: output_x,

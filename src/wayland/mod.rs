@@ -163,8 +163,9 @@ struct SessionState {
 }
 
 struct SessionInner {
-    condvar: Condvar,
+    wayland_helper: WaylandHelper,
     screencopy_session: zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+    condvar: Condvar,
     state: Mutex<SessionState>,
 }
 
@@ -174,7 +175,7 @@ impl Drop for SessionInner {
     }
 }
 
-struct Session(Arc<SessionInner>);
+pub struct Session(Arc<SessionInner>);
 
 struct SessionData {
     session: Weak<SessionInner>,
@@ -205,6 +206,126 @@ impl Session {
         self.0
             .screencopy_session
             .commit(zcosmic_screencopy_session_v1::Options::empty());
+    }
+
+    pub fn capture_shm_fd<Fd: AsFd>(&self, fd: Fd, len: Option<u32>) -> Option<ShmImage<Fd>> {
+        // XXX error type?
+        // TODO: way to get cursor metadata?
+
+        self.0.wayland_helper.inner.conn.flush().unwrap();
+
+        let buffer_infos = self
+            .wait_while(|data| data.buffer_infos.is_none())
+            .buffer_infos
+            .take()
+            .unwrap();
+
+        // XXX
+        let Some(buffer_info) = buffer_infos.iter().find(|x| {
+            x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
+                && x.format == wl_shm::Format::Abgr8888.into()
+        }) else {
+            log::error!(
+                "No suitable buffer format found for {:?}",
+                &self.0.screencopy_session
+            );
+            log::warn!("Available formats: {:#?}", buffer_infos);
+            return None;
+        };
+
+        let buf_len = buffer_info.stride * buffer_info.height;
+        if let Some(len) = len {
+            if len != buf_len {
+                return None;
+            }
+        } else {
+            if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
+        };
+        let pool = self.0.wayland_helper.inner.wl_shm.create_pool(
+            fd.as_fd(),
+            buf_len as i32,
+            &self.0.wayland_helper.inner.qh,
+            (),
+        );
+        let buffer = pool.create_buffer(
+            0,
+            buffer_info.width as i32,
+            buffer_info.height as i32,
+            buffer_info.stride as i32,
+            wl_shm::Format::Abgr8888,
+            &self.0.wayland_helper.inner.qh,
+            (),
+        );
+
+        self.attach_and_commit(&buffer);
+        self.0.wayland_helper.inner.conn.flush().unwrap();
+
+        // TODO: wait for server to release buffer?
+        let res = self
+            .wait_while(|data| data.res.is_none())
+            .res
+            .take()
+            .unwrap();
+        pool.destroy();
+        buffer.destroy();
+
+        //std::thread::sleep(std::time::Duration::from_millis(16));
+
+        if res.is_ok() {
+            Some(ShmImage {
+                fd,
+                width: buffer_info.width,
+                height: buffer_info.height,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn capture_dmabuf_fd<Fd: AsFd>(&self, dmabuf: &buffer::Dmabuf<Fd>) {
+        // TODO ensure dmabuf is valid format with right number of planes?
+        // - params.add can raise protocol error
+        let params = self
+            .0
+            .wayland_helper
+            .inner
+            .zwp_dmabuf
+            .create_params(&self.0.wayland_helper.inner.qh, sctk::globals::GlobalData);
+        let modifier = u64::from(dmabuf.modifier);
+        let modifier_hi = (modifier >> 32) as u32;
+        let modifier_lo = (modifier & 0xffffffff) as u32;
+        for (i, plane) in dmabuf.planes.iter().enumerate() {
+            params.add(
+                plane.fd.as_fd(),
+                i as u32,
+                plane.offset,
+                plane.stride,
+                modifier_hi,
+                modifier_lo,
+            );
+        }
+        // XXX use create
+        let buffer = params.create_immed(
+            dmabuf.width as i32,
+            dmabuf.height as i32,
+            dmabuf.format as u32,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+            &self.0.wayland_helper.inner.qh,
+            (),
+        );
+
+        // TODO buffer_infos
+
+        self.attach_and_commit(&buffer);
+        self.0.wayland_helper.inner.conn.flush().unwrap();
+
+        // TODO: wait for server to release buffer?
+        let res = self
+            .wait_while(|data| data.res.is_none())
+            .res
+            .take()
+            .unwrap();
+        buffer.destroy();
     }
 }
 
@@ -289,7 +410,7 @@ impl WaylandHelper {
     pub fn capture_output_toplevels_shm(
         &self,
         output: &wl_output::WlOutput,
-        _overlay_cursor: bool,
+        overlay_cursor: bool,
     ) -> Vec<ShmImage<OwnedFd>> {
         use std::ffi::CStr;
 
@@ -304,22 +425,11 @@ impl WaylandHelper {
 
         toplevels
             .into_iter()
-            .filter_map(|t| {
-                self.capture_source_shm_fd(
-                    CaptureSource::Toplevel(t),
-                    _overlay_cursor,
-                    rustix::fs::memfd_create(
-                        unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") },
-                        rustix::fs::MemfdFlags::CLOEXEC,
-                    )
-                    .ok()?,
-                    None,
-                )
-            })
+            .filter_map(|t| self.capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor))
             .collect()
     }
 
-    fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
+    pub fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
         #[allow(unused_variables)] // TODO
         let overlay_cursor = if overlay_cursor { 1 } else { 0 };
 
@@ -346,149 +456,25 @@ impl WaylandHelper {
             };
 
             SessionInner {
-                condvar: Condvar::new(),
+                wayland_helper: self.clone(),
                 screencopy_session,
+                condvar: Condvar::new(),
                 state: Default::default(),
             }
         }))
     }
 
-    pub fn capture_source_shm_fd<Fd: AsFd>(
+    pub fn capture_source_shm(
         &self,
         source: CaptureSource,
-        overlay_cursor: bool,
-        fd: Fd,
-        len: Option<u32>,
-    ) -> Option<ShmImage<Fd>> {
-        // XXX error type?
-        // TODO: way to get cursor metadata?
-
-        let session = self.capture_source_session(source, overlay_cursor);
-        self.inner.conn.flush().unwrap();
-
-        let buffer_infos = session
-            .wait_while(|data| data.buffer_infos.is_none())
-            .buffer_infos
-            .take()
-            .unwrap();
-
-        // XXX
-        let Some(buffer_info) = buffer_infos.iter().find(|x| {
-            x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
-                && x.format == wl_shm::Format::Abgr8888.into()
-        }) else {
-            log::error!("No suitable buffer format found for {source:?}");
-            log::warn!("Available formats: {:#?}", buffer_infos);
-            return None;
-        };
-
-        let buf_len = buffer_info.stride * buffer_info.height;
-        if let Some(len) = len {
-            if len != buf_len {
-                return None;
-            }
-        } else {
-            if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
-        };
-        let pool = self
-            .inner
-            .wl_shm
-            .create_pool(fd.as_fd(), buf_len as i32, &self.inner.qh, ());
-        let buffer = pool.create_buffer(
-            0,
-            buffer_info.width as i32,
-            buffer_info.height as i32,
-            buffer_info.stride as i32,
-            wl_shm::Format::Abgr8888,
-            &self.inner.qh,
-            (),
-        );
-
-        session.attach_and_commit(&buffer);
-        self.inner.conn.flush().unwrap();
-
-        // TODO: wait for server to release buffer?
-        let res = session
-            .wait_while(|data| data.res.is_none())
-            .res
-            .take()
-            .unwrap();
-        pool.destroy();
-        buffer.destroy();
-
-        //std::thread::sleep(std::time::Duration::from_millis(16));
-
-        if res.is_ok() {
-            Some(ShmImage {
-                fd,
-                width: buffer_info.width,
-                height: buffer_info.height,
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn capture_source_dmabuf_fd<Fd: AsFd>(
-        &self,
-        source: CaptureSource,
-        overlay_cursor: bool,
-        dmabuf: &buffer::Dmabuf<Fd>,
-    ) {
-        // TODO ensure dmabuf is valid format with right number of planes?
-        // - params.add can raise protocol error
-        let params = self
-            .inner
-            .zwp_dmabuf
-            .create_params(&self.inner.qh, sctk::globals::GlobalData);
-        let modifier = u64::from(dmabuf.modifier);
-        let modifier_hi = (modifier >> 32) as u32;
-        let modifier_lo = (modifier & 0xffffffff) as u32;
-        for (i, plane) in dmabuf.planes.iter().enumerate() {
-            params.add(
-                plane.fd.as_fd(),
-                i as u32,
-                plane.offset,
-                plane.stride,
-                modifier_hi,
-                modifier_lo,
-            );
-        }
-        // XXX use create
-        let buffer = params.create_immed(
-            dmabuf.width as i32,
-            dmabuf.height as i32,
-            dmabuf.format as u32,
-            zwp_linux_buffer_params_v1::Flags::empty(),
-            &self.inner.qh,
-            (),
-        );
-
-        // TODO buffer_infos
-
-        let session = self.capture_source_session(source, overlay_cursor);
-        session.attach_and_commit(&buffer);
-        self.inner.conn.flush().unwrap();
-
-        // TODO: wait for server to release buffer?
-        let res = session
-            .wait_while(|data| data.res.is_none())
-            .res
-            .take()
-            .unwrap();
-        buffer.destroy();
-    }
-
-    pub fn capture_output_shm(
-        &self,
-        output: &wl_output::WlOutput,
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
         use std::ffi::CStr;
         let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
         let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
 
-        self.capture_source_shm_fd(CaptureSource::Output(output), overlay_cursor, fd, None)
+        let session = self.capture_source_session(source, overlay_cursor);
+        session.capture_shm_fd(fd, None)
     }
 }
 

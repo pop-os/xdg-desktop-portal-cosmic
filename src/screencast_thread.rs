@@ -23,7 +23,7 @@ use wayland_client::protocol::wl_output;
 
 use crate::{
     buffer::{self, Dmabuf, Plane},
-    wayland::{CaptureSource, DmabufHelper, WaylandHelper},
+    wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
 };
 
 pub struct ScreencastThread {
@@ -70,10 +70,8 @@ impl ScreencastThread {
 
 struct StreamData {
     dmabuf_helper: Option<DmabufHelper>,
-    wayland_helper: WaylandHelper,
-    output: wl_output::WlOutput,
     modifier: gbm::Modifier,
-    overlay_cursor: bool,
+    session: Session,
     width: u32,
     height: u32,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
@@ -265,22 +263,14 @@ impl StreamData {
                         })
                         .collect(),
                 };
-                self.wayland_helper.capture_source_dmabuf_fd(
-                    CaptureSource::Output(&self.output),
-                    self.overlay_cursor,
-                    &dmabuf,
-                );
+                self.session.capture_dmabuf_fd(&dmabuf);
             } else {
                 //let data = datas[0].get_mut();
                 //if data.len() == width as usize * height as usize * 4 {
                 let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
                 // TODO error
-                self.wayland_helper.capture_source_shm_fd(
-                    CaptureSource::Output(&self.output),
-                    self.overlay_cursor,
-                    fd,
-                    Some(self.width * self.height * 4),
-                );
+                self.session
+                    .capture_shm_fd(fd, Some(self.width * self.height * 4));
                 //if frame.width == width && frame.height == height {
                 //}
             }
@@ -308,10 +298,11 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    let (width, height) = match wayland_helper.capture_output_shm(&output, overlay_cursor) {
-        Some(frame) => (frame.width, frame.height),
-        None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
-    };
+    let (width, height) =
+        match wayland_helper.capture_source_shm(CaptureSource::Output(&output), overlay_cursor) {
+            Some(frame) => (frame.width, frame.height),
+            None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
+        };
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
@@ -339,13 +330,14 @@ fn start_stream(
         &mut initial_params,
     )?;
 
+    let session =
+        wayland_helper.capture_source_session(CaptureSource::Output(&output), overlay_cursor);
+
     let data = StreamData {
         dmabuf_helper,
-        wayland_helper,
-        output,
+        session,
         // XXX Should use implicit modifier if none set?
         modifier: gbm::Modifier::Linear,
-        overlay_cursor,
         width,
         height,
         node_id_tx: Some(node_id_tx),
