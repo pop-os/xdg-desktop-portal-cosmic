@@ -29,7 +29,7 @@ use std::{
         unix::{fs::MetadataExt, net::UnixStream},
     },
     process,
-    sync::{Arc, Condvar, Mutex, MutexGuard},
+    sync::{Arc, Condvar, Mutex, MutexGuard, Weak},
     thread,
 };
 use wayland_client::{
@@ -157,44 +157,58 @@ impl AppData {
 }
 
 #[derive(Default)]
-struct SessionInner {
+struct SessionState {
     buffer_infos: Option<Vec<BufferInfo>>,
     res: Option<Result<(), WEnum<zcosmic_screencopy_session_v1::FailureReason>>>,
 }
 
-// TODO: dmabuf? need to handle modifier negotation
-#[derive(Default)]
-struct Session {
+struct SessionInner {
     condvar: Condvar,
-    inner: Mutex<SessionInner>,
+    screencopy_session: zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+    state: Mutex<SessionState>,
 }
 
-#[derive(Default)]
+impl Drop for SessionInner {
+    fn drop(&mut self) {
+        self.screencopy_session.destroy();
+    }
+}
+
+struct Session(Arc<SessionInner>);
+
 struct SessionData {
-    session: Arc<Session>,
+    session: Weak<SessionInner>,
     session_data: ScreencopySessionData,
 }
 
 impl Session {
     pub fn for_session(
         session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
-    ) -> Option<&Self> {
-        Some(&session.data::<SessionData>()?.session)
+    ) -> Option<Self> {
+        session.data::<SessionData>()?.session.upgrade().map(Self)
     }
 
-    fn update<F: FnOnce(&mut SessionInner)>(&self, f: F) {
-        f(&mut self.inner.lock().unwrap());
-        self.condvar.notify_all();
+    fn update<F: FnOnce(&mut SessionState)>(&self, f: F) {
+        f(&mut self.0.state.lock().unwrap());
+        self.0.condvar.notify_all();
     }
 
-    fn wait_while<F: FnMut(&SessionInner) -> bool>(&self, mut f: F) -> MutexGuard<SessionInner> {
-        self.condvar
-            .wait_while(self.inner.lock().unwrap(), |data| f(data))
+    fn wait_while<F: FnMut(&SessionState) -> bool>(&self, mut f: F) -> MutexGuard<SessionState> {
+        self.0
+            .condvar
+            .wait_while(self.0.state.lock().unwrap(), |data| f(data))
             .unwrap()
+    }
+
+    fn attach_and_commit(&self, buffer: &wl_buffer::WlBuffer) {
+        self.0.screencopy_session.attach_buffer(buffer, None, 0); // XXX age?
+        self.0
+            .screencopy_session
+            .commit(zcosmic_screencopy_session_v1::Options::empty());
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum CaptureSource<'a> {
     Output(&'a wl_output::WlOutput),
     Toplevel(&'a ZcosmicToplevelHandleV1),
@@ -305,6 +319,40 @@ impl WaylandHelper {
             .collect()
     }
 
+    fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
+        #[allow(unused_variables)] // TODO
+        let overlay_cursor = if overlay_cursor { 1 } else { 0 };
+
+        Session(Arc::new_cyclic(|weak_session| {
+            let screencopy_session = match source {
+                CaptureSource::Output(o) => self.inner.screencopy_manager.capture_output(
+                    &o,
+                    zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
+                    &self.inner.qh,
+                    SessionData {
+                        session: weak_session.clone(),
+                        session_data: Default::default(),
+                    },
+                ),
+                CaptureSource::Toplevel(t) => self.inner.screencopy_manager.capture_toplevel(
+                    &t,
+                    zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
+                    &self.inner.qh,
+                    SessionData {
+                        session: weak_session.clone(),
+                        session_data: Default::default(),
+                    },
+                ),
+            };
+
+            SessionInner {
+                condvar: Condvar::new(),
+                screencopy_session,
+                state: Default::default(),
+            }
+        }))
+    }
+
     pub fn capture_source_shm_fd<Fd: AsFd>(
         &self,
         source: CaptureSource,
@@ -315,30 +363,7 @@ impl WaylandHelper {
         // XXX error type?
         // TODO: way to get cursor metadata?
 
-        #[allow(unused_variables)] // TODO
-        let overlay_cursor = if overlay_cursor { 1 } else { 0 };
-
-        let session = Arc::new(Session::default());
-        let screencopy_session = match source {
-            CaptureSource::Output(o) => self.inner.screencopy_manager.capture_output(
-                &o,
-                zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
-                &self.inner.qh,
-                SessionData {
-                    session: session.clone(),
-                    session_data: Default::default(),
-                },
-            ),
-            CaptureSource::Toplevel(t) => self.inner.screencopy_manager.capture_toplevel(
-                &t,
-                zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
-                &self.inner.qh,
-                SessionData {
-                    session: session.clone(),
-                    session_data: Default::default(),
-                },
-            ),
-        };
+        let session = self.capture_source_session(source, overlay_cursor);
         self.inner.conn.flush().unwrap();
 
         let buffer_infos = session
@@ -379,8 +404,7 @@ impl WaylandHelper {
             (),
         );
 
-        screencopy_session.attach_buffer(&buffer, None, 0); // XXX age?
-        screencopy_session.commit(zcosmic_screencopy_session_v1::Options::empty());
+        session.attach_and_commit(&buffer);
         self.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
@@ -405,10 +429,10 @@ impl WaylandHelper {
         }
     }
 
-    pub fn capture_output_dmabuf_fd<Fd: AsFd>(
+    pub fn capture_source_dmabuf_fd<Fd: AsFd>(
         &self,
-        output: &wl_output::WlOutput,
-        _overlay_cursor: bool,
+        source: CaptureSource,
+        overlay_cursor: bool,
         dmabuf: &buffer::Dmabuf<Fd>,
     ) {
         // TODO ensure dmabuf is valid format with right number of planes?
@@ -442,19 +466,8 @@ impl WaylandHelper {
 
         // TODO buffer_infos
 
-        let session = Arc::new(Session::default());
-        let screencopy_session = self.inner.screencopy_manager.capture_output(
-            output,
-            zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
-            &self.inner.qh,
-            SessionData {
-                session: session.clone(),
-                session_data: Default::default(),
-            },
-        );
-
-        screencopy_session.attach_buffer(&buffer, None, 0); // XXX age?
-        screencopy_session.commit(zcosmic_screencopy_session_v1::Options::empty());
+        let session = self.capture_source_session(source, overlay_cursor);
+        session.attach_and_commit(&buffer);
         self.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
@@ -570,9 +583,11 @@ impl ScreencopyHandler for AppData {
         session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
         buffer_infos: &[BufferInfo],
     ) {
-        Session::for_session(session).unwrap().update(|data| {
-            data.buffer_infos = Some(buffer_infos.to_vec());
-        });
+        if let Some(session) = Session::for_session(session) {
+            session.update(|data| {
+                data.buffer_infos = Some(buffer_infos.to_vec());
+            });
+        }
     }
 
     fn ready(
@@ -581,10 +596,11 @@ impl ScreencopyHandler for AppData {
         _qh: &QueueHandle<Self>,
         session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
     ) {
-        Session::for_session(session).unwrap().update(|data| {
-            data.res = Some(Ok(()));
-        });
-        session.destroy();
+        if let Some(session) = Session::for_session(session) {
+            session.update(|data| {
+                data.res = Some(Ok(()));
+            });
+        }
     }
 
     fn failed(
@@ -595,10 +611,11 @@ impl ScreencopyHandler for AppData {
         reason: WEnum<zcosmic_screencopy_session_v1::FailureReason>,
     ) {
         // TODO send message to thread
-        Session::for_session(session).unwrap().update(|data| {
-            data.res = Some(Err(reason));
-        });
-        session.destroy();
+        if let Some(session) = Session::for_session(session) {
+            session.update(|data| {
+                data.res = Some(Err(reason));
+            });
+        }
     }
 }
 

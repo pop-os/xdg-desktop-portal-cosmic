@@ -4,7 +4,6 @@
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
-
 use pipewire::{
     spa::{
         self,
@@ -266,8 +265,8 @@ impl StreamData {
                         })
                         .collect(),
                 };
-                self.wayland_helper.capture_output_dmabuf_fd(
-                    &self.output,
+                self.wayland_helper.capture_source_dmabuf_fd(
+                    CaptureSource::Output(&self.output),
                     self.overlay_cursor,
                     &dmabuf,
                 );
