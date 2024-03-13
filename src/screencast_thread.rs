@@ -14,12 +14,13 @@ use pipewire::{
     sys::pw_buffer,
 };
 use std::{
+    ffi::c_void,
     io, iter,
     os::fd::{BorrowedFd, IntoRawFd},
     slice,
 };
 use tokio::sync::oneshot;
-use wayland_client::protocol::wl_output;
+use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
 
 use crate::{
     buffer::{self, Dmabuf, Plane},
@@ -70,6 +71,7 @@ impl ScreencastThread {
 
 struct StreamData {
     dmabuf_helper: Option<DmabufHelper>,
+    wayland_helper: WaylandHelper,
     modifier: gbm::Modifier,
     session: Session,
     width: u32,
@@ -196,10 +198,13 @@ impl StreamData {
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
         // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
 
+        let wl_buffer;
         if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
             log::info!("Allocate dmabuf buffer");
             let gbm = self.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
             let dmabuf = buffer::create_dmabuf(&gbm, self.modifier, self.width, self.height);
+
+            wl_buffer = self.wayland_helper.create_dmabuf_buffer(&dmabuf);
 
             assert!(dmabuf.planes.len() == datas.len());
             for (data, plane) in datas.iter_mut().zip(dmabuf.planes) {
@@ -217,22 +222,34 @@ impl StreamData {
             }
         } else {
             log::info!("Allocate shm buffer");
-            for data in datas {
-                let fd = buffer::create_memfd(self.width, self.height);
+            assert_eq!(datas.len(), 1);
+            let data = &mut datas[0];
 
-                data.type_ = spa_sys::SPA_DATA_MemFd;
-                data.flags = 0;
-                data.fd = fd.into_raw_fd() as _;
-                data.data = std::ptr::null_mut();
-                data.maxsize = self.width * self.height * 4;
-                data.mapoffset = 0;
+            let fd = buffer::create_memfd(self.width, self.height);
 
-                let chunk = unsafe { &mut *data.chunk };
-                chunk.size = self.width * self.height * 4;
-                chunk.offset = 0;
-                chunk.stride = 4 * self.width as i32;
-            }
+            wl_buffer = self.wayland_helper.create_shm_buffer(
+                &fd,
+                self.width,
+                self.height,
+                self.width * 4,
+                wl_shm::Format::Abgr8888,
+            );
+
+            data.type_ = spa_sys::SPA_DATA_MemFd;
+            data.flags = 0;
+            data.fd = fd.into_raw_fd() as _;
+            data.data = std::ptr::null_mut();
+            data.maxsize = self.width * self.height * 4;
+            data.mapoffset = 0;
+
+            let chunk = unsafe { &mut *data.chunk };
+            chunk.size = self.width * self.height * 4;
+            chunk.offset = 0;
+            chunk.stride = 4 * self.width as i32;
         }
+
+        let user_data = Box::into_raw(Box::new(wl_buffer)) as *mut c_void;
+        unsafe { (*buffer).user_data = user_data };
     }
 
     fn remove_buffer(&mut self, _stream: &StreamRef, buffer: *mut pw_buffer) {
@@ -243,37 +260,18 @@ impl StreamData {
             unsafe { rustix::io::close(data.fd as _) };
             data.fd = -1;
         }
+
+        let wl_buffer: Box<wl_buffer::WlBuffer> =
+            unsafe { Box::from_raw((*buffer).user_data as *mut _) };
+        wl_buffer.destroy();
     }
 
     fn process(&mut self, stream: &StreamRef) {
-        if let Some(mut buffer) = stream.dequeue_buffer() {
-            let datas = buffer.datas_mut();
-            if datas[0].type_() == spa::buffer::DataType::DmaBuf {
-                let dmabuf = Dmabuf {
-                    format: gbm::Format::Abgr8888,
-                    modifier: self.modifier,
-                    width: self.width,
-                    height: self.height,
-                    planes: datas
-                        .iter()
-                        .map(|data| Plane {
-                            fd: unsafe { BorrowedFd::borrow_raw(data.as_raw().fd as _) },
-                            offset: data.chunk().offset(),
-                            stride: data.chunk().stride() as u32,
-                        })
-                        .collect(),
-                };
-                self.session.capture_dmabuf_fd(&dmabuf);
-            } else {
-                //let data = datas[0].get_mut();
-                //if data.len() == width as usize * height as usize * 4 {
-                let fd = unsafe { BorrowedFd::borrow_raw(datas[0].as_raw().fd as _) };
-                // TODO error
-                self.session
-                    .capture_shm_fd(fd, Some(self.width * self.height * 4));
-                //if frame.width == width && frame.height == height {
-                //}
-            }
+        let buffer = unsafe { stream.dequeue_raw_buffer() };
+        if !buffer.is_null() {
+            let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
+            self.session.capture_wl_buffer(&wl_buffer);
+            unsafe { stream.queue_raw_buffer(buffer) };
         }
     }
 }
@@ -334,6 +332,7 @@ fn start_stream(
         wayland_helper.capture_source_session(CaptureSource::Output(&output), overlay_cursor);
 
     let data = StreamData {
+        wayland_helper,
         dmabuf_helper,
         session,
         // XXX Should use implicit modifier if none set?

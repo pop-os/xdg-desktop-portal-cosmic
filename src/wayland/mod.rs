@@ -232,7 +232,7 @@ impl Session {
     }
 
     /// Capture to `wl_buffer`, blocking until capture either succeeds or fails
-    fn capture_wl_buffer(
+    pub fn capture_wl_buffer(
         &self,
         buffer: &wl_buffer::WlBuffer,
     ) -> Result<(), WEnum<zcosmic_screencopy_session_v1::FailureReason>> {
@@ -247,55 +247,6 @@ impl Session {
             .res
             .take()
             .unwrap()
-    }
-
-    pub fn capture_shm_fd<Fd: AsFd>(&self, fd: Fd, len: Option<u32>) -> Option<ShmImage<Fd>> {
-        // XXX error type?
-        // TODO: way to get cursor metadata?
-
-        let buffer_info = self.buffer_info_for_format(
-            zcosmic_screencopy_session_v1::BufferType::WlShm,
-            wl_shm::Format::Abgr8888.into(),
-        )?;
-
-        let buf_len = buffer_info.stride * buffer_info.height;
-        if let Some(len) = len {
-            if len != buf_len {
-                return None;
-            }
-        } else {
-            if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
-        };
-        let buffer = self.0.wayland_helper.create_shm_buffer(
-            &fd,
-            buffer_info.width,
-            buffer_info.height,
-            buffer_info.stride,
-            wl_shm::Format::Abgr8888,
-        );
-
-        let res = self.capture_wl_buffer(&buffer);
-        buffer.destroy();
-
-        if res.is_ok() {
-            Some(ShmImage {
-                fd,
-                width: buffer_info.width,
-                height: buffer_info.height,
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn capture_dmabuf_fd<Fd: AsFd>(&self, dmabuf: &buffer::Dmabuf<Fd>) {
-        let buffer = self.0.wayland_helper.create_dmabuf_buffer(dmabuf);
-
-        // TODO buffer_infos
-
-        // TODO handle error
-        let _ = self.capture_wl_buffer(&buffer);
-        buffer.destroy();
     }
 }
 
@@ -441,12 +392,42 @@ impl WaylandHelper {
         source: CaptureSource,
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
+        // XXX error type?
+        // TODO: way to get cursor metadata?
+
         use std::ffi::CStr;
         let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
         let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
 
         let session = self.capture_source_session(source, overlay_cursor);
-        session.capture_shm_fd(fd, None)
+
+        let buffer_info = session.buffer_info_for_format(
+            zcosmic_screencopy_session_v1::BufferType::WlShm,
+            wl_shm::Format::Abgr8888.into(),
+        )?;
+
+        let buf_len = buffer_info.stride * buffer_info.height;
+        if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
+        let buffer = self.create_shm_buffer(
+            &fd,
+            buffer_info.width,
+            buffer_info.height,
+            buffer_info.stride,
+            wl_shm::Format::Abgr8888,
+        );
+
+        let res = session.capture_wl_buffer(&buffer);
+        buffer.destroy();
+
+        if res.is_ok() {
+            Some(ShmImage {
+                fd,
+                width: buffer_info.width,
+                height: buffer_info.height,
+            })
+        } else {
+            None
+        }
     }
 
     pub fn create_shm_buffer<Fd: AsFd>(
@@ -478,7 +459,10 @@ impl WaylandHelper {
         buffer
     }
 
-    fn create_dmabuf_buffer<Fd: AsFd>(&self, dmabuf: &buffer::Dmabuf<Fd>) -> wl_buffer::WlBuffer {
+    pub fn create_dmabuf_buffer<Fd: AsFd>(
+        &self,
+        dmabuf: &buffer::Dmabuf<Fd>,
+    ) -> wl_buffer::WlBuffer {
         // TODO ensure dmabuf is valid format with right number of planes?
         // - params.add can raise protocol error
         let params = self
