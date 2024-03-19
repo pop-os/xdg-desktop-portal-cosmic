@@ -10,8 +10,8 @@ use cosmic::{
     },
     iced_widget::row,
     widget::{
-        button, cosmic_container::container, divider::vertical, dropdown, horizontal_space, icon,
-        image, text, Row,
+        button, divider::vertical, dropdown, horizontal_space, icon, image, layer_container, text,
+        Row,
     },
     Element,
 };
@@ -126,7 +126,7 @@ where
                 let img_buttons = imgs.into_iter().enumerate().map(|(i, img)| {
                     let portion =
                         (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
-                    container(
+                    layer_container(
                         cosmic::widget::button(
                             image::Image::new(image::Handle::from_pixels(
                                 img.width(),
@@ -143,7 +143,7 @@ where
                     .height(Length::Shrink)
                     .into()
                 });
-                container(
+                layer_container(
                     Row::with_children(img_buttons)
                         .spacing(space_l)
                         .width(Length::Fill)
@@ -175,7 +175,7 @@ where
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .into(),
-                Some(Source::Color(color)) => container(horizontal_space(Length::Fill))
+                Some(Source::Color(color)) => layer_container(horizontal_space(Length::Fill))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .style(cosmic::theme::Container::Custom(Box::new(move |_| {
