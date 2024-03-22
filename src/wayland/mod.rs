@@ -34,7 +34,7 @@ use std::{
         unix::{fs::MetadataExt, net::UnixStream},
     },
     process,
-    sync::{Arc, Condvar, Mutex, MutexGuard, Weak},
+    sync::{Arc, Condvar, Mutex, Weak},
     thread,
 };
 use wayland_client::{
@@ -131,7 +131,7 @@ impl AppData {
                 let Some(o) = self
                     .workspace_state
                     .workspace_groups()
-                    .into_iter()
+                    .iter()
                     .find_map(|wg| {
                         wg.workspaces.iter().find_map(|w| {
                             info.workspace
@@ -155,7 +155,7 @@ impl AppData {
                 std::collections::HashMap::new(),
                 |mut map, (outputs, toplevel)| {
                     for o in outputs {
-                        map.entry(o).or_insert_with(Vec::new).push(toplevel.clone());
+                        map.entry(o).or_default().push(toplevel.clone());
                     }
                     map
                 },
@@ -166,7 +166,6 @@ impl AppData {
 #[derive(Default)]
 struct SessionState {
     formats: Option<Formats>,
-    res: Option<Result<(), WEnum<zcosmic_screencopy_frame_v2::FailureReason>>>,
 }
 
 struct SessionInner {
@@ -314,8 +313,6 @@ impl WaylandHelper {
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
     ) -> Vec<ShmImage<OwnedFd>> {
-        use std::ffi::CStr;
-
         // get the active workspace for this output
         // get the toplevels for that workspace
         // capture each toplevel
@@ -350,12 +347,12 @@ impl WaylandHelper {
                 CaptureSource::Output(o) => {
                     self.inner
                         .output_source_manager
-                        .create_source(&o, &self.inner.qh, ())
+                        .create_source(o, &self.inner.qh, ())
                 }
                 CaptureSource::Toplevel(t) => {
                     self.inner
                         .toplevel_source_manager
-                        .create_source(&t, &self.inner.qh, ())
+                        .create_source(t, &self.inner.qh, ())
                 }
             };
 
@@ -393,17 +390,12 @@ impl WaylandHelper {
         // XXX error type?
         // TODO: way to get cursor metadata?
 
-        use std::ffi::CStr;
-        let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
-        let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
-
         let session = self.capture_source_session(source, overlay_cursor);
 
         // TODO: Check that format has been advertised in `Formats`
         let (width, height) = session.wait_for_formats(|formats| formats.buffer_size);
 
-        let buf_len = width * 4 * height;
-        if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
+        let fd = buffer::create_memfd(width, height);
         let buffer =
             self.create_shm_buffer(&fd, width, height, width * 4, wl_shm::Format::Abgr8888);
 
@@ -768,6 +760,7 @@ impl ScreencopySessionDataExt for SessionData {
 
 struct FrameData {
     frame_data: ScreencopyFrameData,
+    #[allow(clippy::type_complexity)]
     sender: Mutex<
         Option<oneshot::Sender<Result<Frame, WEnum<zcosmic_screencopy_frame_v2::FailureReason>>>>,
     >,

@@ -14,17 +14,12 @@ use pipewire::{
     stream::{StreamRef, StreamState},
     sys::pw_buffer,
 };
-use std::{
-    ffi::c_void,
-    io, iter,
-    os::fd::{BorrowedFd, IntoRawFd},
-    slice,
-};
+use std::{ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
 use tokio::sync::oneshot;
 use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
 
 use crate::{
-    buffer::{self, Dmabuf, Plane},
+    buffer,
     wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
 };
 
@@ -169,7 +164,7 @@ impl StreamData {
                         // Similar to xdg-desktop-portal-wlr
                         let modifiers = iter::once(default)
                             .chain(alternatives)
-                            .filter_map(|x| gbm::Modifier::try_from(*x as u64).ok())
+                            .map(|x| gbm::Modifier::from(*x as u64))
                             .collect::<Vec<_>>();
                         if let Some((modifier, plane_count)) = self.choose_modifier(&modifiers) {
                             self.modifier = modifier;
@@ -185,7 +180,9 @@ impl StreamData {
                                 .iter()
                                 .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
                                 .collect();
-                            stream.update_params(&mut params);
+                            if let Err(err) = stream.update_params(&mut params) {
+                                log::error!("failed to update pipewire params: {}", err);
+                            }
                         }
                     }
                 }
@@ -271,7 +268,10 @@ impl StreamData {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
-            block_on(self.session.capture_wl_buffer(&wl_buffer));
+            if let Err(err) = block_on(self.session.capture_wl_buffer(wl_buffer)) {
+                log::error!("screencopy failed: {:?}", err);
+                // TODO terminate screencasting?
+            }
             unsafe { stream.queue_raw_buffer(buffer) };
         }
     }
@@ -293,7 +293,7 @@ fn start_stream(
     let context = pipewire::context::Context::new(&loop_)?;
     let core = context.connect(None)?;
 
-    let name = format!("cosmic-screenshot"); // XXX randomize?
+    let name = "cosmic-screenshot".to_string(); // XXX randomize?
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 

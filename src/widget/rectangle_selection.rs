@@ -99,14 +99,13 @@ impl<Msg> RectangleSelection<Msg> {
                 (inner_rect.bottom - inner_rect.top).abs() as f32,
             ),
         );
-        let inner_rect = Rectangle::new(
+        Rectangle::new(
             Point::new(
                 inner_rect.x - self.output_rect.left as f32,
                 inner_rect.y - self.output_rect.top as f32,
             ),
             inner_rect.size(),
-        );
-        inner_rect
+        )
     }
 
     fn drag_state(&self, cursor: mouse::Cursor) -> DragState {

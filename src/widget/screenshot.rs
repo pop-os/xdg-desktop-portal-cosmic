@@ -64,7 +64,7 @@ pub struct MyImage(Arc<RgbaImage>);
 
 impl AsRef<[u8]> for MyImage {
     fn as_ref(&self) -> &[u8] {
-        &self.0.as_bytes()
+        self.0.as_bytes()
     }
 }
 
@@ -183,7 +183,7 @@ where
                         cosmic::iced_style::container::Appearance {
                             background: Some(match color {
                                 cosmic_bg_config::Color::Single(c) => Background::Color(
-                                    cosmic::iced::Color::new(c[0], c[1], c[2], 1.0).into(),
+                                    cosmic::iced::Color::new(c[0], c[1], c[2], 1.0),
                                 ),
                                 cosmic_bg_config::Color::Gradient(cosmic_bg_config::Gradient {
                                     colors,
@@ -527,7 +527,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
             let tree = &tree.children[i];
             child
                 .as_widget()
-                .draw(&tree, renderer, theme, style, layout, cursor, viewport);
+                .draw(tree, renderer, theme, style, layout, cursor, viewport);
         }
     }
 }
