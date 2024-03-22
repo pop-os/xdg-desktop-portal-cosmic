@@ -4,6 +4,7 @@
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
+use futures::executor::block_on;
 use pipewire::{
     spa::{
         self,
@@ -270,7 +271,7 @@ impl StreamData {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
-            self.session.capture_wl_buffer(&wl_buffer);
+            block_on(self.session.capture_wl_buffer(&wl_buffer));
             unsafe { stream.queue_raw_buffer(buffer) };
         }
     }
@@ -296,11 +297,12 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    let (width, height) =
-        match wayland_helper.capture_source_shm(CaptureSource::Output(&output), overlay_cursor) {
-            Some(frame) => (frame.width, frame.height),
-            None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
-        };
+    let (width, height) = match block_on(
+        wayland_helper.capture_source_shm(CaptureSource::Output(&output), overlay_cursor),
+    ) {
+        Some(frame) => (frame.width, frame.height),
+        None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
+    };
 
     let dmabuf_helper = wayland_helper.dmabuf();
 

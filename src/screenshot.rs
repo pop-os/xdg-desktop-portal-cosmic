@@ -120,6 +120,7 @@ impl Screenshot {
         for (output, _, name) in outputs {
             let frame = wayland_helper
                 .capture_output_toplevels_shm(&output, false)
+                .await
                 .into_iter()
                 .filter_map(|img| img.image().ok().map(|img| Arc::new(img)))
                 .collect();
@@ -142,6 +143,7 @@ impl Screenshot {
         for (output, _, name) in outputs {
             let frame = wayland_helper
                 .capture_source_shm(CaptureSource::Output(&output), false)
+                .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
             map.insert(name, Arc::new(frame.image()?));
         }
@@ -189,12 +191,13 @@ impl Screenshot {
         use ashpd::documents::Permission;
 
         let wayland_helper = self.wayland_helper.clone();
-        let (file, path) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (file, path) = async {
             let mut bounds_opt: Option<Rect> = None;
             let mut frames = Vec::with_capacity(outputs.len());
             for (output, (output_x, output_y), _) in outputs {
                 let frame = wayland_helper
                     .capture_source_shm(CaptureSource::Output(&output), false)
+                    .await
                     .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
                 let rect = Rect {
                     left: output_x,
@@ -214,42 +217,45 @@ impl Screenshot {
                 frames.push((frame, rect));
             }
 
-            let bounds = bounds_opt.unwrap_or_default();
-            let width = bounds
-                .right
-                .saturating_sub(bounds.left)
-                .try_into()
-                .unwrap_or_default();
-            let height = bounds
-                .bottom
-                .saturating_sub(bounds.top)
-                .try_into()
-                .unwrap_or_default();
-            let mut image = image::RgbaImage::new(width, height);
-            for (frame, rect) in frames {
-                let frame_image = frame.image()?;
-                image::imageops::overlay(
-                    &mut image,
-                    &frame_image,
-                    rect.left.into(),
-                    rect.top.into(),
-                );
-            }
+            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let bounds = bounds_opt.unwrap_or_default();
+                let width = bounds
+                    .right
+                    .saturating_sub(bounds.left)
+                    .try_into()
+                    .unwrap_or_default();
+                let height = bounds
+                    .bottom
+                    .saturating_sub(bounds.top)
+                    .try_into()
+                    .unwrap_or_default();
+                let mut image = image::RgbaImage::new(width, height);
+                for (frame, rect) in frames {
+                    let frame_image = frame.image()?;
+                    image::imageops::overlay(
+                        &mut image,
+                        &frame_image,
+                        rect.left.into(),
+                        rect.top.into(),
+                    );
+                }
 
-            let mut file = tempfile::Builder::new()
-                .prefix("screenshot-")
-                .suffix(".png")
-                .tempfile()?;
-            {
-                let mut encoder = png::Encoder::new(&mut file, image.width(), image.height());
-                encoder.set_color(png::ColorType::Rgba);
-                encoder.set_depth(png::BitDepth::Eight);
-                let mut writer = encoder.write_header()?;
-                writer.write_image_data(image.as_raw())?;
-            }
-            Ok(file.keep()?)
-        })
-        .await??;
+                let mut file = tempfile::Builder::new()
+                    .prefix("screenshot-")
+                    .suffix(".png")
+                    .tempfile()?;
+                {
+                    let mut encoder = png::Encoder::new(&mut file, image.width(), image.height());
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    let mut writer = encoder.write_header()?;
+                    writer.write_image_data(image.as_raw())?;
+                }
+                Ok(file.keep()?)
+            })
+            .await?
+        }
+        .await?;
 
         let documents = ashpd::documents::Documents::new().await?;
         let mount_point = documents.mount_point().await?;

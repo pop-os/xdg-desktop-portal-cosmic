@@ -197,7 +197,8 @@ impl Session {
     }
 
     fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> T {
-        let data = self.0
+        let data = self
+            .0
             .condvar
             .wait_while(self.0.state.lock().unwrap(), |data| data.formats.is_none())
             .unwrap();
@@ -205,7 +206,7 @@ impl Session {
     }
 
     /// Capture to `wl_buffer`, blocking until capture either succeeds or fails
-    pub fn capture_wl_buffer(
+    pub async fn capture_wl_buffer(
         &self,
         buffer: &wl_buffer::WlBuffer,
     ) -> Result<Frame, WEnum<zcosmic_screencopy_frame_v2::FailureReason>> {
@@ -224,7 +225,7 @@ impl Session {
         self.0.wayland_helper.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
-        futures::executor::block_on(receiver).unwrap()
+        receiver.await.unwrap()
     }
 }
 
@@ -308,7 +309,7 @@ impl WaylandHelper {
         }
     }
 
-    pub fn capture_output_toplevels_shm(
+    pub async fn capture_output_toplevels_shm(
         &self,
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
@@ -319,15 +320,28 @@ impl WaylandHelper {
         // get the toplevels for that workspace
         // capture each toplevel
 
-        let guard = self.inner.output_toplevels.lock().unwrap();
-        let Some(toplevels) = guard.get(output) else {
+        let Some(toplevels) = self
+            .inner
+            .output_toplevels
+            .lock()
+            .unwrap()
+            .get(output)
+            .cloned()
+        else {
             return Vec::new();
         };
 
-        toplevels
-            .into_iter()
-            .filter_map(|t| self.capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor))
-            .collect()
+        // TODO is `FuturesOrdered` more optimal?
+        let mut images = Vec::new();
+        for t in toplevels.iter() {
+            if let Some(image) = self
+                .capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor)
+                .await
+            {
+                images.push(image);
+            }
+        }
+        images
     }
 
     pub fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
@@ -371,9 +385,9 @@ impl WaylandHelper {
         }))
     }
 
-    pub fn capture_source_shm(
+    pub async fn capture_source_shm(
         &self,
-        source: CaptureSource,
+        source: CaptureSource<'_>,
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
         // XXX error type?
@@ -390,23 +404,14 @@ impl WaylandHelper {
 
         let buf_len = width * 4 * height;
         if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
-        let buffer = self.create_shm_buffer(
-            &fd,
-            width,
-            height,
-            width * 4,
-            wl_shm::Format::Abgr8888,
-        );
+        let buffer =
+            self.create_shm_buffer(&fd, width, height, width * 4, wl_shm::Format::Abgr8888);
 
-        let res = session.capture_wl_buffer(&buffer);
+        let res = session.capture_wl_buffer(&buffer).await;
         buffer.destroy();
 
         if res.is_ok() {
-            Some(ShmImage {
-                fd,
-                width,
-                height,
-            })
+            Some(ShmImage { fd, width, height })
         } else {
             None
         }
