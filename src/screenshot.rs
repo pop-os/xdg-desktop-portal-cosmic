@@ -120,8 +120,10 @@ impl Screenshot {
         for (output, _, name) in outputs {
             let frame = wayland_helper
                 .capture_output_toplevels_shm(&output, false)
+                .await
                 .into_iter()
-                .filter_map(|img| img.image().ok().map(|img| Arc::new(img)))
+                .filter_map(|img| img.image().ok())
+                .map(Arc::new)
                 .collect();
             map.insert(name.clone(), frame);
         }
@@ -142,6 +144,7 @@ impl Screenshot {
         for (output, _, name) in outputs {
             let frame = wayland_helper
                 .capture_source_shm(CaptureSource::Output(&output), false)
+                .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
             map.insert(name, Arc::new(frame.image()?));
         }
@@ -151,7 +154,7 @@ impl Screenshot {
 
     pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
         let mut encoder =
-            png::Encoder::new(std::fs::File::create(&path)?, img.width(), img.height());
+            png::Encoder::new(std::fs::File::create(path)?, img.width(), img.height());
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;
@@ -189,12 +192,13 @@ impl Screenshot {
         use ashpd::documents::Permission;
 
         let wayland_helper = self.wayland_helper.clone();
-        let (file, path) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (file, path) = async {
             let mut bounds_opt: Option<Rect> = None;
             let mut frames = Vec::with_capacity(outputs.len());
             for (output, (output_x, output_y), _) in outputs {
                 let frame = wayland_helper
                     .capture_source_shm(CaptureSource::Output(&output), false)
+                    .await
                     .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
                 let rect = Rect {
                     left: output_x,
@@ -214,42 +218,45 @@ impl Screenshot {
                 frames.push((frame, rect));
             }
 
-            let bounds = bounds_opt.unwrap_or_default();
-            let width = bounds
-                .right
-                .saturating_sub(bounds.left)
-                .try_into()
-                .unwrap_or_default();
-            let height = bounds
-                .bottom
-                .saturating_sub(bounds.top)
-                .try_into()
-                .unwrap_or_default();
-            let mut image = image::RgbaImage::new(width, height);
-            for (frame, rect) in frames {
-                let frame_image = frame.image()?;
-                image::imageops::overlay(
-                    &mut image,
-                    &frame_image,
-                    rect.left.into(),
-                    rect.top.into(),
-                );
-            }
+            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let bounds = bounds_opt.unwrap_or_default();
+                let width = bounds
+                    .right
+                    .saturating_sub(bounds.left)
+                    .try_into()
+                    .unwrap_or_default();
+                let height = bounds
+                    .bottom
+                    .saturating_sub(bounds.top)
+                    .try_into()
+                    .unwrap_or_default();
+                let mut image = image::RgbaImage::new(width, height);
+                for (frame, rect) in frames {
+                    let frame_image = frame.image()?;
+                    image::imageops::overlay(
+                        &mut image,
+                        &frame_image,
+                        rect.left.into(),
+                        rect.top.into(),
+                    );
+                }
 
-            let mut file = tempfile::Builder::new()
-                .prefix("screenshot-")
-                .suffix(".png")
-                .tempfile()?;
-            {
-                let mut encoder = png::Encoder::new(&mut file, image.width(), image.height());
-                encoder.set_color(png::ColorType::Rgba);
-                encoder.set_depth(png::BitDepth::Eight);
-                let mut writer = encoder.write_header()?;
-                writer.write_image_data(image.as_raw())?;
-            }
-            Ok(file.keep()?)
-        })
-        .await??;
+                let mut file = tempfile::Builder::new()
+                    .prefix("screenshot-")
+                    .suffix(".png")
+                    .tempfile()?;
+                {
+                    let mut encoder = png::Encoder::new(&mut file, image.width(), image.height());
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    let mut writer = encoder.write_header()?;
+                    writer.write_image_data(image.as_raw())?;
+                }
+                Ok(file.keep()?)
+            })
+            .await?
+        }
+        .await?;
 
         let documents = ashpd::documents::Documents::new().await?;
         let mount_point = documents.mount_point().await?;
@@ -271,7 +278,7 @@ impl Screenshot {
                 ],
             )
             .await?;
-        let doc_id = doc_ids.get(0).unwrap();
+        let doc_id = doc_ids.first().unwrap();
 
         let mut doc_path = mount_point.as_ref().to_path_buf();
         doc_path.push(&**doc_id);
@@ -459,7 +466,7 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         output,
         id,
         Msg::OutputChanged,
-        |c| Msg::Choice(c),
+        Msg::Choice,
         Msg::DragCommand,
         &args.toplevel_images,
         Msg::WindowChosen,
@@ -559,7 +566,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
-                        if let Err(err) = Screenshot::save_rgba(&img, &image_path) {
+                        if let Err(err) = Screenshot::save_rgba(img, &image_path) {
                             log::error!("Failed to capture screenshot: {:?}", err);
                             success = false;
                         };
@@ -634,7 +641,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         }
         Msg::DragCommand(DndCommand(cmd)) => {
             let action = cmd();
-            return data_device::action(action);
+            data_device::action(action)
         }
         Msg::WindowChosen(name, i) => {
             if let Some(args) = portal.screenshot_args.as_mut() {
@@ -664,94 +671,89 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
     }
 }
 
-pub fn update_args(portal: &mut CosmicPortal, msg: Args) -> cosmic::Command<crate::app::Msg> {
-    match msg {
-        args => {
-            let Args {
-                handle,
-                app_id,
-                parent_window,
-                options,
-                output_images: images,
-                tx,
-                choice,
-                action,
-                location,
-                toplevel_images,
-            } = &args;
+pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<crate::app::Msg> {
+    let Args {
+        handle,
+        app_id,
+        parent_window,
+        options,
+        output_images: images,
+        tx,
+        choice,
+        action,
+        location,
+        toplevel_images,
+    } = &args;
 
-            if portal.outputs.len() != images.len() {
-                log::error!(
-                    "Screenshot output count mismatch: {} != {}",
-                    portal.outputs.len(),
-                    images.len()
-                );
-                log::warn!("Screenshot outputs: {:?}", portal.outputs);
-                log::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
-                return cosmic::Command::none();
-            }
+    if portal.outputs.len() != images.len() {
+        log::error!(
+            "Screenshot output count mismatch: {} != {}",
+            portal.outputs.len(),
+            images.len()
+        );
+        log::warn!("Screenshot outputs: {:?}", portal.outputs);
+        log::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
+        return cosmic::Command::none();
+    }
 
-            // update output bg sources
-            if let Ok(c) = cosmic::cosmic_config::Config::new_state(
-                cosmic_bg_config::NAME,
-                cosmic_bg_config::state::State::version(),
-            ) {
-                let bg_state = match cosmic_bg_config::state::State::get_entry(&c) {
-                    Ok(state) => state,
-                    Err((err, s)) => {
-                        log::error!("Failed to get bg config state: {:?}", err);
-                        s
-                    }
-                };
-                for o in &mut portal.outputs {
-                    let source = bg_state.wallpapers.iter().find(|s| s.0 == o.name);
-                    o.bg_source = Some(source.cloned().map(|s| s.1).unwrap_or_else(|| {
-                        cosmic_bg_config::Source::Path(
-                            "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png"
-                                .into(),
-                        )
-                    }));
-                }
-            } else {
-                log::error!("Failed to get bg config state");
-                for o in &mut portal.outputs {
-                    o.bg_source = Some(cosmic_bg_config::Source::Path(
-                        "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
-                    ));
-                }
+    // update output bg sources
+    if let Ok(c) = cosmic::cosmic_config::Config::new_state(
+        cosmic_bg_config::NAME,
+        cosmic_bg_config::state::State::version(),
+    ) {
+        let bg_state = match cosmic_bg_config::state::State::get_entry(&c) {
+            Ok(state) => state,
+            Err((err, s)) => {
+                log::error!("Failed to get bg config state: {:?}", err);
+                s
             }
-            portal.location_options = vec![fl!("save-to", "pictures"), fl!("save-to", "documents")];
-
-            if portal.screenshot_args.replace(args).is_none() {
-                // iterate over outputs and create a layer surface for each
-                let cmds: Vec<_> = portal
-                    .outputs
-                    .iter()
-                    .filter_map(
-                        |OutputState {
-                             output, id, name, ..
-                         }| {
-                            Some(get_layer_surface(SctkLayerSurfaceSettings {
-                                id: *id,
-                                layer: Layer::Overlay,
-                                keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                                pointer_interactivity: true,
-                                anchor: Anchor::all(),
-                                output: IcedOutput::Output(output.clone()),
-                                namespace: "screenshot".to_string(),
-                                size: Some((None, None)),
-                                exclusive_zone: -1,
-                                size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
-                                ..Default::default()
-                            }))
-                        },
-                    )
-                    .collect();
-                cosmic::Command::batch(cmds)
-            } else {
-                log::info!("Existing screenshot args updated");
-                cosmic::Command::none()
-            }
+        };
+        for o in &mut portal.outputs {
+            let source = bg_state.wallpapers.iter().find(|s| s.0 == o.name);
+            o.bg_source = Some(source.cloned().map(|s| s.1).unwrap_or_else(|| {
+                cosmic_bg_config::Source::Path(
+                    "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
+                )
+            }));
         }
+    } else {
+        log::error!("Failed to get bg config state");
+        for o in &mut portal.outputs {
+            o.bg_source = Some(cosmic_bg_config::Source::Path(
+                "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
+            ));
+        }
+    }
+    portal.location_options = vec![fl!("save-to", "pictures"), fl!("save-to", "documents")];
+
+    if portal.screenshot_args.replace(args).is_none() {
+        // iterate over outputs and create a layer surface for each
+        let cmds: Vec<_> = portal
+            .outputs
+            .iter()
+            .map(
+                |OutputState {
+                     output, id, name, ..
+                 }| {
+                    get_layer_surface(SctkLayerSurfaceSettings {
+                        id: *id,
+                        layer: Layer::Overlay,
+                        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                        pointer_interactivity: true,
+                        anchor: Anchor::all(),
+                        output: IcedOutput::Output(output.clone()),
+                        namespace: "screenshot".to_string(),
+                        size: Some((None, None)),
+                        exclusive_zone: -1,
+                        size_limits: Limits::NONE.min_height(1.0).min_width(1.0),
+                        ..Default::default()
+                    })
+                },
+            )
+            .collect();
+        cosmic::Command::batch(cmds)
+    } else {
+        log::info!("Existing screenshot args updated");
+        cosmic::Command::none()
     }
 }

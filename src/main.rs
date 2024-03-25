@@ -1,6 +1,6 @@
 use cosmic::cosmic_theme::palette::Srgba;
 use std::collections::HashMap;
-use zbus::zvariant::{self, Array, Dict, OwnedValue, Value};
+use zbus::zvariant::{self, OwnedValue};
 
 mod access;
 mod app;

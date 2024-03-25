@@ -11,8 +11,8 @@ wgpu = ["libcosmic/wgpu"]
 [dependencies]
 anyhow = "1.0.60"
 ashpd = "0.6.8"
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e65fa5e" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e65fa5e" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "1cc4a13" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "1cc4a13" }
 futures = "0.3"
 image = "0.24"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = ["wayland", "tokio", "dbus-config"] }

@@ -220,9 +220,10 @@ impl cosmic::Application for CosmicPortal {
         }
     }
 
+    #[allow(clippy::collapsible_match)]
     fn subscription(&self) -> cosmic::iced_futures::Subscription<Self::Message> {
         Subscription::batch(vec![
-            subscription::portal_subscription(self.wayland_helper.clone()).map(|e| Msg::Portal(e)),
+            subscription::portal_subscription(self.wayland_helper.clone()).map(Msg::Portal),
             listen_with(|e, _| match e {
                 cosmic::iced_core::Event::PlatformSpecific(
                     cosmic::iced_core::event::PlatformSpecific::Wayland(w_e),

@@ -1,10 +1,10 @@
 use cosmic_client_toolkit::{
-    cosmic_protocols::screencopy::v1::client::{
-        zcosmic_screencopy_manager_v1, zcosmic_screencopy_session_v1,
+    cosmic_protocols::screencopy::v2::client::{
+        zcosmic_screencopy_frame_v2, zcosmic_screencopy_manager_v2, zcosmic_screencopy_session_v2,
     },
     screencopy::{
-        BufferInfo, ScreencopyHandler, ScreencopySessionData, ScreencopySessionDataExt,
-        ScreencopyState,
+        capture, Formats, Frame, ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler,
+        ScreencopySessionData, ScreencopySessionDataExt, ScreencopyState,
     },
     sctk::{
         self,
@@ -17,9 +17,14 @@ use cosmic_client_toolkit::{
     workspace::WorkspaceState,
 };
 use cosmic_protocols::{
+    image_source::v1::client::{
+        zcosmic_output_image_source_manager_v1::ZcosmicOutputImageSourceManagerV1,
+        zcosmic_toplevel_image_source_manager_v1::ZcosmicToplevelImageSourceManagerV1,
+    },
     toplevel_info::v1::client::zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1,
     workspace::v1::client::zcosmic_workspace_handle_v1,
 };
+use futures::channel::oneshot;
 use rustix::fd::{FromRawFd, RawFd};
 use std::{
     collections::HashMap,
@@ -29,7 +34,7 @@ use std::{
         unix::{fs::MetadataExt, net::UnixStream},
     },
     process,
-    sync::{Arc, Condvar, Mutex, MutexGuard, Weak},
+    sync::{Arc, Condvar, Mutex, Weak},
     thread,
 };
 use wayland_client::{
@@ -82,7 +87,9 @@ struct WaylandHelperInner {
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
     output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ZcosmicToplevelHandleV1>>>,
     qh: QueueHandle<AppData>,
-    screencopy_manager: zcosmic_screencopy_manager_v1::ZcosmicScreencopyManagerV1,
+    screencopy_manager: zcosmic_screencopy_manager_v2::ZcosmicScreencopyManagerV2,
+    output_source_manager: ZcosmicOutputImageSourceManagerV1,
+    toplevel_source_manager: ZcosmicToplevelImageSourceManagerV1,
     wl_shm: wl_shm::WlShm,
     dmabuf: Mutex<Option<DmabufHelper>>,
     zwp_dmabuf: ZwpLinuxDmabufV1,
@@ -124,7 +131,7 @@ impl AppData {
                 let Some(o) = self
                     .workspace_state
                     .workspace_groups()
-                    .into_iter()
+                    .iter()
                     .find_map(|wg| {
                         wg.workspaces.iter().find_map(|w| {
                             info.workspace
@@ -148,7 +155,7 @@ impl AppData {
                 std::collections::HashMap::new(),
                 |mut map, (outputs, toplevel)| {
                     for o in outputs {
-                        map.entry(o).or_insert_with(Vec::new).push(toplevel.clone());
+                        map.entry(o).or_default().push(toplevel.clone());
                     }
                     map
                 },
@@ -158,13 +165,12 @@ impl AppData {
 
 #[derive(Default)]
 struct SessionState {
-    buffer_infos: Option<Vec<BufferInfo>>,
-    res: Option<Result<(), WEnum<zcosmic_screencopy_session_v1::FailureReason>>>,
+    formats: Option<Formats>,
 }
 
 struct SessionInner {
     wayland_helper: WaylandHelper,
-    screencopy_session: zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+    screencopy_session: zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
     condvar: Condvar,
     state: Mutex<SessionState>,
 }
@@ -177,14 +183,9 @@ impl Drop for SessionInner {
 
 pub struct Session(Arc<SessionInner>);
 
-struct SessionData {
-    session: Weak<SessionInner>,
-    session_data: ScreencopySessionData,
-}
-
 impl Session {
     pub fn for_session(
-        session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+        session: &zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
     ) -> Option<Self> {
         session.data::<SessionData>()?.session.upgrade().map(Self)
     }
@@ -194,59 +195,36 @@ impl Session {
         self.0.condvar.notify_all();
     }
 
-    fn wait_while<F: FnMut(&SessionState) -> bool>(&self, mut f: F) -> MutexGuard<SessionState> {
-        self.0
+    fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> T {
+        let data = self
+            .0
             .condvar
-            .wait_while(self.0.state.lock().unwrap(), |data| f(data))
-            .unwrap()
-    }
-
-    /// Block until compoistor sends buffer_infos, then find buffer info matching format
-    fn buffer_info_for_format(
-        &self,
-        type_: zcosmic_screencopy_session_v1::BufferType,
-        format: u32,
-    ) -> Option<BufferInfo> {
-        let data = self.wait_while(|data| data.buffer_infos.is_none());
-        // XXX
-        if let Some(buffer_info) = data
-            .buffer_infos
-            .as_ref()
-            .unwrap()
-            .iter()
-            .find(|x| {
-                x.type_ == WEnum::Value(zcosmic_screencopy_session_v1::BufferType::WlShm)
-                    && x.format == wl_shm::Format::Abgr8888.into()
-            })
-            .cloned()
-        {
-            Some(buffer_info)
-        } else {
-            log::error!(
-                "No suitable buffer format found for {:?}",
-                &self.0.screencopy_session
-            );
-            log::warn!("Available formats: {:#?}", &data.buffer_infos);
-            None
-        }
+            .wait_while(self.0.state.lock().unwrap(), |data| data.formats.is_none())
+            .unwrap();
+        cb(data.formats.as_ref().unwrap())
     }
 
     /// Capture to `wl_buffer`, blocking until capture either succeeds or fails
-    pub fn capture_wl_buffer(
+    pub async fn capture_wl_buffer(
         &self,
         buffer: &wl_buffer::WlBuffer,
-    ) -> Result<(), WEnum<zcosmic_screencopy_session_v1::FailureReason>> {
-        self.0.screencopy_session.attach_buffer(buffer, None, 0); // XXX age?
-        self.0
-            .screencopy_session
-            .commit(zcosmic_screencopy_session_v1::Options::empty());
+    ) -> Result<Frame, WEnum<zcosmic_screencopy_frame_v2::FailureReason>> {
+        let (sender, receiver) = oneshot::channel();
+        // TODO damage
+        capture(
+            &self.0.screencopy_session,
+            buffer,
+            &[],
+            &self.0.wayland_helper.inner.qh,
+            FrameData {
+                frame_data: Default::default(),
+                sender: Mutex::new(Some(sender)),
+            },
+        );
         self.0.wayland_helper.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
-        self.wait_while(|data| data.res.is_none())
-            .res
-            .take()
-            .unwrap()
+        receiver.await.unwrap()
     }
 }
 
@@ -273,6 +251,8 @@ impl WaylandHelper {
                 output_toplevels: Mutex::new(HashMap::new()),
                 qh: qh.clone(),
                 screencopy_manager: screencopy_state.screencopy_manager.clone(),
+                output_source_manager: screencopy_state.output_source_manager.clone().unwrap(),
+                toplevel_source_manager: screencopy_state.toplevel_source_manager.clone().unwrap(),
                 wl_shm: shm_state.wl_shm().clone(),
                 dmabuf: Mutex::new(None),
                 zwp_dmabuf,
@@ -328,53 +308,68 @@ impl WaylandHelper {
         }
     }
 
-    pub fn capture_output_toplevels_shm(
+    pub async fn capture_output_toplevels_shm(
         &self,
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
     ) -> Vec<ShmImage<OwnedFd>> {
-        use std::ffi::CStr;
-
         // get the active workspace for this output
         // get the toplevels for that workspace
         // capture each toplevel
 
-        let guard = self.inner.output_toplevels.lock().unwrap();
-        let Some(toplevels) = guard.get(output) else {
+        let Some(toplevels) = self
+            .inner
+            .output_toplevels
+            .lock()
+            .unwrap()
+            .get(output)
+            .cloned()
+        else {
             return Vec::new();
         };
 
-        toplevels
-            .into_iter()
-            .filter_map(|t| self.capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor))
-            .collect()
+        // TODO is `FuturesOrdered` more optimal?
+        let mut images = Vec::new();
+        for t in toplevels.iter() {
+            if let Some(image) = self
+                .capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor)
+                .await
+            {
+                images.push(image);
+            }
+        }
+        images
     }
 
     pub fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
-        #[allow(unused_variables)] // TODO
-        let overlay_cursor = if overlay_cursor { 1 } else { 0 };
-
         Session(Arc::new_cyclic(|weak_session| {
-            let screencopy_session = match source {
-                CaptureSource::Output(o) => self.inner.screencopy_manager.capture_output(
-                    &o,
-                    zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
-                    &self.inner.qh,
-                    SessionData {
-                        session: weak_session.clone(),
-                        session_data: Default::default(),
-                    },
-                ),
-                CaptureSource::Toplevel(t) => self.inner.screencopy_manager.capture_toplevel(
-                    &t,
-                    zcosmic_screencopy_manager_v1::CursorMode::Hidden, // XXX take into account adventised capabilities
-                    &self.inner.qh,
-                    SessionData {
-                        session: weak_session.clone(),
-                        session_data: Default::default(),
-                    },
-                ),
+            let image_source = match source {
+                CaptureSource::Output(o) => {
+                    self.inner
+                        .output_source_manager
+                        .create_source(o, &self.inner.qh, ())
+                }
+                CaptureSource::Toplevel(t) => {
+                    self.inner
+                        .toplevel_source_manager
+                        .create_source(t, &self.inner.qh, ())
+                }
             };
+
+            let options = if overlay_cursor {
+                zcosmic_screencopy_manager_v2::Options::PaintCursors
+            } else {
+                zcosmic_screencopy_manager_v2::Options::empty()
+            };
+            let screencopy_session = self.inner.screencopy_manager.create_session(
+                &image_source,
+                options,
+                &self.inner.qh,
+                SessionData {
+                    session: weak_session.clone(),
+                    session_data: Default::default(),
+                },
+            );
 
             self.inner.conn.flush().unwrap();
 
@@ -387,44 +382,28 @@ impl WaylandHelper {
         }))
     }
 
-    pub fn capture_source_shm(
+    pub async fn capture_source_shm(
         &self,
-        source: CaptureSource,
+        source: CaptureSource<'_>,
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
         // XXX error type?
         // TODO: way to get cursor metadata?
 
-        use std::ffi::CStr;
-        let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
-        let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
-
         let session = self.capture_source_session(source, overlay_cursor);
 
-        let buffer_info = session.buffer_info_for_format(
-            zcosmic_screencopy_session_v1::BufferType::WlShm,
-            wl_shm::Format::Abgr8888.into(),
-        )?;
+        // TODO: Check that format has been advertised in `Formats`
+        let (width, height) = session.wait_for_formats(|formats| formats.buffer_size);
 
-        let buf_len = buffer_info.stride * buffer_info.height;
-        if let Err(err) = rustix::fs::ftruncate(&fd, buf_len as _) {};
-        let buffer = self.create_shm_buffer(
-            &fd,
-            buffer_info.width,
-            buffer_info.height,
-            buffer_info.stride,
-            wl_shm::Format::Abgr8888,
-        );
+        let fd = buffer::create_memfd(width, height);
+        let buffer =
+            self.create_shm_buffer(&fd, width, height, width * 4, wl_shm::Format::Abgr8888);
 
-        let res = session.capture_wl_buffer(&buffer);
+        let res = session.capture_wl_buffer(&buffer).await;
         buffer.destroy();
 
         if res.is_ok() {
-            Some(ShmImage {
-                fd,
-                width: buffer_info.width,
-                height: buffer_info.height,
-            })
+            Some(ShmImage { fd, width, height })
         } else {
             None
         }
@@ -582,26 +561,37 @@ impl ScreencopyHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
-        buffer_infos: &[BufferInfo],
+        session: &zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
+        formats: &Formats,
     ) {
         if let Some(session) = Session::for_session(session) {
             session.update(|data| {
-                data.buffer_infos = Some(buffer_infos.to_vec());
+                data.formats = Some(formats.clone());
             });
         }
+    }
+
+    fn stopped(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _session: &zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
+    ) {
+        // TODO
     }
 
     fn ready(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
+        screencopy_frame: &zcosmic_screencopy_frame_v2::ZcosmicScreencopyFrameV2,
+        frame: Frame,
     ) {
-        if let Some(session) = Session::for_session(session) {
-            session.update(|data| {
-                data.res = Some(Ok(()));
-            });
+        if let Some(sender) = screencopy_frame
+            .data::<FrameData>()
+            .and_then(|data| data.sender.lock().unwrap().take())
+        {
+            let _ = sender.send(Ok(frame));
         }
     }
 
@@ -609,14 +599,14 @@ impl ScreencopyHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        session: &zcosmic_screencopy_session_v1::ZcosmicScreencopySessionV1,
-        reason: WEnum<zcosmic_screencopy_session_v1::FailureReason>,
+        screencopy_frame: &zcosmic_screencopy_frame_v2::ZcosmicScreencopyFrameV2,
+        reason: WEnum<zcosmic_screencopy_frame_v2::FailureReason>,
     ) {
-        // TODO send message to thread
-        if let Some(session) = Session::for_session(session) {
-            session.update(|data| {
-                data.res = Some(Err(reason));
-            });
+        if let Some(sender) = screencopy_frame
+            .data::<FrameData>()
+            .and_then(|data| data.sender.lock().unwrap().take())
+        {
+            let _ = sender.send(Err(reason));
         }
     }
 }
@@ -757,9 +747,28 @@ fn gbm_device(rdev: u64) -> io::Result<Option<gbm::Device<fs::File>>> {
     Ok(None)
 }
 
+struct SessionData {
+    session: Weak<SessionInner>,
+    session_data: ScreencopySessionData,
+}
+
 impl ScreencopySessionDataExt for SessionData {
     fn screencopy_session_data(&self) -> &ScreencopySessionData {
         &self.session_data
+    }
+}
+
+struct FrameData {
+    frame_data: ScreencopyFrameData,
+    #[allow(clippy::type_complexity)]
+    sender: Mutex<
+        Option<oneshot::Sender<Result<Frame, WEnum<zcosmic_screencopy_frame_v2::FailureReason>>>>,
+    >,
+}
+
+impl ScreencopyFrameDataExt for FrameData {
+    fn screencopy_frame_data(&self) -> &ScreencopyFrameData {
+        &self.frame_data
     }
 }
 
@@ -767,4 +776,4 @@ sctk::delegate_shm!(AppData);
 sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);
 sctk::delegate_dmabuf!(AppData);
-cosmic_client_toolkit::delegate_screencopy!(AppData, session: [SessionData]);
+cosmic_client_toolkit::delegate_screencopy!(AppData, session: [SessionData], frame: [FrameData]);

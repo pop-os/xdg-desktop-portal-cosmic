@@ -28,10 +28,11 @@ pub(crate) struct AccessDialogOptions {
     grant_label: Option<String>,
     icon: Option<String>,
     //(ID returned with the response, choices (ID, label), label, initial selection or "" meaning the portal should choose)
+    #[allow(clippy::type_complexity)]
     choices: Option<Vec<(String, String, Vec<(String, String)>, String)>>,
 }
 
-pub static ACCESS_ID: Lazy<window::Id> = Lazy::new(|| window::Id::unique());
+pub static ACCESS_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 
 #[derive(zvariant::SerializeDict, zvariant::Type, Debug, Clone)]
 #[zvariant(signature = "a{sv}")]
@@ -52,6 +53,7 @@ impl Access {
 
 #[zbus::dbus_interface(name = "")]
 impl Access {
+    #[allow(clippy::too_many_arguments)]
     async fn access_dialog(
         &self,
         handle: zvariant::ObjectPath<'_>,
@@ -252,7 +254,8 @@ pub fn update_args(
         tokio::spawn(async move {
             let _ = args
                 .tx
-                .send(PortalResponse::Cancelled::<AccessDialogResult>);
+                .send(PortalResponse::Cancelled::<AccessDialogResult>)
+                .await;
         });
     }
 
