@@ -9,7 +9,7 @@ use cosmic::iced_sctk::commands::data_device;
 use cosmic::iced_sctk::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-use image::RgbaImage;
+use image::{GenericImageView, RgbaImage};
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
@@ -55,6 +55,7 @@ struct PickColorResult {
     color: (f64, f64, f64), // (ddd)
 }
 
+/// Logical Size and Position of a rectangle
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rect {
     pub left: i32,
@@ -540,7 +541,17 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                         let Some(intersect) = r.intersect(output_rect) else {
                             continue;
                         };
-                        let translated_intersect = intersect.translate(-pos.0, -pos.1);
+                        let mut translated_intersect = intersect.translate(-pos.0, -pos.1);
+                        let scale = raw_img.width() as f32 / output.logical_size.0 as f32;
+                        translated_intersect.left =
+                            (translated_intersect.left as f32 * scale).round() as i32;
+                        translated_intersect.top =
+                            (translated_intersect.top as f32 * scale).round() as i32;
+                        translated_intersect.right =
+                            (translated_intersect.right as f32 * scale).round() as i32;
+                        translated_intersect.bottom =
+                            (translated_intersect.bottom as f32 * scale).round() as i32;
+
                         let overlay = image::imageops::crop_imm(
                             raw_img.as_ref(),
                             u32::try_from(translated_intersect.left).unwrap_or_default(),
@@ -549,12 +560,27 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                             (translated_intersect.bottom - translated_intersect.top).unsigned_abs(),
                         );
 
-                        image::imageops::overlay(
-                            &mut img,
-                            &*overlay,
-                            (intersect.left - r.left).into(),
-                            (intersect.top - r.top).into(),
-                        );
+                        if img.width() != output.logical_size.0 as u32 {
+                            let overlay = image::imageops::resize(
+                                &overlay.to_image(),
+                                (intersect.right - intersect.left) as u32,
+                                (intersect.bottom - intersect.top) as u32,
+                                image::imageops::FilterType::Lanczos3,
+                            );
+                            image::imageops::overlay(
+                                &mut img,
+                                &overlay,
+                                (intersect.left - r.left).into(),
+                                (intersect.top - r.top).into(),
+                            );
+                        } else {
+                            image::imageops::overlay(
+                                &mut img,
+                                &*overlay,
+                                (intersect.left - r.left).into(),
+                                (intersect.top - r.top).into(),
+                            );
+                        }
                     }
                     if let Err(err) = Screenshot::save_rgba(&img, &image_path) {
                         success = false;
