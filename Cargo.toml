@@ -11,16 +11,22 @@ wgpu = ["libcosmic/wgpu"]
 [dependencies]
 anyhow = "1.0.60"
 ashpd = "0.6.8"
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "1cc4a13" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "1cc4a13" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e4e6f8c" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e4e6f8c" }
 futures = "0.3"
 image = "0.24"
-libcosmic = { git = "https://github.com/pop-os/libcosmic", features = ["wayland", "tokio", "dbus-config"] }
+libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
+    "wayland",
+    "tokio",
+    "dbus-config",
+] }
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
 memmap2 = "0.9.0"
 # pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
 once_cell = "1.19.0"
-pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", features = ["v0_3_33"] }
+pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", features = [
+    "v0_3_33",
+] }
 png = "0.17.5"
 rustix = { version = "0.38.0", features = ["fs"] }
 serde = "1.0.143"
@@ -35,9 +41,16 @@ wayland-protocols = "0.31.0"
 env_logger = "0.10.0"
 log = "0.4.20"
 dirs = "5.0.1"
-time = { version = "0.3.31", features = ["local-offset", "formatting", "macros"] }
+time = { version = "0.3.31", features = [
+    "local-offset",
+    "formatting",
+    "macros",
+] }
 # i18n
-i18n-embed = { version = "0.14.1", features = ["fluent-system", "desktop-requester"] }
+i18n-embed = { version = "0.14.1", features = [
+    "fluent-system",
+    "desktop-requester",
+] }
 i18n-embed-fl = "0.7.0"
 rust-embed = "8.2.0"
 
@@ -47,8 +60,9 @@ gst = { package = "gstreamer", version = "0.21.3" }
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { path = "../libcosmic" }
 # cosmic-config = { path = "../libcosmic/cosmic-config" }
-
+#
 # [patch."https://github.com/smithay/client-toolkit"]
-# smithay-client-toolkit = { path = "../fork/client-toolkit" }
+# sctk = { package = "smithay-client-toolkit", git = "https://github.com/smithay/client-toolkit//", rev = "3bed072" }
+
 [profile.release]
 debug = true
