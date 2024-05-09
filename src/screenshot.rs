@@ -57,8 +57,7 @@ struct ScreenshotBytes {
 }
 
 impl ScreenshotBytes {
-    fn new(path: &PathBuf) -> Self {
-        let bytes = std::fs::read(path).unwrap_or_default();
+    fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
 }
@@ -118,7 +117,7 @@ impl Rect {
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageSaveLocation {
-    // Clipboard, // TODO
+    Clipboard,
     #[default]
     Pictures,
     Documents,
@@ -187,6 +186,15 @@ impl Screenshot {
         Ok(())
     }
 
+    pub fn save_rgba_to_buffer(img: &RgbaImage, buffer: &mut Vec<u8>) -> anyhow::Result<()> {
+        let mut encoder = png::Encoder::new(buffer, img.width(), img.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(img.as_raw())?;
+        Ok(())
+    }
+
     pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
         let mut path = match location {
             ImageSaveLocation::Pictures => {
@@ -194,8 +202,9 @@ impl Screenshot {
             }
             ImageSaveLocation::Documents => {
                 dirs::document_dir().or_else(|| dirs::home_dir().map(|h| h.join("Documents")))
-            } // ImageSaveLocation::Clipboard => None,
-              // ImageSaveLocation::Custom(path) => Some(path),
+            }
+            ImageSaveLocation::Clipboard => None,
+            // ImageSaveLocation::Custom(path) => Some(path),
         }?;
         let date_format =
             time::macros::format_description!("[year]-[month]-[day]-[hour]-[minute]-[second]");
@@ -525,23 +534,24 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             } = args;
 
             let mut success = true;
-            let image_path = if let Some(location) = Screenshot::get_img_path(location) {
-                location
-            } else {
-                tokio::spawn(async move {
-                    if let Err(err) = tx.send(PortalResponse::Other).await {
-                        log::error!("Failed to send screenshot event");
-                    }
-                });
-                return cosmic::Command::batch(cmds);
-            };
+            let image_path = Screenshot::get_img_path(location);
 
             match choice {
                 Choice::Output(name) => {
                     if let Some(img) = images.remove(&name) {
-                        if let Err(err) = Screenshot::save_rgba(&img, &image_path) {
-                            log::error!("Failed to capture screenshot: {:?}", err);
-                        };
+                        if let Some(ref image_path) = image_path {
+                            if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                                log::error!("Failed to capture screenshot: {:?}", err);
+                            };
+                        } else {
+                            let mut buffer = Vec::new();
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                                log::error!("Failed to save screenshot to buffer: {:?}", e);
+                                success = false;
+                            } else {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                            };
+                        }
                     } else {
                         log::error!("Failed to find output {}", name);
                         success = false;
@@ -554,6 +564,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                         (r.right - r.left).unsigned_abs(),
                         (r.bottom - r.top).unsigned_abs(),
                     );
+
                     for (name, raw_img) in images {
                         let Some(output) = outputs.iter().find(|o| o.name == name) else {
                             continue;
@@ -610,8 +621,19 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                             );
                         }
                     }
-                    if let Err(err) = Screenshot::save_rgba(&img, &image_path) {
-                        success = false;
+
+                    if let Some(ref image_path) = image_path {
+                        if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                            success = false;
+                        }
+                    } else {
+                        let mut buffer = Vec::new();
+                        if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                            log::error!("Failed to save screenshot to buffer: {:?}", e);
+                            success = false;
+                        } else {
+                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                        };
                     }
                 }
                 Choice::Window(output, Some(window_i)) => {
@@ -620,10 +642,20 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
-                        if let Err(err) = Screenshot::save_rgba(img, &image_path) {
-                            log::error!("Failed to capture screenshot: {:?}", err);
-                            success = false;
-                        };
+                        if let Some(ref image_path) = image_path {
+                            if let Err(err) = Screenshot::save_rgba(img, image_path) {
+                                log::error!("Failed to capture screenshot: {:?}", err);
+                                success = false;
+                            }
+                        } else {
+                            let mut buffer = Vec::new();
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                                log::error!("Failed to save screenshot to buffer: {:?}", e);
+                                success = false;
+                            } else {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                            };
+                        }
                     } else {
                         success = false;
                     }
@@ -633,10 +665,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 }
             }
 
-            let response = if success {
-                cmds.push(clipboard::write_data(ScreenshotBytes::new(&image_path)));
+            let response = if success && image_path.is_some() {
                 PortalResponse::Success(ScreenshotResult {
-                    uri: format!("file:///{}", image_path.display()),
+                    uri: format!("file:///{}", image_path.unwrap().display()),
                 })
             } else {
                 PortalResponse::Other
@@ -709,6 +740,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         Msg::Location(loc) => {
             if let Some(args) = portal.screenshot_args.as_mut() {
                 let loc = match loc {
+                    loc if loc == ImageSaveLocation::Clipboard as usize => {
+                        ImageSaveLocation::Clipboard
+                    }
                     loc if loc == ImageSaveLocation::Pictures as usize => {
                         ImageSaveLocation::Pictures
                     }
@@ -779,7 +813,11 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
             ));
         }
     }
-    portal.location_options = vec![fl!("save-to", "pictures"), fl!("save-to", "documents")];
+    portal.location_options = vec![
+        fl!("save-to", "clipboard"),
+        fl!("save-to", "pictures"),
+        fl!("save-to", "documents"),
+    ];
 
     if portal.screenshot_args.replace(args).is_none() {
         // iterate over outputs and create a layer surface for each
