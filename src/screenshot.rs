@@ -1,15 +1,18 @@
 #![allow(dead_code, unused_variables)]
 
 use cosmic::cosmic_config::CosmicConfigEntry;
+use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::wayland::actions::data_device::ActionInner;
 use cosmic::iced::wayland::actions::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::{window, Limits};
 use cosmic::iced_core::Length;
+use cosmic::iced_runtime::clipboard;
 use cosmic::iced_sctk::commands::data_device;
 use cosmic::iced_sctk::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-use image::{GenericImageView, RgbaImage};
+use image::RgbaImage;
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
@@ -47,6 +50,27 @@ pub struct ScreenshotOptions {
 #[zvariant(signature = "a{sv}")]
 pub struct ScreenshotResult {
     uri: String,
+}
+
+struct ScreenshotBytes {
+    bytes: Vec<u8>,
+}
+
+impl ScreenshotBytes {
+    fn new(path: &PathBuf) -> Self {
+        let bytes = std::fs::read(path).unwrap_or_default();
+        Self { bytes }
+    }
+}
+
+impl AsMimeTypes for ScreenshotBytes {
+    fn available(&self) -> std::borrow::Cow<'static, [String]> {
+        Cow::Owned(vec!["image/png".to_string()])
+    }
+
+    fn as_bytes(&self, mime_type: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
+        Some(Cow::Owned(self.bytes.clone()))
+    }
 }
 
 #[derive(zvariant::SerializeDict, zvariant::Type)]
@@ -482,7 +506,11 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate::app::Msg> {
     match msg {
         Msg::Capture => {
-            let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
+            let mut cmds: Vec<cosmic::Command<crate::app::Msg>> = portal
+                .outputs
+                .iter()
+                .map(|o| destroy_layer_surface(o.id))
+                .collect();
             let Some(args) = portal.screenshot_args.take() else {
                 log::error!("Failed to find screenshot Args for Capture message.");
                 return cosmic::Command::batch(cmds);
@@ -606,6 +634,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             }
 
             let response = if success {
+                cmds.push(clipboard::write_data(ScreenshotBytes::new(&image_path)));
                 PortalResponse::Success(ScreenshotResult {
                     uri: format!("file:///{}", image_path.display()),
                 })
