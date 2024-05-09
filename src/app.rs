@@ -80,6 +80,10 @@ impl cosmic::Application for CosmicPortal {
             Some(fl!("save-to")),
             vec![
                 (
+                    fl!("save-to", "clipboard"),
+                    screenshot::ImageSaveLocation::Clipboard,
+                ),
+                (
                     fl!("save-to", "pictures"),
                     screenshot::ImageSaveLocation::Pictures,
                 ),
