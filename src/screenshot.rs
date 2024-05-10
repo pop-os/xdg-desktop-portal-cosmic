@@ -669,6 +669,10 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 PortalResponse::Success(ScreenshotResult {
                     uri: format!("file:///{}", image_path.unwrap().display()),
                 })
+            } else if success && image_path.is_none() {
+                PortalResponse::Success(ScreenshotResult {
+                    uri: format!("clipboard:///"),
+                })
             } else {
                 PortalResponse::Other
             };
