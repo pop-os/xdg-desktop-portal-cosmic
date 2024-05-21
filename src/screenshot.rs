@@ -12,6 +12,7 @@ use cosmic::iced_sctk::commands::layer_surface::{destroy_layer_surface, get_laye
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use image::RgbaImage;
+use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
@@ -301,7 +302,7 @@ impl Screenshot {
         };
         let (doc_ids, _) = documents
             .add_full(
-                &[&file],
+                &[&file.as_fd()],
                 Default::default(),
                 app_id,
                 &[
@@ -365,7 +366,7 @@ pub struct Args {
     pub action: Action,
 }
 
-#[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Screenshot")]
+#[zbus::interface(name = "org.freedesktop.impl.portal.Screenshot")]
 impl Screenshot {
     async fn screenshot(
         &self,
@@ -474,7 +475,7 @@ impl Screenshot {
         })
     }
 
-    #[dbus_interface(property)]
+    #[zbus(property)]
     fn version(&self) -> u32 {
         2
     }

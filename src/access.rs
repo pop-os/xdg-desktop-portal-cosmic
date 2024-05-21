@@ -51,7 +51,7 @@ impl Access {
     }
 }
 
-#[zbus::dbus_interface(name = "")]
+#[zbus::interface(name = "")]
 impl Access {
     #[allow(clippy::too_many_arguments)]
     async fn access_dialog(

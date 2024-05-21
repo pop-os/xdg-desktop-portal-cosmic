@@ -49,7 +49,7 @@ impl<T: zvariant::Type + serde::Serialize> serde::Serialize for PortalResponse<T
 
 struct Request;
 
-#[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Request")]
+#[zbus::interface(name = "org.freedesktop.impl.portal.Request")]
 impl Request {
     fn close(&self) {}
 }
@@ -66,7 +66,7 @@ impl Session {
     }
 }
 
-#[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Session")]
+#[zbus::interface(name = "org.freedesktop.impl.portal.Session")]
 impl Session {
     async fn close(&mut self, #[zbus(signal_context)] signal_ctxt: zbus::SignalContext<'_>) {
         // XXX error?
@@ -81,10 +81,10 @@ impl Session {
         }
     }
 
-    #[dbus_interface(signal)]
+    #[zbus(signal)]
     async fn closed(&self, signal_ctxt: &zbus::SignalContext<'_>) -> zbus::Result<()>;
 
-    #[dbus_interface(property, name = "version")]
+    #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
         1 // XXX?
     }
@@ -148,7 +148,7 @@ impl Settings {
     }
 }
 
-#[zbus::dbus_interface(name = "org.freedesktop.impl.portal.Settings")]
+#[zbus::interface(name = "org.freedesktop.impl.portal.Settings")]
 impl Settings {
     /// Read method (deprecated)
     async fn read(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zvariant::OwnedValue> {
@@ -179,14 +179,13 @@ impl Settings {
                 CONTRAST_KEY.to_string(),
                 OwnedValue::from(self.contrast as u32),
             );
-            inner.insert(
-                ACCENT_COLOR_KEY.to_string(),
-                OwnedValue::from(Color {
-                    red: self.accent.red,
-                    green: self.accent.green,
-                    blue: self.accent.blue,
-                }),
-            );
+            if let Ok(value) = OwnedValue::try_from(Color {
+                red: self.accent.red,
+                green: self.accent.green,
+                blue: self.accent.blue,
+            }) {
+                inner.insert(ACCENT_COLOR_KEY.to_string(), value);
+            }
             map.insert(APPEARANCE_NAMESPACE.to_string(), inner);
         }
         map
@@ -199,11 +198,12 @@ impl Settings {
                 Ok(OwnedValue::from(self.color_scheme as u32))
             }
             (APPEARANCE_NAMESPACE, CONTRAST_KEY) => Ok(OwnedValue::from(self.contrast as u32)),
-            (APPEARANCE_NAMESPACE, ACCENT_COLOR_KEY) => Ok(OwnedValue::from(Color {
+            (APPEARANCE_NAMESPACE, ACCENT_COLOR_KEY) => OwnedValue::try_from(Color {
                 red: self.accent.red,
                 green: self.accent.green,
                 blue: self.accent.blue,
-            })),
+            })
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string())),
             _ => Err(zbus::fdo::Error::Failed(
                 "Unknown namespace or key".to_string(),
             )),
@@ -211,7 +211,7 @@ impl Settings {
     }
 
     /// SettingChanged signal
-    #[dbus_interface(signal)]
+    #[zbus(signal)]
     async fn setting_changed(
         &self,
         signal_ctxt: &zbus::SignalContext<'_>,
@@ -221,7 +221,7 @@ impl Settings {
     ) -> zbus::Result<()>;
 
     /// version property
-    #[dbus_interface(property, name = "version")]
+    #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
         2
     }
