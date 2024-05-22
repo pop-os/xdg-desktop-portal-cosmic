@@ -79,7 +79,7 @@ impl ScreenCast {
     }
 }
 
-#[zbus::dbus_interface(name = "org.freedesktop.impl.portal.ScreenCast")]
+#[zbus::interface(name = "org.freedesktop.impl.portal.ScreenCast")]
 impl ScreenCast {
     async fn create_session(
         &self,

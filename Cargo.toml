@@ -10,11 +10,11 @@ wgpu = ["libcosmic/wgpu"]
 
 [dependencies]
 anyhow = "1.0.60"
-ashpd = "0.6.8"
+ashpd = "0.8.1"
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e4e6f8c" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e4e6f8c" }
 futures = "0.3"
-image = "0.24"
+image = "0.25"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
     "wayland",
     "tokio",
@@ -35,10 +35,10 @@ spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewi
 tempfile = "3.5.0"
 tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.1" }
-zbus = { version = "3.13.0", default-features = false, features = ["tokio"] }
-gbm = "0.14.0"
+zbus = { version = "4.2.2", default-features = false, features = ["tokio"] }
+gbm = "0.15.0"
 wayland-protocols = "0.31.0"
-env_logger = "0.10.0"
+env_logger = "0.11.3"
 log = "0.4.20"
 dirs = "5.0.1"
 time = { version = "0.3.31", features = [
@@ -51,7 +51,7 @@ i18n-embed = { version = "0.14.1", features = [
     "fluent-system",
     "desktop-requester",
 ] }
-i18n-embed-fl = "0.7.0"
+i18n-embed-fl = "0.8.0"
 rust-embed = "8.2.0"
 
 [dev-dependencies]

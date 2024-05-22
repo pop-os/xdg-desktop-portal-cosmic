@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     let src = gst::parse_bin_from_description(
         &format!(
-            "pipewiresrc fd={fd} path={node_id} !
+            "pipewiresrc fd={fd:?} path={node_id} !
              capsfilter caps=video/x-raw(memory:DMABuf),format=RGBA"
         ),
         true,
