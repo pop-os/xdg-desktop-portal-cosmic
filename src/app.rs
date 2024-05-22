@@ -248,6 +248,23 @@ impl cosmic::Application for CosmicPortal {
         ])
     }
 
+    fn system_theme_mode_update(
+        &mut self,
+        _keys: &[&'static str],
+        new_theme: &cosmic::cosmic_theme::ThemeMode,
+    ) -> app::Command<Self::Message> {
+        let old = self.core.system_is_dark();
+        let new = new_theme.is_dark;
+        if new != old {
+            if let Some(tx) = self.tx.clone() {
+                tokio::spawn(async move {
+                    _ = tx.send(subscription::Event::IsDark(new)).await;
+                });
+            }
+        }
+        Command::none()
+    }
+
     fn system_theme_update(
         &mut self,
         _keys: &[&'static str],
@@ -255,9 +272,11 @@ impl cosmic::Application for CosmicPortal {
     ) -> cosmic::iced::Command<app::Message<Self::Message>> {
         let old = self.core.system_theme().cosmic();
         let mut msgs = Vec::with_capacity(3);
+
         if old.is_dark != new_theme.is_dark {
-            msgs.push(subscription::Event::IsDark(new_theme.is_dark));
+            return Command::none();
         }
+
         if old.accent_color() != new_theme.accent_color() {
             msgs.push(subscription::Event::Accent(new_theme.accent_color()));
         }
