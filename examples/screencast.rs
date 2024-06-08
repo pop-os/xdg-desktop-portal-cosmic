@@ -5,6 +5,8 @@
 use ashpd::desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType};
 use gst::prelude::*;
 
+use std::os::fd::AsRawFd;
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     gst::init().unwrap();
@@ -33,8 +35,9 @@ async fn main() -> anyhow::Result<()> {
 
     let src = gst::parse_bin_from_description(
         &format!(
-            "pipewiresrc fd={fd:?} path={node_id} !
-             capsfilter caps=video/x-raw(memory:DMABuf),format=RGBA"
+            "pipewiresrc fd={} path={node_id} !
+             capsfilter caps=video/x-raw(memory:DMABuf),format=RGBA",
+             fd.as_raw_fd()
         ),
         true,
     )?;
