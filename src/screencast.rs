@@ -213,19 +213,19 @@ impl ScreenCast {
         })
     }
 
-    #[dbus_interface(property)]
+    #[zbus(property)]
     async fn available_source_types(&self) -> u32 {
         // XXX
         SOURCE_TYPE_MONITOR
     }
 
-    #[dbus_interface(property)]
+    #[zbus(property)]
     async fn available_cursor_modes(&self) -> u32 {
         // TODO: Support metadata?
         CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED
     }
 
-    #[dbus_interface(property, name = "version")]
+    #[zbus(property, name = "version")]
     async fn version(&self) -> u32 {
         4
     }
