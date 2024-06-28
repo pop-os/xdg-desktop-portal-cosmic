@@ -1,4 +1,4 @@
-use crate::{access, fl, screenshot, subscription};
+use crate::{access, file_chooser, fl, screenshot, subscription};
 use cosmic::iced::keyboard;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::iced_core::keyboard::key::Named;
@@ -26,6 +26,9 @@ pub struct CosmicPortal {
     pub access_args: Option<access::AccessDialogArgs>,
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
 
+    pub file_chooser_args: Option<file_chooser::Args>,
+    pub file_chooser_dialog: Option<file_chooser::Dialog>,
+
     pub screenshot_args: Option<screenshot::Args>,
     pub location_options: Vec<String>,
     pub prev_rectangle: Option<screenshot::Rect>,
@@ -49,6 +52,7 @@ pub struct OutputState {
 #[derive(Debug, Clone)]
 pub enum Msg {
     Access(access::Msg),
+    FileChooser(file_chooser::Msg),
     Screenshot(screenshot::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
@@ -101,6 +105,8 @@ impl cosmic::Application for CosmicPortal {
                 core,
                 access_args: Default::default(),
                 access_choices: Default::default(),
+                file_chooser_args: Default::default(),
+                file_chooser_dialog: Default::default(),
                 screenshot_args: Default::default(),
                 location_options: Vec::new(),
                 prev_rectangle: Default::default(),
@@ -123,7 +129,7 @@ impl cosmic::Application for CosmicPortal {
         } else if self.outputs.iter().any(|o| o.id == id) {
             screenshot::view(self, id).map(Msg::Screenshot)
         } else {
-            panic!("Unknown window id {:?}", id);
+            file_chooser::view(self, id)
         }
     }
 
@@ -133,10 +139,12 @@ impl cosmic::Application for CosmicPortal {
     ) -> cosmic::iced::Command<app::Message<Self::Message>> {
         match message {
             Msg::Access(m) => access::update_msg(self, m).map(cosmic::app::Message::App),
+            Msg::FileChooser(m) => file_chooser::update_msg(self, m),
             Msg::Portal(e) => match e {
                 subscription::Event::Access(args) => {
                     access::update_args(self, args).map(cosmic::app::Message::App)
                 }
+                subscription::Event::FileChooser(args) => file_chooser::update_args(self, args),
                 subscription::Event::Screenshot(args) => {
                     screenshot::update_args(self, args).map(cosmic::app::Message::App)
                 }
