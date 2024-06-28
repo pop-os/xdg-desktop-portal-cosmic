@@ -6,6 +6,7 @@ mod access;
 mod app;
 mod buffer;
 mod documents;
+mod file_chooser;
 mod localize;
 mod screencast;
 mod screencast_thread;

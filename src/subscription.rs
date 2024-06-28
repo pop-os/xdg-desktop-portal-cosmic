@@ -11,14 +11,15 @@ use tokio::sync::mpsc::Receiver;
 use zbus::{zvariant, Connection};
 
 use crate::{
-    access::Access, screencast::ScreenCast, screenshot::Screenshot, wayland, ColorScheme, Contrast,
-    Settings, ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME,
-    DBUS_PATH,
+    access::Access, file_chooser::FileChooser, screencast::ScreenCast, screenshot::Screenshot,
+    wayland, ColorScheme, Contrast, Settings, ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE,
+    COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
 };
 
 #[derive(Clone)]
 pub enum Event {
     Access(crate::access::AccessDialogArgs),
+    FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
     Accent(Srgba),
     IsDark(bool),
@@ -38,6 +39,14 @@ impl Debug for Event {
                 .field("app_id", &args.app_id)
                 .field("parent_window", &args.parent_window)
                 .field("handle", &args.handle)
+                .finish(),
+            Event::FileChooser(args) => f
+                .debug_struct("FileChooser")
+                .field("handle", &args.handle)
+                .field("app_id", &args.app_id)
+                .field("parent_window", &args.parent_window)
+                .field("title", &args.title)
+                .field("options", &args.options)
                 .finish(),
             Event::Screenshot(crate::screenshot::Args {
                 handle,
@@ -106,6 +115,7 @@ pub(crate) async fn process_changes(
             let connection = zbus::ConnectionBuilder::session()?
                 .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
+                .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
@@ -122,6 +132,11 @@ pub(crate) async fn process_changes(
                 match event {
                     Event::Access(args) => {
                         if let Err(err) = output.send(Event::Access(args)).await {
+                            log::error!("Error sending access event: {:?}", err);
+                        };
+                    }
+                    Event::FileChooser(args) => {
+                        if let Err(err) = output.send(Event::FileChooser(args)).await {
                             log::error!("Error sending access event: {:?}", err);
                         };
                     }

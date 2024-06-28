@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         &format!(
             "pipewiresrc fd={} path={node_id} !
              capsfilter caps=video/x-raw(memory:DMABuf),format=RGBA",
-             fd.as_raw_fd()
+            fd.as_raw_fd()
         ),
         true,
     )?;

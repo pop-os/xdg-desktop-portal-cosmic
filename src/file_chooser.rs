@@ -1,0 +1,323 @@
+use cosmic::{
+    app,
+    iced::{
+        wayland::actions::{layer_surface::SctkLayerSurfaceSettings, window::SctkWindowSettings},
+        widget::{column, row},
+        window, Length,
+    },
+    iced_core::Alignment,
+    iced_sctk::commands::{
+        layer_surface::{destroy_layer_surface, get_layer_surface},
+        window::{close_window, get_window},
+    },
+    widget,
+};
+use cosmic_files::dialog::{DialogKind, DialogMessage, DialogResult};
+use once_cell::sync::Lazy;
+use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf, sync::Arc};
+use tokio::sync::mpsc::Sender;
+use zbus::zvariant;
+
+use crate::{app::CosmicPortal, fl, subscription, PortalResponse};
+
+pub(crate) type Dialog = cosmic_files::dialog::Dialog<crate::app::Msg>;
+
+#[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
+#[zvariant(signature = "a{sv}")]
+pub struct OpenFileOptions {
+    accept_label: Option<String>,
+    modal: Option<bool>,
+    multiple: Option<bool>,
+    directory: Option<bool>,
+    //TODO: filters
+    //TODO: current_filter
+    //TODO: choices
+    current_folder: Option<Vec<u8>>,
+}
+
+#[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
+#[zvariant(signature = "a{sv}")]
+pub struct SaveFileOptions {
+    accept_label: Option<String>,
+    modal: Option<bool>,
+    //TODO: filters
+    //TODO: current_filter
+    //TODO: choices
+    current_name: Option<String>,
+    current_folder: Option<Vec<u8>>,
+    current_file: Option<Vec<u8>>,
+}
+
+#[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
+#[zvariant(signature = "a{sv}")]
+pub struct SaveFilesOptions {
+    accept_label: Option<String>,
+    modal: Option<bool>,
+    //TODO: choices
+    current_folder: Option<Vec<u8>>,
+    files: Option<Vec<Vec<u8>>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum FileChooserOptions {
+    OpenFile(OpenFileOptions),
+    SaveFile(SaveFileOptions),
+    SaveFiles(SaveFilesOptions),
+}
+
+impl FileChooserOptions {
+    fn modal(&self) -> bool {
+        // Defaults to true
+        match self {
+            Self::OpenFile(x) => x.modal,
+            Self::SaveFile(x) => x.modal,
+            Self::SaveFiles(x) => x.modal,
+        }
+        .unwrap_or(true)
+    }
+
+    fn current_folder(&self) -> Option<PathBuf> {
+        match self {
+            Self::OpenFile(x) => x.current_folder.clone(),
+            Self::SaveFile(x) => x.current_folder.clone(),
+            Self::SaveFiles(x) => x.current_folder.clone(),
+        }
+        .map(|mut x| {
+            // Trim leading NULs
+            while x.last() == Some(&0) {
+                x.pop();
+            }
+            PathBuf::from(OsString::from_vec(x))
+        })
+    }
+}
+
+#[derive(zvariant::SerializeDict, zvariant::Type)]
+#[zvariant(signature = "a{sv}")]
+pub struct FileChooserResult {
+    uris: Vec<String>,
+    //TODO: choices
+    //TODO: current_filter
+}
+
+pub struct FileChooser {
+    tx: Sender<subscription::Event>,
+}
+
+impl FileChooser {
+    pub fn new(tx: Sender<subscription::Event>) -> Self {
+        Self { tx }
+    }
+
+    async fn run(
+        &self,
+        handle: zvariant::ObjectPath<'_>,
+        app_id: &str,
+        parent_window: &str,
+        title: &str,
+        options: FileChooserOptions,
+    ) -> PortalResponse<FileChooserResult> {
+        log::warn!("file chooser {handle}, {app_id}, {parent_window}, {title}, {options:?}");
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        if let Err(err) = self
+            .tx
+            .send(subscription::Event::FileChooser(Args {
+                handle: handle.to_owned(),
+                app_id: app_id.to_string(),
+                parent_window: parent_window.to_string(),
+                title: title.to_string(),
+                options,
+                tx,
+            }))
+            .await
+        {
+            log::error!("failed to send file chooser event: {}", err);
+            return PortalResponse::Other;
+        }
+        if let Some(res) = rx.recv().await {
+            return res;
+        } else {
+            return PortalResponse::Cancelled::<FileChooserResult>;
+        }
+    }
+}
+
+#[zbus::interface(name = "org.freedesktop.impl.portal.FileChooser")]
+impl FileChooser {
+    async fn open_file(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        handle: zvariant::ObjectPath<'_>,
+        app_id: &str,
+        parent_window: &str,
+        title: &str,
+        options: OpenFileOptions,
+    ) -> PortalResponse<FileChooserResult> {
+        self.run(
+            handle,
+            app_id,
+            parent_window,
+            title,
+            FileChooserOptions::OpenFile(options),
+        )
+        .await
+    }
+
+    async fn save_file(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        handle: zvariant::ObjectPath<'_>,
+        app_id: &str,
+        parent_window: &str,
+        title: &str,
+        options: SaveFileOptions,
+    ) -> PortalResponse<FileChooserResult> {
+        self.run(
+            handle,
+            app_id,
+            parent_window,
+            title,
+            FileChooserOptions::SaveFile(options),
+        )
+        .await
+    }
+
+    async fn save_files(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        handle: zvariant::ObjectPath<'_>,
+        app_id: &str,
+        parent_window: &str,
+        title: &str,
+        options: SaveFilesOptions,
+    ) -> PortalResponse<FileChooserResult> {
+        self.run(
+            handle,
+            app_id,
+            parent_window,
+            title,
+            FileChooserOptions::SaveFiles(options),
+        )
+        .await
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Msg {
+    DialogMessage(DialogMessage),
+    DialogResult(DialogResult),
+}
+
+#[derive(Clone)]
+pub(crate) struct Args {
+    pub handle: zvariant::ObjectPath<'static>,
+    pub app_id: String,
+    pub parent_window: String,
+    pub title: String,
+    pub options: FileChooserOptions,
+    pub tx: Sender<PortalResponse<FileChooserResult>>,
+}
+
+pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<crate::app::Msg> {
+    portal.file_chooser_dialog.as_ref().unwrap().view(id)
+}
+
+pub fn update_msg(
+    portal: &mut CosmicPortal,
+    msg: Msg,
+) -> cosmic::Command<app::Message<crate::app::Msg>> {
+    match msg {
+        Msg::DialogMessage(dialog_msg) => portal
+            .file_chooser_dialog
+            .as_mut()
+            .unwrap()
+            .update(dialog_msg),
+        Msg::DialogResult(dialog_res) => {
+            log::warn!("file chooser result {:?}", dialog_res);
+            let args = portal.file_chooser_args.take().unwrap();
+            let dialog = portal.file_chooser_dialog.take().unwrap();
+            let response = match dialog_res {
+                DialogResult::Cancel => PortalResponse::Cancelled,
+                DialogResult::Open(paths) => {
+                    let mut uris = Vec::with_capacity(paths.len());
+                    for path in paths {
+                        match url::Url::from_file_path(&path) {
+                            Ok(url) => uris.push(url.to_string()),
+                            Err(()) => {
+                                log::error!("failed to convert to URL: {:?}", path);
+                                //TODO: return error?
+                            }
+                        }
+                    }
+                    PortalResponse::Success(FileChooserResult { uris })
+                }
+            };
+            cosmic::Command::perform(
+                async move {
+                    let _ = args.tx.send(response).await;
+                    cosmic::app::message::none()
+                },
+                |x| x,
+            )
+        }
+    }
+}
+
+pub fn update_args(
+    portal: &mut CosmicPortal,
+    args: Args,
+) -> cosmic::Command<app::Message<crate::app::Msg>> {
+    let mut cmds = Vec::with_capacity(2);
+
+    if let Some(old_args) = portal.file_chooser_args.take() {
+        // send cancelled response
+        tokio::spawn(async move {
+            let _ = old_args
+                .tx
+                .send(PortalResponse::Cancelled::<FileChooserResult>)
+                .await;
+        });
+    }
+
+    if let Some(old_dialog) = portal.file_chooser_dialog.take() {
+        //TODO: close window
+    }
+
+    let kind = match &args.options {
+        FileChooserOptions::OpenFile(options) => {
+            if options.directory.unwrap_or(false) {
+                if options.multiple.unwrap_or(false) {
+                    DialogKind::OpenMultipleFolders
+                } else {
+                    DialogKind::OpenFolder
+                }
+            } else {
+                if options.multiple.unwrap_or(false) {
+                    DialogKind::OpenMultipleFiles
+                } else {
+                    DialogKind::OpenFile
+                }
+            }
+        }
+        FileChooserOptions::SaveFile(options) => DialogKind::SaveFile {
+            filename: options.current_name.clone().unwrap_or_default(),
+        },
+        FileChooserOptions::SaveFiles(options) => {
+            log::error!("{options:?} not supported");
+            DialogKind::OpenFolder
+        }
+    };
+    let path_opt = args.options.current_folder();
+
+    let (dialog, command) = Dialog::new(
+        kind,
+        path_opt,
+        |x| crate::app::Msg::FileChooser(Msg::DialogMessage(x)),
+        |x| crate::app::Msg::FileChooser(Msg::DialogResult(x)),
+    );
+    cmds.push(command);
+    portal.file_chooser_args = Some(args);
+    portal.file_chooser_dialog = Some(dialog);
+    cosmic::iced::Command::batch(cmds)
+}
