@@ -1279,18 +1279,7 @@ name = "cosmic-client-toolkit"
 version = "0.1.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=c8d3a1c#c8d3a1c3d40d16235f4720969a54ed570ec7a976"
 dependencies = [
- "cosmic-protocols 0.1.0 (git+https://github.com/pop-os/cosmic-protocols?rev=c8d3a1c)",
- "libc",
- "smithay-client-toolkit 0.19.1",
- "wayland-client",
-]
-
-[[package]]
-name = "cosmic-client-toolkit"
-version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-protocols#22e9009c48b00e5052bc88979f60b48728a1d143"
-dependencies = [
- "cosmic-protocols 0.1.0 (git+https://github.com/pop-os/cosmic-protocols)",
+ "cosmic-protocols",
  "libc",
  "smithay-client-toolkit 0.19.1",
  "wayland-client",
@@ -1370,20 +1359,6 @@ dependencies = [
 name = "cosmic-protocols"
 version = "0.1.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=c8d3a1c#c8d3a1c3d40d16235f4720969a54ed570ec7a976"
-dependencies = [
- "bitflags 2.6.0",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols 0.32.1",
- "wayland-protocols-wlr 0.3.1",
- "wayland-scanner",
- "wayland-server",
-]
-
-[[package]]
-name = "cosmic-protocols"
-version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-protocols#22e9009c48b00e5052bc88979f60b48728a1d143"
 dependencies = [
  "bitflags 2.6.0",
  "wayland-backend",
@@ -3505,7 +3480,7 @@ dependencies = [
  "apply",
  "ashpd",
  "chrono",
- "cosmic-client-toolkit 0.1.0 (git+https://github.com/pop-os/cosmic-protocols?rev=c8d3a1c)",
+ "cosmic-client-toolkit",
  "cosmic-config",
  "cosmic-settings-daemon",
  "cosmic-theme",
@@ -7072,9 +7047,9 @@ dependencies = [
  "anyhow",
  "ashpd",
  "cosmic-bg-config",
- "cosmic-client-toolkit 0.1.0 (git+https://github.com/pop-os/cosmic-protocols)",
+ "cosmic-client-toolkit",
  "cosmic-files",
- "cosmic-protocols 0.1.0 (git+https://github.com/pop-os/cosmic-protocols)",
+ "cosmic-protocols",
  "dirs",
  "env_logger",
  "futures",
