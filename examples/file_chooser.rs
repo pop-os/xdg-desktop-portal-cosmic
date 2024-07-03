@@ -15,6 +15,8 @@ async fn main() -> anyhow::Result<()> {
         )
         // A trick to have a checkbox
         .choice(Choice::boolean("re-encode", "Re-encode", false))
+        .filter(FileFilter::new("Rust source").mimetype("text/rust"))
+        .filter(FileFilter::new("TOML source").glob("*.toml"))
         .filter(FileFilter::new("SVG Image").mimetype("image/svg+xml"))
         .send()
         .await?

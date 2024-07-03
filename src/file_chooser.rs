@@ -13,7 +13,8 @@ use cosmic::{
     widget,
 };
 use cosmic_files::dialog::{
-    DialogChoice, DialogChoiceOption, DialogKind, DialogMessage, DialogResult,
+    DialogChoice, DialogChoiceOption, DialogFilter, DialogFilterPattern, DialogKind, DialogMessage,
+    DialogResult,
 };
 use once_cell::sync::Lazy;
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf, sync::Arc};
@@ -25,6 +26,8 @@ use crate::{app::CosmicPortal, fl, subscription, PortalResponse};
 pub(crate) type Dialog = cosmic_files::dialog::Dialog<crate::app::Msg>;
 
 type Choices = Vec<(String, String, Vec<(String, String)>, String)>;
+type Filter = (String, Vec<(u32, String)>);
+type Filters = Vec<Filter>;
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
 #[zvariant(signature = "a{sv}")]
@@ -33,8 +36,8 @@ pub struct OpenFileOptions {
     modal: Option<bool>,
     multiple: Option<bool>,
     directory: Option<bool>,
-    //TODO: filters
-    //TODO: current_filter
+    filters: Option<Filters>,
+    current_filter: Option<Filter>,
     choices: Option<Choices>,
     current_folder: Option<Vec<u8>>,
 }
@@ -44,8 +47,8 @@ pub struct OpenFileOptions {
 pub struct SaveFileOptions {
     accept_label: Option<String>,
     modal: Option<bool>,
-    //TODO: filters
-    //TODO: current_filter
+    filters: Option<Filters>,
+    current_filter: Option<Filter>,
     choices: Option<Choices>,
     current_name: Option<String>,
     current_folder: Option<Vec<u8>>,
@@ -86,6 +89,22 @@ impl FileChooserOptions {
         }
     }
 
+    fn filters(&self) -> Option<Filters> {
+        match self {
+            Self::OpenFile(x) => x.filters.clone(),
+            Self::SaveFile(x) => x.filters.clone(),
+            Self::SaveFiles(_) => None,
+        }
+    }
+
+    fn current_filter(&self) -> Option<Filter> {
+        match self {
+            Self::OpenFile(x) => x.current_filter.clone(),
+            Self::SaveFile(x) => x.current_filter.clone(),
+            Self::SaveFiles(_) => None,
+        }
+    }
+
     fn modal(&self) -> bool {
         // Defaults to true
         match self {
@@ -116,8 +135,9 @@ impl FileChooserOptions {
 #[zvariant(signature = "a{sv}")]
 pub struct FileChooserResult {
     uris: Vec<String>,
+    //TODO: use Option?
     choices: Vec<(String, String)>,
-    //TODO: current_filter
+    current_filter: Option<Filter>,
 }
 
 pub struct FileChooser {
@@ -158,7 +178,7 @@ impl FileChooser {
         if let Some(res) = rx.recv().await {
             return res;
         } else {
-            return PortalResponse::Cancelled::<FileChooserResult>;
+            return PortalResponse::Cancelled;
         }
     }
 }
@@ -270,6 +290,7 @@ pub fn update_msg(
                             }
                         }
                     }
+
                     let dialog_choices = dialog.choices();
                     let mut choices = Vec::with_capacity(dialog_choices.len());
                     for choice in dialog_choices.iter() {
@@ -295,7 +316,27 @@ pub fn update_msg(
                             }
                         }
                     }
-                    PortalResponse::Success(FileChooserResult { uris, choices })
+
+                    let (filters, filter_selected) = dialog.filters();
+                    let mut current_filter = None;
+                    if let Some(filter_i) = filter_selected {
+                        if let Some(filter) = filters.get(filter_i) {
+                            let mut patterns = Vec::with_capacity(filter.patterns.len());
+                            for pattern in filter.patterns.iter() {
+                                patterns.push(match pattern {
+                                    DialogFilterPattern::Glob(glob) => (0u32, glob.clone()),
+                                    DialogFilterPattern::Mime(mime) => (1u32, mime.clone()),
+                                });
+                            }
+                            current_filter = Some((filter.label.clone(), patterns));
+                        }
+                    }
+
+                    PortalResponse::Success(FileChooserResult {
+                        uris,
+                        choices,
+                        current_filter,
+                    })
                 }
             };
             cosmic::Command::perform(
@@ -390,6 +431,42 @@ pub fn update_args(
             }
         }
         dialog.set_choices(choices);
+    }
+    {
+        let mut xdg_filters = args.options.filters().unwrap_or_default();
+        let filter_selected = match args.options.current_filter() {
+            Some(current_filter) => match xdg_filters.iter().position(|x| *x == current_filter) {
+                Some(filter_i) => Some(filter_i),
+                None => {
+                    let filter_i = 0;
+                    xdg_filters.insert(filter_i, current_filter);
+                    Some(filter_i)
+                }
+            },
+            None => {
+                if !xdg_filters.is_empty() {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+        };
+        let mut filters = Vec::with_capacity(xdg_filters.len());
+        for (label, xdg_patterns) in xdg_filters {
+            let mut patterns = Vec::with_capacity(xdg_patterns.len());
+            for (kind, value) in xdg_patterns {
+                patterns.push(match kind {
+                    0 => DialogFilterPattern::Glob(value),
+                    1 => DialogFilterPattern::Mime(value),
+                    _ => {
+                        log::warn!("unsupported filter pattern {:?}", (kind, value));
+                        continue;
+                    }
+                });
+            }
+            filters.push(DialogFilter { label, patterns });
+        }
+        cmds.push(dialog.set_filters(filters, filter_selected));
     }
     portal.file_chooser_args = Some(args);
     portal.file_chooser_dialog = Some(dialog);
