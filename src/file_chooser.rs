@@ -138,7 +138,6 @@ impl FileChooserOptions {
 #[zvariant(signature = "a{sv}")]
 pub struct FileChooserResult {
     uris: Vec<String>,
-    //TODO: use Option?
     choices: Vec<(String, String)>,
     current_filter: Option<Filter>,
 }
@@ -302,57 +301,60 @@ pub fn update_msg(
                                 Ok(url) => uris.push(url.to_string()),
                                 Err(()) => {
                                     log::error!("failed to convert to URL: {:?}", path);
-                                    //TODO: return error?
                                 }
                             }
                         }
 
-                        let dialog_choices = dialog.choices();
-                        let mut choices = Vec::with_capacity(dialog_choices.len());
-                        for choice in dialog_choices.iter() {
-                            match choice {
-                                DialogChoice::CheckBox { id, value, .. } => {
-                                    choices.push((
-                                        id.clone(),
-                                        if *value { "true" } else { "false" }.to_string(),
-                                    ));
-                                }
-                                DialogChoice::ComboBox {
-                                    id,
-                                    options,
-                                    selected,
-                                    ..
-                                } => {
-                                    //TODO: what to fill in if selected option not set?
-                                    if let Some(option_i) = selected {
-                                        if let Some(option) = options.get(*option_i) {
+                        if uris.is_empty() {
+                            // Return error if URIs is empty, likely as a result of failing to convert paths
+                            PortalResponse::Other
+                        } else {
+                            let dialog_choices = dialog.choices();
+                            let mut choices = Vec::with_capacity(dialog_choices.len());
+                            for choice in dialog_choices.iter() {
+                                match choice {
+                                    DialogChoice::CheckBox { id, value, .. } => {
+                                        choices.push((
+                                            id.clone(),
+                                            if *value { "true" } else { "false" }.to_string(),
+                                        ));
+                                    }
+                                    DialogChoice::ComboBox {
+                                        id,
+                                        options,
+                                        selected,
+                                        ..
+                                    } => {
+                                        // If nothing is selected, fall back to the first selection
+                                        let option_i = selected.unwrap_or(0);
+                                        if let Some(option) = options.get(option_i) {
                                             choices.push((id.clone(), option.id.clone()));
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        let (filters, filter_selected) = dialog.filters();
-                        let mut current_filter = None;
-                        if let Some(filter_i) = filter_selected {
-                            if let Some(filter) = filters.get(filter_i) {
-                                let mut patterns = Vec::with_capacity(filter.patterns.len());
-                                for pattern in filter.patterns.iter() {
-                                    patterns.push(match pattern {
-                                        DialogFilterPattern::Glob(glob) => (0u32, glob.clone()),
-                                        DialogFilterPattern::Mime(mime) => (1u32, mime.clone()),
-                                    });
+                            let (filters, filter_selected) = dialog.filters();
+                            let mut current_filter = None;
+                            if let Some(filter_i) = filter_selected {
+                                if let Some(filter) = filters.get(filter_i) {
+                                    let mut patterns = Vec::with_capacity(filter.patterns.len());
+                                    for pattern in filter.patterns.iter() {
+                                        patterns.push(match pattern {
+                                            DialogFilterPattern::Glob(glob) => (0u32, glob.clone()),
+                                            DialogFilterPattern::Mime(mime) => (1u32, mime.clone()),
+                                        });
+                                    }
+                                    current_filter = Some((filter.label.clone(), patterns));
                                 }
-                                current_filter = Some((filter.label.clone(), patterns));
                             }
-                        }
 
-                        PortalResponse::Success(FileChooserResult {
-                            uris,
-                            choices,
-                            current_filter,
-                        })
+                            PortalResponse::Success(FileChooserResult {
+                                uris,
+                                choices,
+                                current_filter,
+                            })
+                        }
                     }
                 };
                 cosmic::Command::perform(
