@@ -234,7 +234,7 @@ impl cosmic::Application for CosmicPortal {
 
     #[allow(clippy::collapsible_match)]
     fn subscription(&self) -> cosmic::iced_futures::Subscription<Self::Message> {
-        Subscription::batch(vec![
+        let mut subscriptions = vec![
             subscription::portal_subscription(self.wayland_helper.clone()).map(Msg::Portal),
             listen_with(|e, _| match e {
                 cosmic::iced_core::Event::PlatformSpecific(
@@ -253,7 +253,11 @@ impl cosmic::Application for CosmicPortal {
                 ) => Some(Msg::Screenshot(screenshot::Msg::Cancel)),
                 _ => None,
             }),
-        ])
+        ];
+        if let Some(dialog) = &self.file_chooser_dialog {
+            subscriptions.push(dialog.subscription());
+        }
+        Subscription::batch(subscriptions)
     }
 
     fn system_theme_mode_update(

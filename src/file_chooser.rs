@@ -12,7 +12,9 @@ use cosmic::{
     },
     widget,
 };
-use cosmic_files::dialog::{DialogKind, DialogMessage, DialogResult};
+use cosmic_files::dialog::{
+    DialogChoice, DialogChoiceOption, DialogKind, DialogMessage, DialogResult,
+};
 use once_cell::sync::Lazy;
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::Sender;
@@ -21,6 +23,8 @@ use zbus::zvariant;
 use crate::{app::CosmicPortal, fl, subscription, PortalResponse};
 
 pub(crate) type Dialog = cosmic_files::dialog::Dialog<crate::app::Msg>;
+
+type Choices = Vec<(String, String, Vec<(String, String)>, String)>;
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
 #[zvariant(signature = "a{sv}")]
@@ -31,7 +35,7 @@ pub struct OpenFileOptions {
     directory: Option<bool>,
     //TODO: filters
     //TODO: current_filter
-    //TODO: choices
+    choices: Option<Choices>,
     current_folder: Option<Vec<u8>>,
 }
 
@@ -42,7 +46,7 @@ pub struct SaveFileOptions {
     modal: Option<bool>,
     //TODO: filters
     //TODO: current_filter
-    //TODO: choices
+    choices: Option<Choices>,
     current_name: Option<String>,
     current_folder: Option<Vec<u8>>,
     current_file: Option<Vec<u8>>,
@@ -53,7 +57,7 @@ pub struct SaveFileOptions {
 pub struct SaveFilesOptions {
     accept_label: Option<String>,
     modal: Option<bool>,
-    //TODO: choices
+    choices: Option<Choices>,
     current_folder: Option<Vec<u8>>,
     files: Option<Vec<Vec<u8>>>,
 }
@@ -66,6 +70,22 @@ pub enum FileChooserOptions {
 }
 
 impl FileChooserOptions {
+    fn accept_label(&self) -> Option<String> {
+        match self {
+            Self::OpenFile(x) => x.accept_label.clone(),
+            Self::SaveFile(x) => x.accept_label.clone(),
+            Self::SaveFiles(x) => x.accept_label.clone(),
+        }
+    }
+
+    fn choices(&self) -> Option<Choices> {
+        match self {
+            Self::OpenFile(x) => x.choices.clone(),
+            Self::SaveFile(x) => x.choices.clone(),
+            Self::SaveFiles(x) => x.choices.clone(),
+        }
+    }
+
     fn modal(&self) -> bool {
         // Defaults to true
         match self {
@@ -96,7 +116,7 @@ impl FileChooserOptions {
 #[zvariant(signature = "a{sv}")]
 pub struct FileChooserResult {
     uris: Vec<String>,
-    //TODO: choices
+    choices: Vec<(String, String)>,
     //TODO: current_filter
 }
 
@@ -117,7 +137,7 @@ impl FileChooser {
         title: &str,
         options: FileChooserOptions,
     ) -> PortalResponse<FileChooserResult> {
-        log::warn!("file chooser {handle}, {app_id}, {parent_window}, {title}, {options:?}");
+        log::debug!("file chooser {handle}, {app_id}, {parent_window}, {title}, {options:?}");
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         if let Err(err) = self
@@ -234,7 +254,7 @@ pub fn update_msg(
             .unwrap()
             .update(dialog_msg),
         Msg::DialogResult(dialog_res) => {
-            log::warn!("file chooser result {:?}", dialog_res);
+            log::debug!("file chooser result {:?}", dialog_res);
             let args = portal.file_chooser_args.take().unwrap();
             let dialog = portal.file_chooser_dialog.take().unwrap();
             let response = match dialog_res {
@@ -250,7 +270,32 @@ pub fn update_msg(
                             }
                         }
                     }
-                    PortalResponse::Success(FileChooserResult { uris })
+                    let dialog_choices = dialog.choices();
+                    let mut choices = Vec::with_capacity(dialog_choices.len());
+                    for choice in dialog_choices.iter() {
+                        match choice {
+                            DialogChoice::CheckBox { id, value, .. } => {
+                                choices.push((
+                                    id.clone(),
+                                    if *value { "true" } else { "false" }.to_string(),
+                                ));
+                            }
+                            DialogChoice::ComboBox {
+                                id,
+                                options,
+                                selected,
+                                ..
+                            } => {
+                                //TODO: what to fill in if selected option not set?
+                                if let Some(option_i) = selected {
+                                    if let Some(option) = options.get(*option_i) {
+                                        choices.push((id.clone(), option.id.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    PortalResponse::Success(FileChooserResult { uris, choices })
                 }
             };
             cosmic::Command::perform(
@@ -310,13 +355,42 @@ pub fn update_args(
     };
     let path_opt = args.options.current_folder();
 
-    let (dialog, command) = Dialog::new(
+    let (mut dialog, command) = Dialog::new(
         kind,
         path_opt,
         |x| crate::app::Msg::FileChooser(Msg::DialogMessage(x)),
         |x| crate::app::Msg::FileChooser(Msg::DialogResult(x)),
     );
     cmds.push(command);
+    cmds.push(dialog.set_title(args.title.clone()));
+    if let Some(accept_label) = args.options.accept_label() {
+        dialog.set_accept_label(accept_label);
+    }
+    if let Some(xdg_choices) = args.options.choices() {
+        let mut choices = Vec::with_capacity(xdg_choices.len());
+        for (id, label, xdg_options, selected_id) in xdg_choices {
+            if xdg_options.is_empty() {
+                choices.push(DialogChoice::CheckBox {
+                    id,
+                    label,
+                    value: selected_id == "true",
+                });
+            } else {
+                let mut options = Vec::with_capacity(xdg_options.len());
+                for (id, label) in xdg_options {
+                    options.push(DialogChoiceOption { id, label });
+                }
+                let selected = options.iter().position(|x| x.id == selected_id);
+                choices.push(DialogChoice::ComboBox {
+                    id,
+                    label,
+                    options,
+                    selected,
+                });
+            }
+        }
+        dialog.set_choices(choices);
+    }
     portal.file_chooser_args = Some(args);
     portal.file_chooser_dialog = Some(dialog);
     cosmic::iced::Command::batch(cmds)
