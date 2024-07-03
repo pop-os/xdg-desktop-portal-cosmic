@@ -11,8 +11,9 @@ wgpu = ["libcosmic/wgpu"]
 [dependencies]
 anyhow = "1.0.60"
 ashpd = "0.8.1"
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e4e6f8c" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "e4e6f8c" }
+cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = ["wayland"] }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c8d3a1c" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c8d3a1c" }
 futures = "0.3"
 image = "0.25"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
@@ -37,7 +38,7 @@ tokio = { version = "1.19.2", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.1" }
 zbus = { version = "4.2.2", default-features = false, features = ["tokio"] }
 gbm = "0.15.0"
-wayland-protocols = "0.31.0"
+wayland-protocols = "0.32.1"
 env_logger = "0.11.3"
 log = "0.4.20"
 dirs = "5.0.1"
@@ -46,6 +47,7 @@ time = { version = "0.3.31", features = [
     "formatting",
     "macros",
 ] }
+url = "2.5"
 # i18n
 i18n-embed = { version = "0.14.1", features = [
     "fluent-system",
