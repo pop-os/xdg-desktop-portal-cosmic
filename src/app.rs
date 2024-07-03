@@ -9,6 +9,7 @@ use cosmic::{
     iced::window,
     iced_futures::{event::listen_with, Subscription},
 };
+use std::collections::HashMap;
 use wayland_client::protocol::wl_output::WlOutput;
 
 pub(crate) fn run() -> cosmic::iced::Result {
@@ -26,8 +27,7 @@ pub struct CosmicPortal {
     pub access_args: Option<access::AccessDialogArgs>,
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
 
-    pub file_chooser_args: Option<file_chooser::Args>,
-    pub file_chooser_dialog: Option<file_chooser::Dialog>,
+    pub file_choosers: HashMap<window::Id, (file_chooser::Args, file_chooser::Dialog)>,
 
     pub screenshot_args: Option<screenshot::Args>,
     pub location_options: Vec<String>,
@@ -52,7 +52,7 @@ pub struct OutputState {
 #[derive(Debug, Clone)]
 pub enum Msg {
     Access(access::Msg),
-    FileChooser(file_chooser::Msg),
+    FileChooser(window::Id, file_chooser::Msg),
     Screenshot(screenshot::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
@@ -105,8 +105,7 @@ impl cosmic::Application for CosmicPortal {
                 core,
                 access_args: Default::default(),
                 access_choices: Default::default(),
-                file_chooser_args: Default::default(),
-                file_chooser_dialog: Default::default(),
+                file_choosers: Default::default(),
                 screenshot_args: Default::default(),
                 location_options: Vec::new(),
                 prev_rectangle: Default::default(),
@@ -139,7 +138,7 @@ impl cosmic::Application for CosmicPortal {
     ) -> cosmic::iced::Command<app::Message<Self::Message>> {
         match message {
             Msg::Access(m) => access::update_msg(self, m).map(cosmic::app::Message::App),
-            Msg::FileChooser(m) => file_chooser::update_msg(self, m),
+            Msg::FileChooser(id, m) => file_chooser::update_msg(self, id, m),
             Msg::Portal(e) => match e {
                 subscription::Event::Access(args) => {
                     access::update_args(self, args).map(cosmic::app::Message::App)
@@ -254,8 +253,9 @@ impl cosmic::Application for CosmicPortal {
                 _ => None,
             }),
         ];
-        if let Some(dialog) = &self.file_chooser_dialog {
-            subscriptions.push(dialog.subscription());
+        for (id, (_args, dialog)) in self.file_choosers.iter() {
+            let id = id.clone();
+            subscriptions.push(dialog.subscription().map(move |x| Msg::FileChooser(id, x)));
         }
         Subscription::batch(subscriptions)
     }

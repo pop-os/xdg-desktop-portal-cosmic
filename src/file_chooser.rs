@@ -21,9 +21,12 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
-use crate::{app::CosmicPortal, fl, subscription, PortalResponse};
+use crate::{
+    app::{CosmicPortal, Msg as AppMsg},
+    fl, subscription, PortalResponse,
+};
 
-pub(crate) type Dialog = cosmic_files::dialog::Dialog<crate::app::Msg>;
+pub(crate) type Dialog = cosmic_files::dialog::Dialog<Msg>;
 
 type Choices = Vec<(String, String, Vec<(String, String)>, String)>;
 type Filter = (String, Vec<(u32, String)>);
@@ -259,116 +262,117 @@ pub(crate) struct Args {
     pub tx: Sender<PortalResponse<FileChooserResult>>,
 }
 
-pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<crate::app::Msg> {
-    portal.file_chooser_dialog.as_ref().unwrap().view(id)
+fn map_msg(id: window::Id, message: app::Message<Msg>) -> app::Message<AppMsg> {
+    match message {
+        app::Message::App(msg) => app::Message::App(AppMsg::FileChooser(id, msg)),
+        app::Message::Cosmic(cosmic_message) => app::Message::Cosmic(cosmic_message),
+        app::Message::None => app::Message::None,
+    }
+}
+
+pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<AppMsg> {
+    match portal.file_choosers.get(&id) {
+        Some((_args, dialog)) => dialog.view(id).map(move |msg| AppMsg::FileChooser(id, msg)),
+        None => widget::text(format!("no file chooser dialog with ID {id:?}")).into(),
+    }
 }
 
 pub fn update_msg(
     portal: &mut CosmicPortal,
+    id: window::Id,
     msg: Msg,
-) -> cosmic::Command<app::Message<crate::app::Msg>> {
+) -> cosmic::Command<app::Message<AppMsg>> {
     match msg {
-        Msg::DialogMessage(dialog_msg) => portal
-            .file_chooser_dialog
-            .as_mut()
-            .unwrap()
-            .update(dialog_msg),
-        Msg::DialogResult(dialog_res) => {
-            log::debug!("file chooser result {:?}", dialog_res);
-            let args = portal.file_chooser_args.take().unwrap();
-            let dialog = portal.file_chooser_dialog.take().unwrap();
-            let response = match dialog_res {
-                DialogResult::Cancel => PortalResponse::Cancelled,
-                DialogResult::Open(paths) => {
-                    let mut uris = Vec::with_capacity(paths.len());
-                    for path in paths {
-                        match url::Url::from_file_path(&path) {
-                            Ok(url) => uris.push(url.to_string()),
-                            Err(()) => {
-                                log::error!("failed to convert to URL: {:?}", path);
-                                //TODO: return error?
+        Msg::DialogMessage(dialog_msg) => match portal.file_choosers.get_mut(&id) {
+            Some((_args, dialog)) => dialog.update(dialog_msg).map(move |msg| map_msg(id, msg)),
+            None => {
+                log::warn!("no file chooser dialog with ID {id:?}");
+                cosmic::Command::none()
+            }
+        },
+        Msg::DialogResult(dialog_res) => match portal.file_choosers.remove(&id) {
+            Some((args, dialog)) => {
+                log::debug!("file chooser result {:?}", dialog_res);
+                let response = match dialog_res {
+                    DialogResult::Cancel => PortalResponse::Cancelled,
+                    DialogResult::Open(paths) => {
+                        let mut uris = Vec::with_capacity(paths.len());
+                        for path in paths {
+                            match url::Url::from_file_path(&path) {
+                                Ok(url) => uris.push(url.to_string()),
+                                Err(()) => {
+                                    log::error!("failed to convert to URL: {:?}", path);
+                                    //TODO: return error?
+                                }
                             }
                         }
-                    }
 
-                    let dialog_choices = dialog.choices();
-                    let mut choices = Vec::with_capacity(dialog_choices.len());
-                    for choice in dialog_choices.iter() {
-                        match choice {
-                            DialogChoice::CheckBox { id, value, .. } => {
-                                choices.push((
-                                    id.clone(),
-                                    if *value { "true" } else { "false" }.to_string(),
-                                ));
-                            }
-                            DialogChoice::ComboBox {
-                                id,
-                                options,
-                                selected,
-                                ..
-                            } => {
-                                //TODO: what to fill in if selected option not set?
-                                if let Some(option_i) = selected {
-                                    if let Some(option) = options.get(*option_i) {
-                                        choices.push((id.clone(), option.id.clone()));
+                        let dialog_choices = dialog.choices();
+                        let mut choices = Vec::with_capacity(dialog_choices.len());
+                        for choice in dialog_choices.iter() {
+                            match choice {
+                                DialogChoice::CheckBox { id, value, .. } => {
+                                    choices.push((
+                                        id.clone(),
+                                        if *value { "true" } else { "false" }.to_string(),
+                                    ));
+                                }
+                                DialogChoice::ComboBox {
+                                    id,
+                                    options,
+                                    selected,
+                                    ..
+                                } => {
+                                    //TODO: what to fill in if selected option not set?
+                                    if let Some(option_i) = selected {
+                                        if let Some(option) = options.get(*option_i) {
+                                            choices.push((id.clone(), option.id.clone()));
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    let (filters, filter_selected) = dialog.filters();
-                    let mut current_filter = None;
-                    if let Some(filter_i) = filter_selected {
-                        if let Some(filter) = filters.get(filter_i) {
-                            let mut patterns = Vec::with_capacity(filter.patterns.len());
-                            for pattern in filter.patterns.iter() {
-                                patterns.push(match pattern {
-                                    DialogFilterPattern::Glob(glob) => (0u32, glob.clone()),
-                                    DialogFilterPattern::Mime(mime) => (1u32, mime.clone()),
-                                });
+                        let (filters, filter_selected) = dialog.filters();
+                        let mut current_filter = None;
+                        if let Some(filter_i) = filter_selected {
+                            if let Some(filter) = filters.get(filter_i) {
+                                let mut patterns = Vec::with_capacity(filter.patterns.len());
+                                for pattern in filter.patterns.iter() {
+                                    patterns.push(match pattern {
+                                        DialogFilterPattern::Glob(glob) => (0u32, glob.clone()),
+                                        DialogFilterPattern::Mime(mime) => (1u32, mime.clone()),
+                                    });
+                                }
+                                current_filter = Some((filter.label.clone(), patterns));
                             }
-                            current_filter = Some((filter.label.clone(), patterns));
                         }
-                    }
 
-                    PortalResponse::Success(FileChooserResult {
-                        uris,
-                        choices,
-                        current_filter,
-                    })
-                }
-            };
-            cosmic::Command::perform(
-                async move {
-                    let _ = args.tx.send(response).await;
-                    cosmic::app::message::none()
-                },
-                |x| x,
-            )
-        }
+                        PortalResponse::Success(FileChooserResult {
+                            uris,
+                            choices,
+                            current_filter,
+                        })
+                    }
+                };
+                cosmic::Command::perform(
+                    async move {
+                        let _ = args.tx.send(response).await;
+                        cosmic::app::message::none()
+                    },
+                    |x| x,
+                )
+            }
+            None => {
+                log::warn!("no file chooser dialog with ID {id:?}");
+                cosmic::Command::none()
+            }
+        },
     }
 }
 
-pub fn update_args(
-    portal: &mut CosmicPortal,
-    args: Args,
-) -> cosmic::Command<app::Message<crate::app::Msg>> {
+pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<app::Message<AppMsg>> {
     let mut cmds = Vec::with_capacity(2);
-
-    if let Some(old_args) = portal.file_chooser_args.take() {
-        // send cancelled response
-        tokio::spawn(async move {
-            let _ = old_args
-                .tx
-                .send(PortalResponse::Cancelled::<FileChooserResult>)
-                .await;
-        });
-    }
-
-    if let Some(old_dialog) = portal.file_chooser_dialog.take() {
-        //TODO: close window
-    }
 
     let kind = match &args.options {
         FileChooserOptions::OpenFile(options) => {
@@ -399,8 +403,8 @@ pub fn update_args(
     let (mut dialog, command) = Dialog::new(
         kind,
         path_opt,
-        |x| crate::app::Msg::FileChooser(Msg::DialogMessage(x)),
-        |x| crate::app::Msg::FileChooser(Msg::DialogResult(x)),
+        |x| Msg::DialogMessage(x),
+        |x| Msg::DialogResult(x),
     );
     cmds.push(command);
     cmds.push(dialog.set_title(args.title.clone()));
@@ -468,7 +472,7 @@ pub fn update_args(
         }
         cmds.push(dialog.set_filters(filters, filter_selected));
     }
-    portal.file_chooser_args = Some(args);
-    portal.file_chooser_dialog = Some(dialog);
-    cosmic::iced::Command::batch(cmds)
+    let id = dialog.window_id();
+    portal.file_choosers.insert(id, (args, dialog));
+    cosmic::iced::Command::batch(cmds).map(move |msg| map_msg(id, msg))
 }

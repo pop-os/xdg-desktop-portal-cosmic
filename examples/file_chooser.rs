@@ -4,8 +4,8 @@ use ashpd::desktop::file_chooser::{Choice, FileFilter, SelectedFiles};
 async fn main() -> anyhow::Result<()> {
     // From ashpd example
     let files = SelectedFiles::open_file()
-        .title("open a file to read")
-        .accept_label("read")
+        .title("Custom title")
+        .accept_label("Custom label")
         .modal(true)
         .multiple(true)
         .choice(
