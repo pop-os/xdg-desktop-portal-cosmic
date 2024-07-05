@@ -1356,6 +1356,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmic-portal-config"
+version = "0.1.0"
+dependencies = [
+ "cosmic-config",
+ "log",
+ "serde",
+]
+
+[[package]]
 name = "cosmic-protocols"
 version = "0.1.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=c8d3a1c#c8d3a1c3d40d16235f4720969a54ed570ec7a976"
@@ -7048,7 +7057,9 @@ dependencies = [
  "ashpd",
  "cosmic-bg-config",
  "cosmic-client-toolkit",
+ "cosmic-config",
  "cosmic-files",
+ "cosmic-portal-config",
  "cosmic-protocols",
  "dirs",
  "env_logger",

@@ -1,0 +1,15 @@
+[package]
+name = "cosmic-portal-config"
+version = "0.1.0"
+edition = "2021"
+description = "Configuration for COSMIC's XDG portal backend"
+repository = "https://github.com/pop-os/xdg-desktop-portal-cosmic"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+cosmic-config.workspace = true
+log.workspace = true
+
+[dependencies.serde]
+features = ["derive"]
+workspace = true

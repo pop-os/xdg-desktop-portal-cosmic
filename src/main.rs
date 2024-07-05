@@ -2,6 +2,8 @@ use cosmic::cosmic_theme::palette::Srgba;
 use std::collections::HashMap;
 use zbus::zvariant::{self, OwnedValue};
 
+pub use cosmic_portal_config;
+
 mod access;
 mod app;
 mod buffer;

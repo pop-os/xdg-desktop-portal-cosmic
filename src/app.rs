@@ -1,11 +1,13 @@
-use crate::{access, file_chooser, fl, screenshot, subscription};
+use crate::{
+    access, cosmic_portal_config as portal_config, file_chooser, fl, screenshot, subscription,
+};
 use cosmic::iced::keyboard;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::iced_core::keyboard::key::Named;
 use cosmic::widget::dropdown;
 use cosmic::Command;
 use cosmic::{
-    app,
+    app, cosmic_config,
     iced::window,
     iced_futures::{event::listen_with, Subscription},
 };
@@ -16,13 +18,21 @@ pub(crate) fn run() -> cosmic::iced::Result {
     let settings = cosmic::app::Settings::default()
         .no_main_window(true)
         .exit_on_close(false);
-    cosmic::app::run::<CosmicPortal>(settings, ())
+    let (config, config_handler) = portal_config::Config::load();
+    let flags = Flags {
+        config,
+        config_handler,
+    };
+    cosmic::app::run::<CosmicPortal>(settings, flags)
 }
 
 // run iced app with no main surface
 pub struct CosmicPortal {
     pub core: app::Core,
     pub tx: Option<tokio::sync::mpsc::Sender<subscription::Event>>,
+
+    pub config_handler: Option<cosmic_config::Config>,
+    pub config: cosmic_portal_config::Config,
 
     pub access_args: Option<access::AccessDialogArgs>,
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
@@ -56,12 +66,21 @@ pub enum Msg {
     Screenshot(screenshot::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
+    ConfigSetScreenshot(portal_config::screenshot::Screenshot),
+    /// Update config from external changes
+    ConfigSubUpdate(portal_config::Config),
+}
+
+#[derive(Clone, Debug)]
+pub struct Flags {
+    pub config_handler: Option<cosmic_config::Config>,
+    pub config: portal_config::Config,
 }
 
 impl cosmic::Application for CosmicPortal {
     type Executor = cosmic::executor::Default;
 
-    type Flags = ();
+    type Flags = Flags;
 
     type Message = Msg;
 
@@ -77,7 +96,10 @@ impl cosmic::Application for CosmicPortal {
 
     fn init(
         core: app::Core,
-        _flags: Self::Flags,
+        Flags {
+            config_handler,
+            config,
+        }: Self::Flags,
     ) -> (Self, cosmic::iced::Command<app::Message<Self::Message>>) {
         let mut model = cosmic::widget::dropdown::multi::model();
         model.insert(dropdown::multi::list(
@@ -85,24 +107,26 @@ impl cosmic::Application for CosmicPortal {
             vec![
                 (
                     fl!("save-to", "clipboard"),
-                    screenshot::ImageSaveLocation::Clipboard,
+                    portal_config::screenshot::ImageSaveLocation::Clipboard,
                 ),
                 (
                     fl!("save-to", "pictures"),
-                    screenshot::ImageSaveLocation::Pictures,
+                    portal_config::screenshot::ImageSaveLocation::Pictures,
                 ),
                 (
                     fl!("save-to", "documents"),
-                    screenshot::ImageSaveLocation::Documents,
+                    portal_config::screenshot::ImageSaveLocation::Documents,
                 ),
             ],
         ));
-        model.selected = Some(screenshot::ImageSaveLocation::default());
+        model.selected = Some(config.screenshot.save_location);
         let wayland_conn = crate::wayland::connect_to_wayland();
         let wayland_helper = crate::wayland::WaylandHelper::new(wayland_conn);
         (
             Self {
                 core,
+                config_handler,
+                config,
                 access_args: Default::default(),
                 access_choices: Default::default(),
                 file_choosers: Default::default(),
@@ -147,6 +171,7 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Screenshot(args) => {
                     screenshot::update_args(self, args).map(cosmic::app::Message::App)
                 }
+                subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
                 | subscription::Event::HighContrast(_) => cosmic::iced::Command::none(),
@@ -226,6 +251,22 @@ impl cosmic::Application for CosmicPortal {
                     self.prev_rectangle = Some(rect);
                 }
 
+                cosmic::iced::Command::none()
+            }
+            Msg::ConfigSetScreenshot(screenshot) => {
+                match &mut self.config_handler {
+                    Some(handler) => {
+                        if let Err(e) = self.config.set_screenshot(handler, screenshot) {
+                            log::error!("Failed to save screenshot config: {e}")
+                        }
+                    }
+                    None => log::error!("Failed to save config: No config handler"),
+                }
+
+                cosmic::iced::Command::none()
+            }
+            Msg::ConfigSubUpdate(config) => {
+                self.config = config;
                 cosmic::iced::Command::none()
             }
         }
