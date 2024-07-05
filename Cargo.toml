@@ -8,6 +8,9 @@ license = "GPL-3.0-or-later"
 default = []
 wgpu = ["libcosmic/wgpu"]
 
+[workspace]
+members = ["cosmic-portal-config"]
+
 [dependencies]
 anyhow = "1.0.60"
 ashpd = "0.8.1"
@@ -22,6 +25,7 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
     "dbus-config",
 ] }
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
+cosmic-portal-config = { path = "./cosmic-portal-config" }
 memmap2 = "0.9.0"
 # pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
 once_cell = "1.19.0"
@@ -30,7 +34,6 @@ pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", featur
 ] }
 png = "0.17.5"
 rustix = { version = "0.38.0", features = ["fs"] }
-serde = "1.0.143"
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.5.0"
@@ -40,7 +43,6 @@ zbus = { version = "4.2.2", default-features = false, features = ["tokio"] }
 gbm = "0.15.0"
 wayland-protocols = "0.32.1"
 env_logger = "0.11.3"
-log = "0.4.20"
 dirs = "5.0.1"
 time = { version = "0.3.31", features = [
     "local-offset",
@@ -56,8 +58,18 @@ i18n-embed = { version = "0.14.1", features = [
 i18n-embed-fl = "0.8.0"
 rust-embed = "8.2.0"
 
+log.workspace = true
+serde.workspace = true
+cosmic-config.workspace = true
+
+[workspace.dependencies]
+cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
+log = "0.4.20"
+serde = "1.0.143"
+
 [dev-dependencies]
 gst = { package = "gstreamer", version = "0.21.3" }
+
 
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { path = "../libcosmic" }

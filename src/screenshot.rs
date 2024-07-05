@@ -22,6 +22,10 @@ use wayland_client::protocol::wl_output::{self, WlOutput};
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
+use crate::cosmic_portal_config::{
+    self,
+    screenshot::{self as config_screenshot, ImageSaveLocation},
+};
 use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::widget::rectangle_selection::DragState;
 use crate::{fl, subscription, PortalResponse};
@@ -114,15 +118,6 @@ impl Rect {
             bottom: self.bottom + y,
         }
     }
-}
-
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ImageSaveLocation {
-    Clipboard,
-    #[default]
-    Pictures,
-    Documents,
-    // Custom(PathBuf), // TODO
 }
 
 pub struct Screenshot {
@@ -341,6 +336,17 @@ pub enum Choice {
     Window(String, Option<usize>),
 }
 
+impl From<&Choice> for config_screenshot::Choice {
+    // Using a reference here to avoid requiring a temporary `Choice` that's only consumed
+    fn from(value: &Choice) -> Self {
+        match value {
+            Choice::Window(..) => config_screenshot::Choice::Window,
+            Choice::Rectangle(..) => config_screenshot::Choice::Rectangle,
+            Choice::Output(_) => config_screenshot::Choice::Output,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum Action {
     #[default]
@@ -378,6 +384,9 @@ impl Screenshot {
     ) -> PortalResponse<ScreenshotResult> {
         // connection.object_server().at(&handle, Request);
 
+        // TODO: Pass config from top level Portal struct instead of reloading
+        let config = cosmic_portal_config::Config::load().0.screenshot;
+
         // TODO create handle, show dialog
         let mut outputs = Vec::new();
         for output in self.wayland_helper.outputs() {
@@ -412,7 +421,14 @@ impl Screenshot {
                 .interactive_toplevel_images(outputs.clone())
                 .await
                 .unwrap_or_default();
-
+            // TODO: Maybe replace config's Choice with Choice from this file
+            let choice = match config.choice {
+                config_screenshot::Choice::Output => Choice::Output(first_output),
+                config_screenshot::Choice::Rectangle => {
+                    Choice::Rectangle(Rect::default(), DragState::default())
+                }
+                config_screenshot::Choice::Window => Choice::Window(first_output, None),
+            };
             if let Err(err) = self
                 .tx
                 .send(subscription::Event::Screenshot(Args {
@@ -428,11 +444,11 @@ impl Screenshot {
                     output_images,
                     toplevel_images,
                     tx,
-                    location: ImageSaveLocation::Pictures,
+                    location: config.save_location,
                     // TODO get last choice
                     // Could maybe be stored using cosmic config state?
                     // TODO cover all outputs at start of rectangle?
-                    choice: Choice::Output(first_output),
+                    choice,
                     // will be updated
                 }))
                 .await
@@ -701,6 +717,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             cosmic::Command::batch(cmds)
         }
         Msg::Choice(c) => {
+            let choice = (&c).into();
             if let Some(args) = portal.screenshot_args.as_mut() {
                 args.choice = c;
                 if let Choice::Rectangle(r, s) = &args.choice {
@@ -709,7 +726,12 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             } else {
                 log::error!("Failed to find screenshot Args for Choice message.");
             }
-            cosmic::Command::none()
+            cosmic::command::message(crate::app::Msg::ConfigSetScreenshot(
+                config_screenshot::Screenshot {
+                    choice,
+                    ..portal.config.screenshot
+                },
+            ))
         }
         Msg::OutputChanged(wl_output) => {
             if let (Some(args), Some(o)) = (
@@ -757,10 +779,16 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     _ => args.location,
                 };
                 args.location = loc;
+                cosmic::command::message(crate::app::Msg::ConfigSetScreenshot(
+                    config_screenshot::Screenshot {
+                        save_location: loc,
+                        ..portal.config.screenshot
+                    },
+                ))
             } else {
                 log::error!("Failed to find screenshot Args for Location message.");
+                cosmic::Command::none()
             }
-            cosmic::Command::none()
         }
     }
 }

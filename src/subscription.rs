@@ -24,6 +24,7 @@ pub enum Event {
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
+    Config(cosmic_portal_config::Config),
     Init(tokio::sync::mpsc::Sender<Event>),
 }
 
@@ -74,6 +75,7 @@ impl Debug for Event {
             Event::Accent(a) => a.fmt(f),
             Event::IsDark(t) => t.fmt(f),
             Event::HighContrast(c) => c.fmt(f),
+            Event::Config(c) => c.fmt(f),
             Event::Init(tx) => tx.fmt(f),
         }
     }
@@ -88,19 +90,34 @@ pub(crate) fn portal_subscription(
     helper: wayland::WaylandHelper,
 ) -> cosmic::iced::Subscription<Event> {
     struct PortalSubscription;
-    subscription::channel(
-        TypeId::of::<PortalSubscription>(),
-        10,
-        |mut output| async move {
-            let mut state = State::Init;
-            loop {
-                if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
-                    log::debug!("Portal Subscription Error: {:?}", err);
-                    future::pending::<()>().await;
+    struct ConfigSubscription;
+    subscription::Subscription::batch([
+        subscription::channel(
+            TypeId::of::<PortalSubscription>(),
+            10,
+            |mut output| async move {
+                let mut state = State::Init;
+                loop {
+                    if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
+                        log::debug!("Portal Subscription Error: {:?}", err);
+                        future::pending::<()>().await;
+                    }
                 }
+            },
+        ),
+        cosmic_config::config_subscription(
+            TypeId::of::<ConfigSubscription>(),
+            cosmic_portal_config::APP_ID.into(),
+            cosmic_portal_config::CONFIG_VERSION,
+        )
+        .map(|update| {
+            for error in update.errors {
+                log::warn!("Error updating config: {:?}", error);
             }
-        },
-    )
+
+            Event::Config(update.config)
+        }),
+    ])
 }
 
 pub(crate) async fn process_changes(
@@ -199,6 +216,11 @@ pub(crate) async fn process_changes(
                                 zvariant::Value::from(iface.contrast as u32),
                             )
                             .await?;
+                    }
+                    Event::Config(config) => {
+                        if let Err(err) = output.send(Event::Config(config)).await {
+                            log::error!("Error sending config update: {:?}", err)
+                        }
                     }
                     Event::Init(_) => {}
                 }
