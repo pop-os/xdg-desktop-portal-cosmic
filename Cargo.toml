@@ -58,9 +58,10 @@ i18n-embed = { version = "0.14.1", features = [
 i18n-embed-fl = "0.8.0"
 rust-embed = "8.2.0"
 
+# Workspace
+cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-cosmic-config.workspace = true
 
 [workspace.dependencies]
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
@@ -69,7 +70,6 @@ serde = "1.0.143"
 
 [dev-dependencies]
 gst = { package = "gstreamer", version = "0.21.3" }
-
 
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { path = "../libcosmic" }
