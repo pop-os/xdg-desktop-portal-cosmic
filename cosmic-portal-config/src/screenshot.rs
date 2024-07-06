@@ -12,6 +12,7 @@ pub struct Screenshot {
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub enum ImageSaveLocation {
     Clipboard,
     #[default]
@@ -21,10 +22,28 @@ pub enum ImageSaveLocation {
 }
 
 // TODO: Use type from screenshot directly?
-#[derive(Debug, Default, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub enum Choice {
-    #[default]
-    Output,
+    Output(Option<String>),
     Rectangle,
     Window,
+}
+
+impl From<&mut Choice> for Choice {
+    fn from(value: &mut Choice) -> Self {
+        // Convenience implementation to move Choice so that the borrow checker doesn't complain
+        // about partial moves
+        match value {
+            Choice::Output(output) => Choice::Output(output.take()),
+            Choice::Rectangle => Choice::Rectangle,
+            Choice::Window => Choice::Window,
+        }
+    }
+}
+
+impl Default for Choice {
+    fn default() -> Self {
+        Choice::Output(None)
+    }
 }

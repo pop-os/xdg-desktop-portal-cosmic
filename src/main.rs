@@ -2,7 +2,7 @@ use cosmic::cosmic_theme::palette::Srgba;
 use std::collections::HashMap;
 use zbus::zvariant::{self, OwnedValue};
 
-pub use cosmic_portal_config;
+pub use cosmic_portal_config as config;
 
 mod access;
 mod app;

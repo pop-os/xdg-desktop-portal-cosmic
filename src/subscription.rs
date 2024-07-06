@@ -11,9 +11,9 @@ use tokio::sync::mpsc::Receiver;
 use zbus::{zvariant, Connection};
 
 use crate::{
-    access::Access, file_chooser::FileChooser, screencast::ScreenCast, screenshot::Screenshot,
-    wayland, ColorScheme, Contrast, Settings, ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE,
-    COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
+    access::Access, config, file_chooser::FileChooser, screencast::ScreenCast,
+    screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings, ACCENT_COLOR_KEY,
+    APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
 };
 
 #[derive(Clone)]
@@ -24,7 +24,7 @@ pub enum Event {
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
-    Config(cosmic_portal_config::Config),
+    Config(config::Config),
     Init(tokio::sync::mpsc::Sender<Event>),
 }
 
@@ -107,8 +107,8 @@ pub(crate) fn portal_subscription(
         ),
         cosmic_config::config_subscription(
             TypeId::of::<ConfigSubscription>(),
-            cosmic_portal_config::APP_ID.into(),
-            cosmic_portal_config::CONFIG_VERSION,
+            config::APP_ID.into(),
+            config::CONFIG_VERSION,
         )
         .map(|update| {
             for error in update.errors {

@@ -1,6 +1,4 @@
-use crate::{
-    access, cosmic_portal_config as portal_config, file_chooser, fl, screenshot, subscription,
-};
+use crate::{access, config, file_chooser, fl, screenshot, subscription};
 use cosmic::iced::keyboard;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::iced_core::keyboard::key::Named;
@@ -18,7 +16,7 @@ pub(crate) fn run() -> cosmic::iced::Result {
     let settings = cosmic::app::Settings::default()
         .no_main_window(true)
         .exit_on_close(false);
-    let (config, config_handler) = portal_config::Config::load();
+    let (config, config_handler) = config::Config::load();
     let flags = Flags {
         config,
         config_handler,
@@ -32,7 +30,7 @@ pub struct CosmicPortal {
     pub tx: Option<tokio::sync::mpsc::Sender<subscription::Event>>,
 
     pub config_handler: Option<cosmic_config::Config>,
-    pub config: cosmic_portal_config::Config,
+    pub config: config::Config,
 
     pub access_args: Option<access::AccessDialogArgs>,
     pub access_choices: Vec<(Option<usize>, Vec<String>)>,
@@ -66,15 +64,15 @@ pub enum Msg {
     Screenshot(screenshot::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
-    ConfigSetScreenshot(portal_config::screenshot::Screenshot),
+    ConfigSetScreenshot(config::screenshot::Screenshot),
     /// Update config from external changes
-    ConfigSubUpdate(portal_config::Config),
+    ConfigSubUpdate(config::Config),
 }
 
 #[derive(Clone, Debug)]
 pub struct Flags {
     pub config_handler: Option<cosmic_config::Config>,
-    pub config: portal_config::Config,
+    pub config: config::Config,
 }
 
 impl cosmic::Application for CosmicPortal {
@@ -107,15 +105,15 @@ impl cosmic::Application for CosmicPortal {
             vec![
                 (
                     fl!("save-to", "clipboard"),
-                    portal_config::screenshot::ImageSaveLocation::Clipboard,
+                    config::screenshot::ImageSaveLocation::Clipboard,
                 ),
                 (
                     fl!("save-to", "pictures"),
-                    portal_config::screenshot::ImageSaveLocation::Pictures,
+                    config::screenshot::ImageSaveLocation::Pictures,
                 ),
                 (
                     fl!("save-to", "documents"),
-                    portal_config::screenshot::ImageSaveLocation::Documents,
+                    config::screenshot::ImageSaveLocation::Documents,
                 ),
             ],
         ));
