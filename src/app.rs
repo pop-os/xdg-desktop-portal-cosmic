@@ -250,6 +250,12 @@ impl cosmic::Application for CosmicPortal {
                         ..
                     },
                 ) => Some(Msg::Screenshot(screenshot::Msg::Cancel)),
+                cosmic::iced_core::Event::Keyboard(
+                    cosmic::iced_core::keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Named(Named::Enter),
+                        ..
+                    },
+                ) => Some(Msg::Screenshot(screenshot::Msg::Capture)),
                 _ => None,
             }),
         ];
