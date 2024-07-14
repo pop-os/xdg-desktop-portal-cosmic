@@ -7,6 +7,7 @@ datarootdir = $(prefix)/share
 datadir = $(datarootdir)
 iconsdir = $(datarootdir)/icons/hicolor
 
+CARGO_TARGET_DIR ?= target
 TARGET = debug
 DEBUG ?= 0
 ifeq ($(DEBUG),0)
@@ -34,7 +35,7 @@ $(BIN): Cargo.toml Cargo.lock src/main.rs vendor-check
 	cargo build $(ARGS) --bin ${BIN}
 
 install:
-	install -Dm0755 target/$(TARGET)/$(BIN) $(DESTDIR)$(libexecdir)/$(BIN)
+	install -Dm0755 $(CARGO_TARGET_DIR)/$(TARGET)/$(BIN) $(DESTDIR)$(libexecdir)/$(BIN)
 	install -Dm0644 data/$(DBUS_NAME).service $(DESTDIR)$(datadir)/dbus-1/services/$(DBUS_NAME).service
 	install -Dm0644 data/cosmic.portal $(DESTDIR)$(datadir)/xdg-desktop-portal/portals/cosmic.portal
 	install -Dm0644 data/cosmic-portals.conf $(DESTDIR)$(datadir)/xdg-desktop-portal/cosmic-portals.conf
