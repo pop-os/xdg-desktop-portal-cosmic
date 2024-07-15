@@ -10,6 +10,7 @@ mod file_chooser;
 mod localize;
 mod screencast;
 mod screencast_thread;
+mod screencast_dialog;
 mod screenshot;
 mod subscription;
 mod wayland;
