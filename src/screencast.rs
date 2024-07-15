@@ -6,10 +6,13 @@ use std::{
     mem,
     sync::{Arc, Mutex},
 };
+use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
+use crate::screencast_dialog;
 use crate::screencast_thread::ScreencastThread;
-use crate::wayland::WaylandHelper;
+use crate::subscription;
+use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::PortalResponse;
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
@@ -68,13 +71,15 @@ impl SessionData {
 pub struct ScreenCast {
     sessions: Mutex<HashMap<zvariant::ObjectPath<'static>, Arc<Mutex<SessionData>>>>,
     wayland_helper: WaylandHelper,
+    tx: Sender<subscription::Event>,
 }
 
 impl ScreenCast {
-    pub fn new(wayland_helper: WaylandHelper) -> Self {
+    pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             wayland_helper,
+            tx,
         }
     }
 }
@@ -148,24 +153,41 @@ impl ScreenCast {
             (cursor_mode, multiple)
         };
 
+        // XXX
         let mut outputs = self.wayland_helper.outputs();
-        if !outputs.is_empty() {
-            if !multiple {
-                // XXX way to select best output?
-                outputs.truncate(1);
-            }
-        } else {
+        if outputs.is_empty() {
             log::error!("No output");
             return PortalResponse::Other;
         }
 
+        // Show dialog to prompt for what to capture
+        let outputs = self
+            .wayland_helper
+            .outputs()
+            .iter()
+            .filter_map(|o| Some((o.clone(), self.wayland_helper.output_info(o)?)))
+            .collect();
+        let toplevels = self.wayland_helper.toplevels();
+        let Some(capture_sources) =
+            screencast_dialog::show_screencast_prompt(&self.tx, outputs, toplevels).await
+        else {
+            return PortalResponse::Cancelled;
+        };
+
         let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
         // Use `FuturesOrdered` so streams are in consistent order
         let mut res_futures = FuturesOrdered::new();
-        for output in outputs {
+        for output in capture_sources.outputs {
             res_futures.push_back(ScreencastThread::new(
                 self.wayland_helper.clone(),
-                output,
+                CaptureSource::Output(output),
+                overlay_cursor,
+            ));
+        }
+        for toplevel in capture_sources.toplevels {
+            res_futures.push_back(ScreencastThread::new(
+                self.wayland_helper.clone(),
+                CaptureSource::Toplevel(toplevel),
                 overlay_cursor,
             ));
         }
