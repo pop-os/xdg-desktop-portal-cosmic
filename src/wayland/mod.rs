@@ -13,7 +13,7 @@ use cosmic_client_toolkit::{
         registry::{ProvidesRegistryState, RegistryState},
         shm::{Shm, ShmHandler},
     },
-    toplevel_info::ToplevelInfoState,
+    toplevel_info::{ToplevelInfo, ToplevelInfoState},
     workspace::WorkspaceState,
 };
 use cosmic_protocols::{
@@ -86,6 +86,7 @@ struct WaylandHelperInner {
     outputs: Mutex<Vec<wl_output::WlOutput>>,
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
     output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ZcosmicToplevelHandleV1>>>,
+    toplevels: Mutex<Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)>>,
     qh: QueueHandle<AppData>,
     screencopy_manager: zcosmic_screencopy_manager_v2::ZcosmicScreencopyManagerV2,
     output_source_manager: ZcosmicOutputImageSourceManagerV1,
@@ -160,6 +161,12 @@ impl AppData {
                     map
                 },
             );
+
+        *self.wayland_helper.inner.toplevels.lock().unwrap() = self
+            .toplevel_info_state
+            .toplevels()
+            .filter_map(|(handle, info)| Some((handle.clone(), info?.clone())))
+            .collect();
     }
 }
 
@@ -228,10 +235,10 @@ impl Session {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum CaptureSource<'a> {
-    Output(&'a wl_output::WlOutput),
-    Toplevel(&'a ZcosmicToplevelHandleV1),
+#[derive(Clone, Debug)]
+pub enum CaptureSource {
+    Output(wl_output::WlOutput),
+    Toplevel(ZcosmicToplevelHandleV1),
 }
 
 impl WaylandHelper {
@@ -249,6 +256,7 @@ impl WaylandHelper {
                 outputs: Mutex::new(Vec::new()),
                 output_infos: Mutex::new(HashMap::new()),
                 output_toplevels: Mutex::new(HashMap::new()),
+                toplevels: Mutex::new(Vec::new()),
                 qh: qh.clone(),
                 screencopy_manager: screencopy_state.screencopy_manager.clone(),
                 output_source_manager: screencopy_state.output_source_manager.clone().unwrap(),
@@ -292,6 +300,10 @@ impl WaylandHelper {
         self.inner.outputs.lock().unwrap().clone()
     }
 
+    pub fn toplevels(&self) -> Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)> {
+        self.inner.toplevels.lock().unwrap().clone()
+    }
+
     pub fn output_info(&self, output: &wl_output::WlOutput) -> Option<OutputInfo> {
         self.inner.output_infos.lock().unwrap().get(output).cloned()
     }
@@ -330,7 +342,7 @@ impl WaylandHelper {
 
         // TODO is `FuturesOrdered` more optimal?
         let mut images = Vec::new();
-        for t in toplevels.iter() {
+        for t in toplevels.into_iter() {
             if let Some(image) = self
                 .capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor)
                 .await
@@ -347,12 +359,12 @@ impl WaylandHelper {
                 CaptureSource::Output(o) => {
                     self.inner
                         .output_source_manager
-                        .create_source(o, &self.inner.qh, ())
+                        .create_source(&o, &self.inner.qh, ())
                 }
                 CaptureSource::Toplevel(t) => {
                     self.inner
                         .toplevel_source_manager
-                        .create_source(t, &self.inner.qh, ())
+                        .create_source(&t, &self.inner.qh, ())
                 }
             };
 
@@ -384,7 +396,7 @@ impl WaylandHelper {
 
     pub async fn capture_source_shm(
         &self,
-        source: CaptureSource<'_>,
+        source: CaptureSource,
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
         // XXX error type?

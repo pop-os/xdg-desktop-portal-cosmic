@@ -31,13 +31,13 @@ pub struct ScreencastThread {
 impl ScreencastThread {
     pub async fn new(
         wayland_helper: WaylandHelper,
-        output: wl_output::WlOutput,
+        capture_source: CaptureSource,
         overlay_cursor: bool,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
-        std::thread::spawn(
-            move || match start_stream(wayland_helper, output, overlay_cursor) {
+        std::thread::spawn(move || {
+            match start_stream(wayland_helper, capture_source, overlay_cursor) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
@@ -47,8 +47,8 @@ impl ScreencastThread {
                     loop_.run();
                 }
                 Err(err) => tx.send(Err(err)).unwrap(),
-            },
-        );
+            }
+        });
         Ok(Self {
             // XXX can second unwrap fail?
             node_id: rx.await.unwrap()?.await.unwrap()?,
@@ -280,7 +280,7 @@ impl StreamData {
 #[allow(clippy::type_complexity)]
 fn start_stream(
     wayland_helper: WaylandHelper,
-    output: wl_output::WlOutput,
+    capture_source: CaptureSource,
     overlay_cursor: bool,
 ) -> anyhow::Result<(
     pipewire::main_loop::MainLoop,
@@ -297,12 +297,11 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    let (width, height) = match block_on(
-        wayland_helper.capture_source_shm(CaptureSource::Output(&output), overlay_cursor),
-    ) {
-        Some(frame) => (frame.width, frame.height),
-        None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
-    };
+    let (width, height) =
+        match block_on(wayland_helper.capture_source_shm(capture_source.clone(), overlay_cursor)) {
+            Some(frame) => (frame.width, frame.height),
+            None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
+        };
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
@@ -330,8 +329,7 @@ fn start_stream(
         &mut initial_params,
     )?;
 
-    let session =
-        wayland_helper.capture_source_session(CaptureSource::Output(&output), overlay_cursor);
+    let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
 
     let data = StreamData {
         wayland_helper,

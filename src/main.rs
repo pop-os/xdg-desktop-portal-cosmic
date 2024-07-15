@@ -11,6 +11,7 @@ mod documents;
 mod file_chooser;
 mod localize;
 mod screencast;
+mod screencast_dialog;
 mod screencast_thread;
 mod screenshot;
 mod subscription;
