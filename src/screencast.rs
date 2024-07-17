@@ -6,9 +6,12 @@ use std::{
     mem,
     sync::{Arc, Mutex},
 };
+use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
+use crate::screencast_dialog;
 use crate::screencast_thread::ScreencastThread;
+use crate::subscription;
 use crate::wayland::WaylandHelper;
 use crate::PortalResponse;
 
@@ -68,13 +71,15 @@ impl SessionData {
 pub struct ScreenCast {
     sessions: Mutex<HashMap<zvariant::ObjectPath<'static>, Arc<Mutex<SessionData>>>>,
     wayland_helper: WaylandHelper,
+    tx: Sender<subscription::Event>,
 }
 
 impl ScreenCast {
-    pub fn new(wayland_helper: WaylandHelper) -> Self {
+    pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             wayland_helper,
+            tx,
         }
     }
 }
@@ -158,6 +163,27 @@ impl ScreenCast {
             log::error!("No output");
             return PortalResponse::Other;
         }
+
+        // Show dialog to prompt for what to capture
+        let resp = {
+            let mut outputs = self
+                .wayland_helper
+                .outputs()
+                .iter()
+                .filter_map(|o| Some((o.clone(), self.wayland_helper.output_info(o)?)))
+                .collect();
+            match screencast_dialog::show_screencast_prompt(&self.tx, outputs).await {
+                Some(resp) => resp,
+                None => {
+                    return PortalResponse::Cancelled;
+                }
+            }
+        };
+
+        let output = match resp.capture_source {
+            screencast_dialog::CaptureSource::Output(output) => output
+        };
+        let outputs = vec![output]; // TODO
 
         let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
         // Use `FuturesOrdered` so streams are in consistent order

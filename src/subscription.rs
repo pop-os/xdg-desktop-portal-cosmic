@@ -21,6 +21,7 @@ pub enum Event {
     Access(crate::access::AccessDialogArgs),
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
+    Screencast(crate::screencast_dialog::Args),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -71,6 +72,7 @@ impl Debug for Event {
                 .field("location", location)
                 .field("toplevel_images", toplevel_images)
                 .finish(),
+            Event::Screencast(_) => todo!(),
             Event::Accent(a) => a.fmt(f),
             Event::IsDark(t) => t.fmt(f),
             Event::HighContrast(c) => c.fmt(f),
@@ -120,7 +122,10 @@ pub(crate) async fn process_changes(
                     DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
                 )?
-                .serve_at(DBUS_PATH, ScreenCast::new(wayland_helper.clone()))?
+                .serve_at(
+                    DBUS_PATH,
+                    ScreenCast::new(wayland_helper.clone(), tx.clone()),
+                )?
                 .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
@@ -143,6 +148,11 @@ pub(crate) async fn process_changes(
                     Event::Screenshot(args) => {
                         if let Err(err) = output.send(Event::Screenshot(args)).await {
                             log::error!("Error sending screenshot event: {:?}", err);
+                        };
+                    }
+                    Event::Screencast(args) => {
+                        if let Err(err) = output.send(Event::Screencast(args)).await {
+                            log::error!("Error sending screencast event: {:?}", err);
                         };
                     }
                     Event::Accent(a) => {

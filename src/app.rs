@@ -1,4 +1,4 @@
-use crate::{access, file_chooser, fl, screenshot, subscription};
+use crate::{access, file_chooser, fl, screencast_dialog, screenshot, subscription};
 use cosmic::iced::keyboard;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::iced_core::keyboard::key::Named;
@@ -30,6 +30,7 @@ pub struct CosmicPortal {
     pub file_choosers: HashMap<window::Id, (file_chooser::Args, file_chooser::Dialog)>,
 
     pub screenshot_args: Option<screenshot::Args>,
+    pub screencast_args: Option<screencast_dialog::Args>,
     pub location_options: Vec<String>,
     pub prev_rectangle: Option<screenshot::Rect>,
     pub wayland_helper: crate::wayland::WaylandHelper,
@@ -54,6 +55,7 @@ pub enum Msg {
     Access(access::Msg),
     FileChooser(window::Id, file_chooser::Msg),
     Screenshot(screenshot::Msg),
+    Screencast(screencast_dialog::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
 }
@@ -107,6 +109,7 @@ impl cosmic::Application for CosmicPortal {
                 access_choices: Default::default(),
                 file_choosers: Default::default(),
                 screenshot_args: Default::default(),
+                screencast_args: Default::default(),
                 location_options: Vec::new(),
                 prev_rectangle: Default::default(),
                 outputs: Default::default(),
@@ -125,6 +128,8 @@ impl cosmic::Application for CosmicPortal {
     fn view_window(&self, id: window::Id) -> cosmic::prelude::Element<Self::Message> {
         if id == *access::ACCESS_ID {
             access::view(self).map(Msg::Access)
+        } else if id == *screencast_dialog::SCREENCAST_ID {
+            screencast_dialog::view(self).map(Msg::Screencast)
         } else if self.outputs.iter().any(|o| o.id == id) {
             screenshot::view(self, id).map(Msg::Screenshot)
         } else {
@@ -147,6 +152,9 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Screenshot(args) => {
                     screenshot::update_args(self, args).map(cosmic::app::Message::App)
                 }
+                subscription::Event::Screencast(args) => {
+                    screencast_dialog::update_args(self, args).map(cosmic::app::Message::App)
+                }
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
                 | subscription::Event::HighContrast(_) => cosmic::iced::Command::none(),
@@ -156,6 +164,9 @@ impl cosmic::Application for CosmicPortal {
                 }
             },
             Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::app::Message::App),
+            Msg::Screencast(m) => {
+                screencast_dialog::update_msg(self, m).map(cosmic::app::Message::App)
+            }
             Msg::Output(o_event, wl_output) => {
                 match o_event {
                     OutputEvent::Created(Some(info))
