@@ -165,7 +165,7 @@ impl ScreenCast {
         }
 
         // Show dialog to prompt for what to capture
-        let resp = {
+        let capture_sources = {
             let mut outputs = self
                 .wayland_helper
                 .outputs()
@@ -180,10 +180,7 @@ impl ScreenCast {
             }
         };
 
-        let output = match resp.capture_source {
-            screencast_dialog::CaptureSource::Output(output) => output
-        };
-        let outputs = vec![output]; // TODO
+        let outputs = capture_sources.outputs; // TODO
 
         let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
         // Use `FuturesOrdered` so streams are in consistent order

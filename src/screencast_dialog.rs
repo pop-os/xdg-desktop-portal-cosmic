@@ -6,6 +6,7 @@ use cosmic::iced_sctk::commands::layer_surface::{
 };
 use cosmic::{theme, widget};
 use cosmic_client_toolkit::sctk::output::OutputInfo;
+use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1;
 use once_cell::sync::Lazy;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -17,10 +18,14 @@ pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
     outputs: Vec<(WlOutput, OutputInfo)>,
-) -> Option<DialogResult> {
+) -> Option<CaptureSources> {
     dbg!(&outputs);
     let (tx, mut rx) = mpsc::channel(1);
-    let args = Args { outputs, tx, capture_source: None };
+    let args = Args {
+        outputs,
+        tx,
+        capture_sources: Default::default(),
+    };
     subscription_tx
         .send(crate::subscription::Event::Screencast(args))
         .await
@@ -39,18 +44,20 @@ fn create_dialog() -> cosmic::Command<crate::app::Msg> {
     })
 }
 
-#[derive(Clone, Debug)]
-pub struct DialogResult {
-    pub capture_source: CaptureSource,
-}
-
 #[derive(Clone)]
 pub struct Args {
     // TODO multiple
     outputs: Vec<(WlOutput, OutputInfo)>,
     // Should be oneshot, but need `Clone` bound
-    tx: mpsc::Sender<Option<DialogResult>>,
-    capture_source: Option<CaptureSource>,
+    tx: mpsc::Sender<Option<CaptureSources>>,
+    capture_sources: CaptureSources,
+}
+
+// TODO order?
+#[derive(Clone, Debug, Default)]
+pub struct CaptureSources {
+    pub outputs: Vec<WlOutput>,
+    pub toplevels: Vec<ZcosmicToplevelHandleV1>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,16 +79,23 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
 
     match msg {
         Msg::SelectOutput(output) => {
-            args.capture_source = Some(CaptureSource::Output(output));
+            if let Some(idx) = args
+                .capture_sources
+                .outputs
+                .iter()
+                .position(|x| x == &output)
+            {
+                args.capture_sources.outputs.remove(idx);
+            } else {
+                args.capture_sources.outputs.push(output);
+            }
         }
         Msg::Share => {
             if let Some(args) = portal.screencast_args.take() {
                 let tx = args.tx;
-                let response = args.capture_source.map(|capture_source| {
-                    DialogResult { capture_source }
-                });
+                let response = args.capture_sources;
                 tokio::spawn(async move {
-                    if let Err(err) = tx.send(response).await {
+                    if let Err(err) = tx.send(Some(response)).await {
                         log::error!("Failed to send screencast event");
                     }
                 });
@@ -118,17 +132,19 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     };
     let mut cancel_button = widget::button::standard("Cancel").on_press(Msg::Cancel);
     let mut share_button = widget::button::standard("Share");
-    if args.capture_source.is_some() {
+    if !args.capture_sources.outputs.is_empty() || !args.capture_sources.toplevels.is_empty() {
         share_button = share_button.on_press(Msg::Share);
     }
     //let mut items = Vec::new();
     let mut list = widget::ListColumn::new();
     for (output, output_info) in &args.outputs {
+        let is_selected = args.capture_sources.outputs.contains(output);
         let label = widget::text(output_info.name.as_ref().unwrap());
-        let button = cosmic::iced::widget::button(label)
+        let button = widget::button(label)
             .width(iced::Length::Fill)
             .padding(0)
-            .style(theme::iced::Button::Transparent)
+            .style(theme::style::Button::Transparent)
+            .selected(is_selected)
             .on_press(Msg::SelectOutput(output.clone()));
         list = list.add(button);
     }
