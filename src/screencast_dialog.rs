@@ -25,6 +25,7 @@ pub async fn show_screencast_prompt(
         outputs,
         tx,
         capture_sources: Default::default(),
+        tab: Tab::Outputs, // TODO
     };
     subscription_tx
         .send(crate::subscription::Event::Screencast(args))
@@ -44,13 +45,20 @@ fn create_dialog() -> cosmic::Command<crate::app::Msg> {
     })
 }
 
+#[derive(Clone, Debug)]
+enum Tab {
+    Outputs,
+    Windows,
+}
+
 #[derive(Clone)]
 pub struct Args {
-    // TODO multiple
+    // TODO multiple arg, etc?
     outputs: Vec<(WlOutput, OutputInfo)>,
     // Should be oneshot, but need `Clone` bound
     tx: mpsc::Sender<Option<CaptureSources>>,
     capture_sources: CaptureSources,
+    tab: Tab,
 }
 
 // TODO order?
@@ -67,10 +75,11 @@ pub enum CaptureSource {
 
 #[derive(Clone, Debug)]
 pub enum Msg {
-    Cancel,
-    Share,
+    ActivateTab(widget::segmented_button::Entity),
     SelectOutput(WlOutput),
     SelectToplevel(ZcosmicToplevelHandleV1),
+    Share,
+    Cancel,
 }
 
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate::app::Msg> {
@@ -79,6 +88,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
     };
 
     match msg {
+        Msg::ActivateTab(tab) => {}
         Msg::SelectOutput(output) => {
             if let Some(idx) = args
                 .capture_sources
@@ -133,6 +143,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
 pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<crate::app::Msg> {
     let mut command = cosmic::Command::none();
     if portal.screencast_args.is_none() {
+        portal.screencast_tab_model.clear();
+        portal.screencast_tab_model.insert().text("Outputs");
+        portal.screencast_tab_model.insert().text("Windows");
         command = create_dialog();
     } // TODO: else, update dialog? or error.
     portal.screencast_args = Some(args);
@@ -144,11 +157,15 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
         return widget::horizontal_space(iced::Length::Fixed(1.0)).into();
     };
     let mut cancel_button = widget::button::standard("Cancel").on_press(Msg::Cancel);
-    let mut share_button = widget::button::standard("Share");
+    let mut share_button =
+        widget::button::standard("Share").style(cosmic::style::Button::Suggested);
     if !args.capture_sources.outputs.is_empty() || !args.capture_sources.toplevels.is_empty() {
         share_button = share_button.on_press(Msg::Share);
     }
-    //let mut items = Vec::new();
+
+    let tabs =
+        widget::tab_bar::horizontal(&portal.screencast_tab_model).on_activate(Msg::ActivateTab);
+
     let mut list = widget::ListColumn::new();
     for (output, output_info) in &args.outputs {
         let is_selected = args.capture_sources.outputs.contains(output);
@@ -161,9 +178,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
             .on_press(Msg::SelectOutput(output.clone()));
         list = list.add(button);
     }
-    //let control = widget::Column::with_children(items);
-    let control = list;
-    // WIP
+    let control = widget::column::with_children(vec![tabs.into(), list.into()]);
     widget::dialog("Screencast")
         .secondary_action(cancel_button)
         .primary_action(share_button)

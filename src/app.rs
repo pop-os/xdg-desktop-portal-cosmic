@@ -2,7 +2,7 @@ use crate::{access, file_chooser, fl, screencast_dialog, screenshot, subscriptio
 use cosmic::iced::keyboard;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::iced_core::keyboard::key::Named;
-use cosmic::widget::dropdown;
+use cosmic::widget::{self, dropdown};
 use cosmic::Command;
 use cosmic::{
     app,
@@ -31,6 +31,8 @@ pub struct CosmicPortal {
 
     pub screenshot_args: Option<screenshot::Args>,
     pub screencast_args: Option<screencast_dialog::Args>,
+    pub screencast_tab_model:
+        widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
     pub location_options: Vec<String>,
     pub prev_rectangle: Option<screenshot::Rect>,
     pub wayland_helper: crate::wayland::WaylandHelper,
@@ -110,6 +112,7 @@ impl cosmic::Application for CosmicPortal {
                 file_choosers: Default::default(),
                 screenshot_args: Default::default(),
                 screencast_args: Default::default(),
+                screencast_tab_model: Default::default(),
                 location_options: Vec::new(),
                 prev_rectangle: Default::default(),
                 outputs: Default::default(),
