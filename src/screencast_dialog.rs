@@ -70,6 +70,7 @@ pub enum Msg {
     Cancel,
     Share,
     SelectOutput(WlOutput),
+    SelectToplevel(ZcosmicToplevelHandleV1),
 }
 
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate::app::Msg> {
@@ -88,6 +89,18 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 args.capture_sources.outputs.remove(idx);
             } else {
                 args.capture_sources.outputs.push(output);
+            }
+        }
+        Msg::SelectToplevel(toplevel) => {
+            if let Some(idx) = args
+                .capture_sources
+                .toplevels
+                .iter()
+                .position(|x| x == &toplevel)
+            {
+                args.capture_sources.toplevels.remove(idx);
+            } else {
+                args.capture_sources.toplevels.push(toplevel);
             }
         }
         Msg::Share => {
