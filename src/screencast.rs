@@ -12,7 +12,7 @@ use zbus::zvariant;
 use crate::screencast_dialog;
 use crate::screencast_thread::ScreencastThread;
 use crate::subscription;
-use crate::wayland::WaylandHelper;
+use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::PortalResponse;
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
@@ -180,15 +180,20 @@ impl ScreenCast {
             }
         };
 
-        let outputs = capture_sources.outputs; // TODO
-
         let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
         // Use `FuturesOrdered` so streams are in consistent order
         let mut res_futures = FuturesOrdered::new();
-        for output in outputs {
+        for output in capture_sources.outputs {
             res_futures.push_back(ScreencastThread::new(
                 self.wayland_helper.clone(),
-                output,
+                CaptureSource::Output(output),
+                overlay_cursor,
+            ));
+        }
+        for toplevel in capture_sources.toplevels {
+            res_futures.push_back(ScreencastThread::new(
+                self.wayland_helper.clone(),
+                CaptureSource::Toplevel(toplevel),
                 overlay_cursor,
             ));
         }

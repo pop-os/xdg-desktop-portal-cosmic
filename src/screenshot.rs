@@ -168,7 +168,7 @@ impl Screenshot {
         let mut map = HashMap::with_capacity(outputs.len());
         for (output, _, name) in outputs {
             let frame = wayland_helper
-                .capture_source_shm(CaptureSource::Output(&output), false)
+                .capture_source_shm(CaptureSource::Output(output), false)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
             map.insert(name, Arc::new(frame.image()?));
@@ -232,7 +232,7 @@ impl Screenshot {
             let mut frames = Vec::with_capacity(outputs.len());
             for (output, (output_x, output_y), _) in outputs {
                 let frame = wayland_helper
-                    .capture_source_shm(CaptureSource::Output(&output), false)
+                    .capture_source_shm(CaptureSource::Output(output), false)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
                 let rect = Rect {

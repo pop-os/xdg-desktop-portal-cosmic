@@ -228,10 +228,10 @@ impl Session {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum CaptureSource<'a> {
-    Output(&'a wl_output::WlOutput),
-    Toplevel(&'a ZcosmicToplevelHandleV1),
+#[derive(Clone, Debug)]
+pub enum CaptureSource {
+    Output(wl_output::WlOutput),
+    Toplevel(ZcosmicToplevelHandleV1),
 }
 
 impl WaylandHelper {
@@ -330,7 +330,7 @@ impl WaylandHelper {
 
         // TODO is `FuturesOrdered` more optimal?
         let mut images = Vec::new();
-        for t in toplevels.iter() {
+        for t in toplevels.into_iter() {
             if let Some(image) = self
                 .capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor)
                 .await
@@ -347,12 +347,12 @@ impl WaylandHelper {
                 CaptureSource::Output(o) => {
                     self.inner
                         .output_source_manager
-                        .create_source(o, &self.inner.qh, ())
+                        .create_source(&o, &self.inner.qh, ())
                 }
                 CaptureSource::Toplevel(t) => {
                     self.inner
                         .toplevel_source_manager
-                        .create_source(t, &self.inner.qh, ())
+                        .create_source(&t, &self.inner.qh, ())
                 }
             };
 
@@ -384,7 +384,7 @@ impl WaylandHelper {
 
     pub async fn capture_source_shm(
         &self,
-        source: CaptureSource<'_>,
+        source: CaptureSource,
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
         // XXX error type?
