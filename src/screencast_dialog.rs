@@ -170,8 +170,12 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
 }
 
 fn list_button(label: &str, is_selected: bool, msg: Msg) -> cosmic::Element<Msg> {
-    // TODO text style
-    let text = widget::text(label);
+    let text = widget::text(label).style(theme::style::Text::Custom(|theme| {
+        let container = theme.current_container();
+        cosmic::iced_core::widget::text::Appearance {
+            color: Some(container.on.into()),
+        }
+    }));
     let button = widget::button(text)
         .width(iced::Length::Fill)
         .padding(0)
