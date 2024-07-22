@@ -2,14 +2,58 @@
 // Test modifiers, when added to pipewire gstreamersrc:
 // - https://gitlab.freedesktop.org/pipewire/pipewire/-/merge_requests/1881
 
-use ashpd::desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType};
+use ashpd::{
+    desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType},
+    enumflags2::BitFlags,
+};
+use clap::Parser;
 use gst::prelude::*;
 
 use std::os::fd::AsRawFd;
 
+#[derive(clap::Parser, Default, Debug, Clone, PartialEq, Eq)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Allow selecting multiple sources
+    #[clap(long,
+        default_missing_value("true"),
+        default_value("true"),
+        num_args(0..=1),
+        require_equals(true),
+        action = clap::ArgAction::Set)]
+    multiple: bool,
+    #[clap(long, value_enum, value_delimiter(','))]
+    source_types: Vec<Source>,
+}
+
+#[derive(clap::ValueEnum, Debug, Copy, Clone, PartialEq, Eq)]
+enum Source {
+    Monitor,
+    Window,
+    Virtual,
+}
+
+impl From<Source> for SourceType {
+    fn from(source: Source) -> SourceType {
+        match source {
+            Source::Monitor => SourceType::Monitor,
+            Source::Window => SourceType::Window,
+            Source::Virtual => SourceType::Virtual,
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     gst::init().unwrap();
+
+    let args = Args::parse();
+
+    let source_types = args
+        .source_types
+        .into_iter()
+        .map(SourceType::from)
+        .fold(BitFlags::EMPTY, |a, b| a | b);
 
     let screencast = Screencast::new().await?;
     let session = screencast.create_session().await?;
@@ -17,8 +61,8 @@ async fn main() -> anyhow::Result<()> {
         .select_sources(
             &session,
             CursorMode::Embedded,
-            SourceType::Monitor.into(),
-            true,
+            source_types,
+            args.multiple,
             None,
             PersistMode::DoNot,
         )
