@@ -33,11 +33,20 @@ async fn main() -> anyhow::Result<()> {
 
     let node_id = stream.pipe_wire_node_id();
 
+    // TODO Set drm-format; gstreamer Wayland plugins may still be missing some
+    // needed support
+    let format = if gst::version() > (1, 24, 0, 0) {
+        "DMA_DRM"
+    } else {
+        "RGBA"
+    };
+
     let src = gst::parse::bin_from_description(
         &format!(
             "pipewiresrc fd={} path={node_id} !
-             capsfilter caps=video/x-raw(memory:DMABuf),format=RGBA",
-            fd.as_raw_fd()
+             capsfilter caps=video/x-raw(memory:DMABuf),format={}",
+            fd.as_raw_fd(),
+            format
         ),
         true,
     )?;
