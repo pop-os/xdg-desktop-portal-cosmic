@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     let node_id = stream.pipe_wire_node_id();
 
-    let src = gst::parse_bin_from_description(
+    let src = gst::parse::bin_from_description(
         &format!(
             "pipewiresrc fd={} path={node_id} !
              capsfilter caps=video/x-raw(memory:DMABuf),format=RGBA",
@@ -42,9 +42,9 @@ async fn main() -> anyhow::Result<()> {
         true,
     )?;
 
-    let sink = gst::parse_bin_from_description("waylandsink", true)?;
-    // let sink = gst::parse_bin_from_description("glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=NV12 ! gldownload ! video/x-raw(memory:DMABuf) ! vaapih264enc ! h264parse ! mp4mux ! filesink location=out.mp4", true)?;
-    // let sink = gst::parse_bin_from_description("glupload ! video/x-raw(memory:GLMemory) ! nvh264enc ! h264parse ! mp4mux ! filesink location=out.mp4", true)?;
+    let sink = gst::parse::bin_from_description("waylandsink", true)?;
+    // let sink = gst::parse::bin_from_description("glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=NV12 ! gldownload ! video/x-raw(memory:DMABuf) ! vaapih264enc ! h264parse ! mp4mux ! filesink location=out.mp4", true)?;
+    // let sink = gst::parse::bin_from_description("glupload ! video/x-raw(memory:GLMemory) ! nvh264enc ! h264parse ! mp4mux ! filesink location=out.mp4", true)?;
 
     let pipeline = gst::Pipeline::default()
         .dynamic_cast::<gst::Pipeline>()
