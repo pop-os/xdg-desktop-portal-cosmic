@@ -70,7 +70,7 @@ serde = "1.0.143"
 
 [dev-dependencies]
 gst = { package = "gstreamer", version = "0.23.0" }
-
+clap = { version = "4.5.9", features = ["derive"] }
 
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { path = "../libcosmic" }
