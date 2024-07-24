@@ -27,14 +27,14 @@ pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
     app_id: String,
-    outputs: Vec<(WlOutput, OutputInfo)>,
-    toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)>,
+    multiple: bool,
     wayland_helper: &WaylandHelper,
 ) -> Option<CaptureSources> {
     let locales = get_languages_from_env();
     let desktop_entries = load_desktop_entries(&locales).await;
 
-    let toplevels = toplevels
+    let toplevels = wayland_helper
+        .toplevels()
         .into_iter()
         .map(|(handle, info)| {
             let icon = get_desktop_entry(&desktop_entries, &info.app_id)
@@ -43,8 +43,11 @@ pub async fn show_screencast_prompt(
         })
         .collect();
 
-    let mut outputs2 = Vec::new();
-    for (output, info) in outputs {
+    let mut outputs = Vec::new();
+    for output in wayland_helper.outputs() {
+        let Some(info) = wayland_helper.output_info(&output) else {
+            continue;
+        };
         let source = CaptureSource::Output(output.clone());
         let image = wayland_helper
             .capture_source_shm(source, false)
@@ -57,7 +60,7 @@ pub async fn show_screencast_prompt(
                     MyImage(Arc::new(image)),
                 )
             });
-        outputs2.push((output, info, image));
+        outputs.push((output, info, image));
     }
 
     let app_name = get_desktop_entry(&desktop_entries, &app_id)
@@ -65,8 +68,9 @@ pub async fn show_screencast_prompt(
 
     let (tx, mut rx) = mpsc::channel(1);
     let args = Args {
-        outputs: outputs2,
+        outputs,
         toplevels,
+        multiple,
         app_name,
         tx,
         capture_sources: Default::default(),
@@ -117,7 +121,7 @@ enum Tab {
 
 #[derive(Clone)]
 pub struct Args {
-    // TODO multiple arg, etc?
+    multiple: bool,
     outputs: Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
     toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo, Option<String>)>,
     app_name: Option<String>,
@@ -132,6 +136,17 @@ pub struct Args {
 pub struct CaptureSources {
     pub outputs: Vec<WlOutput>,
     pub toplevels: Vec<ZcosmicToplevelHandleV1>,
+}
+
+impl CaptureSources {
+    pub fn is_empty(&self) -> bool {
+        self.outputs.is_empty() && self.toplevels.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.outputs.clear();
+        self.toplevels.clear();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -165,6 +180,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             {
                 args.capture_sources.outputs.remove(idx);
             } else {
+                if !args.multiple && !args.capture_sources.is_empty() {
+                    args.capture_sources.clear();
+                }
                 args.capture_sources.outputs.push(output);
             }
         }
@@ -177,6 +195,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             {
                 args.capture_sources.toplevels.remove(idx);
             } else {
+                if !args.multiple && !args.capture_sources.is_empty() {
+                    args.capture_sources.clear();
+                }
                 args.capture_sources.toplevels.push(toplevel);
             }
         }
@@ -297,7 +318,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     let mut cancel_button = widget::button::standard(fl!("cancel")).on_press(Msg::Cancel);
     let mut share_button =
         widget::button::standard(fl!("share")).style(cosmic::style::Button::Suggested);
-    if !args.capture_sources.outputs.is_empty() || !args.capture_sources.toplevels.is_empty() {
+    if !args.capture_sources.is_empty() {
         share_button = share_button.on_press(Msg::Share);
     }
 

@@ -161,18 +161,10 @@ impl ScreenCast {
         }
 
         // Show dialog to prompt for what to capture
-        let outputs = self
-            .wayland_helper
-            .outputs()
-            .iter()
-            .filter_map(|o| Some((o.clone(), self.wayland_helper.output_info(o)?)))
-            .collect();
-        let toplevels = self.wayland_helper.toplevels();
         let Some(capture_sources) = screencast_dialog::show_screencast_prompt(
             &self.tx,
             app_id,
-            outputs,
-            toplevels,
+            multiple,
             &self.wayland_helper,
         )
         .await
