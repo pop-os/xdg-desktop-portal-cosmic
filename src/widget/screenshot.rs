@@ -60,7 +60,7 @@ pub struct ScreenshotSelection<'a, Msg> {
 
 // for now lets just support selecting the output
 
-pub struct MyImage(Arc<RgbaImage>);
+pub struct MyImage(pub Arc<RgbaImage>);
 
 impl AsRef<[u8]> for MyImage {
     fn as_ref(&self) -> &[u8] {

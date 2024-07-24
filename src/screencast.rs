@@ -168,8 +168,13 @@ impl ScreenCast {
             .filter_map(|o| Some((o.clone(), self.wayland_helper.output_info(o)?)))
             .collect();
         let toplevels = self.wayland_helper.toplevels();
-        let Some(capture_sources) =
-            screencast_dialog::show_screencast_prompt(&self.tx, outputs, toplevels).await
+        let Some(capture_sources) = screencast_dialog::show_screencast_prompt(
+            &self.tx,
+            outputs,
+            toplevels,
+            &self.wayland_helper,
+        )
+        .await
         else {
             return PortalResponse::Cancelled;
         };
