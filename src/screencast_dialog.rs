@@ -1,5 +1,6 @@
 use crate::app::{CosmicPortal, OutputState};
 use crate::fl;
+use cosmic::desktop::IconSource;
 use cosmic::iced::{self, window, Limits};
 use cosmic::iced_runtime::command::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::iced_sctk::commands::layer_surface::{
@@ -9,7 +10,10 @@ use cosmic::{theme, widget};
 use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
 use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1;
+use freedesktop_desktop_entry as fde;
+use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry};
 use once_cell::sync::Lazy;
+use std::fs;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
 
@@ -23,8 +27,15 @@ pub async fn show_screencast_prompt(
     toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)>,
     // TODO toplevels
 ) -> Option<CaptureSources> {
-    dbg!(&outputs);
-    dbg!(&toplevels);
+    let desktop_entries = load_desktop_entries().await;
+    let toplevels = toplevels
+        .into_iter()
+        .map(|(handle, info)| {
+            let icon = get_desktop_entry_icon(&desktop_entries, info.app_id.as_str());
+            (handle, info, icon)
+        })
+        .collect();
+
     let (tx, mut rx) = mpsc::channel(1);
     let args = Args {
         outputs,
@@ -38,6 +49,50 @@ pub async fn show_screencast_prompt(
         .await
         .unwrap();
     rx.recv().await.unwrap()
+}
+
+fn load_desktop_entry_from_app_ids<I, L>(id: I, locales: &[L]) -> DesktopEntry<'static>
+where
+    I: AsRef<str>,
+    L: AsRef<str>,
+{
+    let srcs = fde::Iter::new(fde::default_paths())
+        .filter_map(|p| fs::read_to_string(&p).ok().and_then(|e| Some((p, e))))
+        .collect::<Vec<_>>();
+
+    let entries = srcs
+        .iter()
+        .filter_map(|(p, data)| DesktopEntry::from_str(p, data, Some(locales)).ok())
+        .collect::<Vec<_>>();
+
+    fde::matching::get_best_match(
+        &[&id],
+        &entries,
+        fde::matching::MatchAppIdOptions::default(),
+    )
+    .unwrap_or(&fde::DesktopEntry::from_appid(id.as_ref()))
+    .to_owned()
+}
+
+async fn load_desktop_entries() -> Vec<DesktopEntry<'static>> {
+    let locales = get_languages_from_env();
+
+    let mut entries = Vec::new();
+    for p in fde::Iter::new(fde::default_paths()) {
+        if let Ok(data) = tokio::fs::read_to_string(&p).await {
+            if let Ok(entry) = DesktopEntry::from_str(&p, &data, Some(&locales)) {
+                entries.push(entry.to_owned());
+            }
+        }
+    }
+    entries
+}
+
+fn get_desktop_entry_icon(entries: &[DesktopEntry<'_>], id: &str) -> Option<String> {
+    fde::matching::get_best_match(&[id], &entries, fde::matching::MatchAppIdOptions::default())
+        .unwrap_or(&fde::DesktopEntry::from_appid(id.as_ref()))
+        .icon()
+        .map(|x| x.to_string())
 }
 
 fn create_dialog() -> cosmic::Command<crate::app::Msg> {
@@ -61,7 +116,7 @@ enum Tab {
 pub struct Args {
     // TODO multiple arg, etc?
     outputs: Vec<(WlOutput, OutputInfo)>,
-    toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)>,
+    toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo, Option<String>)>,
     // Should be oneshot, but need `Clone` bound
     tx: mpsc::Sender<Option<CaptureSources>>,
     capture_sources: CaptureSources,
@@ -169,7 +224,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
     command
 }
 
-fn list_button(label: &str, is_selected: bool, msg: Msg) -> cosmic::Element<Msg> {
+fn list_button(label: &str, is_selected: bool, icon: Option<IconSource>, msg: Msg) -> cosmic::Element<Msg> {
     let text = widget::text(label).style(theme::style::Text::Custom(|theme| {
         let container = theme.current_container();
         cosmic::iced_core::widget::text::Appearance {
@@ -184,12 +239,16 @@ fn list_button(label: &str, is_selected: bool, msg: Msg) -> cosmic::Element<Msg>
         .style(theme::style::Button::Transparent)
         .selected(is_selected)
         .on_press(msg);
-    let mut children = vec![button.into()];
+    let mut children = Vec::new();
+    if let Some(icon) = icon {
+        children.push(icon.as_cosmic_icon().size(24).into());
+    }
+    children.push(button.into());
     // TODO
     if is_selected {
         children.push(widget::text("✓").into());
     }
-    widget::row::with_children(children).into()
+    widget::row::with_children(children).spacing(12).into()
 }
 
 pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
@@ -215,17 +274,20 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
                 list = list.add(list_button(
                     label,
                     is_selected,
+                    None,
                     Msg::SelectOutput(output.clone()),
                 ));
             }
         }
         Tab::Windows => {
-            for (toplevel, toplevel_info) in &args.toplevels {
+            for (toplevel, toplevel_info, icon) in &args.toplevels {
+                let icon = IconSource::from_unknown(icon.as_deref().unwrap_or_default());
                 let label = &toplevel_info.title;
                 let is_selected = args.capture_sources.toplevels.contains(toplevel);
                 list = list.add(list_button(
                     label,
                     is_selected,
+                    Some(icon),
                     Msg::SelectToplevel(toplevel.clone()),
                 ));
             }
