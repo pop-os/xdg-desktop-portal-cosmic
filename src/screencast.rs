@@ -170,6 +170,7 @@ impl ScreenCast {
         let toplevels = self.wayland_helper.toplevels();
         let Some(capture_sources) = screencast_dialog::show_screencast_prompt(
             &self.tx,
+            app_id,
             outputs,
             toplevels,
             &self.wayland_helper,

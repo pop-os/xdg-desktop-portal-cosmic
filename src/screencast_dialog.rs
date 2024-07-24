@@ -26,15 +26,19 @@ pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 
 pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
+    app_id: String,
     outputs: Vec<(WlOutput, OutputInfo)>,
     toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)>,
     wayland_helper: &WaylandHelper,
 ) -> Option<CaptureSources> {
-    let desktop_entries = load_desktop_entries().await;
+    let locales = get_languages_from_env();
+    let desktop_entries = load_desktop_entries(&locales).await;
+
     let toplevels = toplevels
         .into_iter()
         .map(|(handle, info)| {
-            let icon = get_desktop_entry_icon(&desktop_entries, info.app_id.as_str());
+            let icon = get_desktop_entry(&desktop_entries, &info.app_id)
+                .and_then(|x| Some(x.icon()?.to_owned()));
             (handle, info, icon)
         })
         .collect();
@@ -56,10 +60,14 @@ pub async fn show_screencast_prompt(
         outputs2.push((output, info, image));
     }
 
+    let app_name = get_desktop_entry(&desktop_entries, &app_id)
+        .and_then(|x| Some(x.name(&locales)?.into_owned()));
+
     let (tx, mut rx) = mpsc::channel(1);
     let args = Args {
         outputs: outputs2,
         toplevels,
+        app_name,
         tx,
         capture_sources: Default::default(),
         tab: Tab::Outputs, // TODO
@@ -71,32 +79,7 @@ pub async fn show_screencast_prompt(
     rx.recv().await.unwrap()
 }
 
-fn load_desktop_entry_from_app_ids<I, L>(id: I, locales: &[L]) -> DesktopEntry<'static>
-where
-    I: AsRef<str>,
-    L: AsRef<str>,
-{
-    let srcs = fde::Iter::new(fde::default_paths())
-        .filter_map(|p| fs::read_to_string(&p).ok().and_then(|e| Some((p, e))))
-        .collect::<Vec<_>>();
-
-    let entries = srcs
-        .iter()
-        .filter_map(|(p, data)| DesktopEntry::from_str(p, data, Some(locales)).ok())
-        .collect::<Vec<_>>();
-
-    fde::matching::get_best_match(
-        &[&id],
-        &entries,
-        fde::matching::MatchAppIdOptions::default(),
-    )
-    .unwrap_or(&fde::DesktopEntry::from_appid(id.as_ref()))
-    .to_owned()
-}
-
-async fn load_desktop_entries() -> Vec<DesktopEntry<'static>> {
-    let locales = get_languages_from_env();
-
+async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry<'static>> {
     let mut entries = Vec::new();
     for p in fde::Iter::new(fde::default_paths()) {
         if let Ok(data) = tokio::fs::read_to_string(&p).await {
@@ -108,11 +91,11 @@ async fn load_desktop_entries() -> Vec<DesktopEntry<'static>> {
     entries
 }
 
-fn get_desktop_entry_icon(entries: &[DesktopEntry<'_>], id: &str) -> Option<String> {
+fn get_desktop_entry<'a>(
+    entries: &'a [DesktopEntry<'a>],
+    id: &str,
+) -> Option<&'a DesktopEntry<'a>> {
     fde::matching::get_best_match(&[id], &entries, fde::matching::MatchAppIdOptions::default())
-        .unwrap_or(&fde::DesktopEntry::from_appid(id.as_ref()))
-        .icon()
-        .map(|x| x.to_string())
 }
 
 fn create_dialog() -> cosmic::Command<crate::app::Msg> {
@@ -137,6 +120,7 @@ pub struct Args {
     // TODO multiple arg, etc?
     outputs: Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
     toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo, Option<String>)>,
+    app_name: Option<String>,
     // Should be oneshot, but need `Clone` bound
     tx: mpsc::Sender<Option<CaptureSources>>,
     capture_sources: CaptureSources,
@@ -349,8 +333,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
         }
     }
 
-    // XXX
-    let app_name = "APP NAME";
+    let app_name = args.app_name.as_deref().unwrap_or("Unkown Application"); // TODO translate
 
     // TODO adjust text for multiple select, types?
     let description = format!("The system wants to share the contents of your screen with \"{}\". Select a screen or window to share.", app_name);

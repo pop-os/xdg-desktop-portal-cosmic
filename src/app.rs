@@ -302,7 +302,7 @@ impl cosmic::Application for CosmicPortal {
                         key: keyboard::Key::Named(Named::Escape),
                         ..
                     },
-                ) => Some(Msg::Screenshot(screenshot::Msg::Cancel)),
+                ) => Some(Msg::Screenshot(screenshot::Msg::Cancel)), // XXX
                 cosmic::iced_core::Event::Keyboard(
                     cosmic::iced_core::keyboard::Event::KeyPressed {
                         key: keyboard::Key::Named(Named::Enter),
