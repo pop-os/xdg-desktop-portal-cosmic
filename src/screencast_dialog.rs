@@ -304,21 +304,23 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     let tabs =
         widget::tab_bar::horizontal(&portal.screencast_tab_model).on_activate(Msg::ActivateTab);
 
-    let mut list = widget::ListColumn::new();
-    match active_tab(portal) {
+    let list: cosmic::Element<_> = match active_tab(portal) {
         Tab::Outputs => {
+            let mut children = Vec::new();
             for (output, output_info, image_handle) in &args.outputs {
                 let label = output_info.name.as_ref().unwrap();
                 let is_selected = args.capture_sources.outputs.contains(output);
-                list = list.add(output_button(
+                children.push(output_button(
                     label,
                     is_selected,
                     image_handle.as_ref(),
                     Msg::SelectOutput(output.clone()),
                 ));
             }
+            widget::row::with_children(children).spacing(8).into()
         }
         Tab::Windows => {
+            let mut list = widget::ListColumn::new();
             for (toplevel, toplevel_info, icon) in &args.toplevels {
                 let icon = IconSource::from_unknown(icon.as_deref().unwrap_or_default());
                 let label = &toplevel_info.title;
@@ -330,8 +332,9 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
                     Msg::SelectToplevel(toplevel.clone()),
                 ));
             }
+            list.into()
         }
-    }
+    };
 
     let app_name = args.app_name.as_deref().unwrap_or("Unkown Application"); // TODO translate
 
