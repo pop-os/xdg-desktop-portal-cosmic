@@ -20,6 +20,7 @@ cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", re
 futures = "0.3"
 image = "0.25"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
+    "desktop",
     "wayland",
     "tokio",
     "dbus-config",
@@ -62,6 +63,7 @@ rust-embed = "8.2.0"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
+freedesktop-desktop-entry = "0.7.0"
 
 [workspace.dependencies]
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
