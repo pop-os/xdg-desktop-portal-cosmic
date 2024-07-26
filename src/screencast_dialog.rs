@@ -2,6 +2,7 @@ use crate::app::{CosmicPortal, OutputState};
 use crate::fl;
 use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::widget::screenshot::MyImage;
+use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
 use cosmic::desktop::IconSource;
 use cosmic::iced::{self, window, Limits};
 use cosmic::iced_runtime::command::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
@@ -28,6 +29,7 @@ pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
     app_id: String,
     multiple: bool,
+    source_types: BitFlags<SourceType>,
     wayland_helper: &WaylandHelper,
 ) -> Option<CaptureSources> {
     let locales = get_languages_from_env();
@@ -71,10 +73,10 @@ pub async fn show_screencast_prompt(
         outputs,
         toplevels,
         multiple,
+        source_types,
         app_name,
         tx,
         capture_sources: Default::default(),
-        tab: Tab::Outputs, // TODO
     };
     subscription_tx
         .send(crate::subscription::Event::Screencast(args))
@@ -122,13 +124,13 @@ enum Tab {
 #[derive(Clone)]
 pub struct Args {
     multiple: bool,
+    source_types: BitFlags<SourceType>,
     outputs: Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
     toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo, Option<String>)>,
     app_name: Option<String>,
     // Should be oneshot, but need `Clone` bound
     tx: mpsc::Sender<Option<CaptureSources>>,
     capture_sources: CaptureSources,
-    tab: Tab,
 }
 
 // TODO order?
@@ -232,17 +234,21 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
     let mut command = cosmic::Command::none();
     if portal.screencast_args.is_none() {
         portal.screencast_tab_model.clear();
-        portal
-            .screencast_tab_model
-            .insert()
-            .data(Tab::Outputs)
-            .text("Output");
-        portal
-            .screencast_tab_model
-            .insert()
-            .data(Tab::Windows)
-            .text("Window");
-        portal.screencast_tab_model.activate_position(0); // XXX
+        if args.source_types.contains(SourceType::Monitor) {
+            portal
+                .screencast_tab_model
+                .insert()
+                .data(Tab::Outputs)
+                .text("Output");
+        }
+        if args.source_types.contains(SourceType::Window) {
+            portal
+                .screencast_tab_model
+                .insert()
+                .data(Tab::Windows)
+                .text("Window");
+        }
+        portal.screencast_tab_model.activate_position(0);
         command = create_dialog();
     } // TODO: else, update dialog? or error.
     portal.screencast_args = Some(args);

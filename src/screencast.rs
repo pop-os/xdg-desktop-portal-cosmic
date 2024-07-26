@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
+use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
 use futures::stream::{FuturesOrdered, StreamExt};
 use std::{
     collections::HashMap,
@@ -55,6 +56,7 @@ struct SessionData {
     screencast_threads: Vec<ScreencastThread>,
     cursor_mode: Option<u32>,
     multiple: bool,
+    source_types: BitFlags<SourceType>,
     closed: bool,
 }
 
@@ -119,12 +121,16 @@ impl ScreenCast {
         options: SelectSourcesOptions,
     ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
         // TODO: Handle other options
-        // TODO: Prompt what monitor to record?
         match self.sessions.lock().unwrap().get(&session_handle) {
             Some(session_data) => {
                 let mut session_data = session_data.lock().unwrap();
                 session_data.cursor_mode = options.cursor_mode;
                 session_data.multiple = options.multiple.unwrap_or(false);
+                session_data.source_types =
+                    BitFlags::from_bits_truncate(options.types.unwrap_or(0));
+                if session_data.source_types.is_empty() {
+                    session_data.source_types = SourceType::Monitor.into();
+                }
                 PortalResponse::Success(HashMap::new())
             }
             None => PortalResponse::Other,
@@ -146,11 +152,12 @@ impl ScreenCast {
             }
         };
 
-        let (cursor_mode, multiple) = {
+        let (cursor_mode, multiple, source_types) = {
             let session_data = session_data.lock().unwrap();
             let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
             let multiple = session_data.multiple;
-            (cursor_mode, multiple)
+            let source_types = session_data.source_types;
+            (cursor_mode, multiple, source_types)
         };
 
         // XXX
@@ -165,6 +172,7 @@ impl ScreenCast {
             &self.tx,
             app_id,
             multiple,
+            source_types,
             &self.wayland_helper,
         )
         .await
