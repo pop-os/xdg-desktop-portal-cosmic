@@ -1,7 +1,8 @@
 allow = Zezwól
 cancel = Anuluj
-capture = Udostępnij ekran
-save-to = Zapisz do
-    .pictures = { save-to } Obrazy
-    .documents = { save-to } Dokumenty
+capture = Zrzut ekranu
+save-to = Zapisz w
+    .clipboard = { save-to } Schowku
+    .pictures = { save-to } Obrazach
+    .documents = { save-to } Dokumentach
 choose-folder = Wybierz katalog
