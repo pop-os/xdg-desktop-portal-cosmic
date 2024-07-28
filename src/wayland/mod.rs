@@ -93,6 +93,7 @@ struct WaylandHelperInner {
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
     output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ExtForeignToplevelHandleV1>>>,
     toplevels: Mutex<Vec<ToplevelInfo>>,
+    toplevel_update: Arc<(Mutex<bool>, Condvar)>,
     qh: QueueHandle<AppData>,
     capturer: Capturer,
     wl_shm: wl_shm::WlShm,
@@ -160,6 +161,12 @@ impl AppData {
 
         *self.wayland_helper.inner.toplevels.lock().unwrap() =
             self.toplevel_info_state.toplevels().cloned().collect();
+
+        // Signal that toplevels were updated; the actual updates are unimportant here
+        let (lock, cvar) = &*self.wayland_helper.inner.toplevel_update;
+        let mut updated = lock.lock().unwrap();
+        *updated = true;
+        cvar.notify_all();
     }
 }
 
@@ -246,6 +253,7 @@ impl WaylandHelper {
         let screencopy_state = ScreencopyState::new(&globals, &qh);
         let shm_state = Shm::bind(&globals, &qh).unwrap();
         let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).unwrap();
+        let toplevel_update = Arc::new((Mutex::new(false), Condvar::new()));
         let wayland_helper = WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
                 conn,
@@ -253,6 +261,7 @@ impl WaylandHelper {
                 output_infos: Mutex::new(HashMap::new()),
                 output_toplevels: Mutex::new(HashMap::new()),
                 toplevels: Mutex::new(Vec::new()),
+                toplevel_update,
                 qh: qh.clone(),
                 capturer: screencopy_state.capturer().clone(),
                 wl_shm: shm_state.wl_shm().clone(),
@@ -296,6 +305,10 @@ impl WaylandHelper {
 
     pub fn toplevels(&self) -> Vec<ToplevelInfo> {
         self.inner.toplevels.lock().unwrap().clone()
+    }
+
+    pub fn toplevel_signal(&self) -> Arc<(Mutex<bool>, Condvar)> {
+        Arc::clone(&self.inner.toplevel_update)
     }
 
     pub fn output_info(&self, output: &wl_output::WlOutput) -> Option<OutputInfo> {

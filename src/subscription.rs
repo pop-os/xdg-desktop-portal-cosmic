@@ -8,9 +8,9 @@ use tokio::sync::mpsc::Receiver;
 use zbus::{zvariant, Connection};
 
 use crate::{
-    access::Access, config, file_chooser::FileChooser, screencast::ScreenCast,
-    screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings, ACCENT_COLOR_KEY,
-    APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
+    access::Access, background::Background, config, file_chooser::FileChooser,
+    screencast::ScreenCast, screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings,
+    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
 };
 
 #[derive(Clone, Debug)]
@@ -20,11 +20,17 @@ pub enum Event {
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
+    Background(crate::background::Args),
+    BackgroundToplevels,
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
     Config(config::Config),
-    Init(tokio::sync::mpsc::Sender<Event>),
+    Init {
+        tx: tokio::sync::mpsc::Sender<Event>,
+        tx_conf: tokio::sync::watch::Sender<config::Config>,
+        handler: Option<cosmic::cosmic_config::Config>,
+    },
 }
 
 pub enum State {
@@ -73,14 +79,20 @@ pub(crate) async fn process_changes(
     match state {
         State::Init => {
             let (tx, rx) = tokio::sync::mpsc::channel(10);
+            let (config, handler) = config::Config::load();
+            let (tx_conf, rx_conf) = tokio::sync::watch::channel(config);
 
             let connection = zbus::connection::Builder::session()?
                 .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
+                .serve_at(
+                    DBUS_PATH,
+                    Background::new(wayland_helper.clone(), tx.clone(), rx_conf.clone()),
+                )?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
-                    Screenshot::new(wayland_helper.clone(), tx.clone()),
+                    Screenshot::new(wayland_helper.clone(), tx.clone(), rx_conf.clone()),
                 )?
                 .serve_at(
                     DBUS_PATH,
@@ -89,7 +101,13 @@ pub(crate) async fn process_changes(
                 .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
-            _ = output.send(Event::Init(tx)).await;
+            _ = output
+                .send(Event::Init {
+                    tx,
+                    tx_conf,
+                    handler,
+                })
+                .await;
             *state = State::Waiting(connection, rx);
         }
         State::Waiting(conn, rx) => {
@@ -119,6 +137,19 @@ pub(crate) async fn process_changes(
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
                             log::error!("Error sending screencast cancel: {:?}", err);
                         };
+                    }
+                    Event::Background(args) => {
+                        if let Err(err) = output.send(Event::Background(args)).await {
+                            log::error!("Error sending background event: {:?}", err);
+                        }
+                    }
+                    Event::BackgroundToplevels => {
+                        let background = conn
+                            .object_server()
+                            .interface::<_, Background>(DBUS_PATH)
+                            .await?;
+                        Background::running_applications_changed(background.signal_context())
+                            .await?;
                     }
                     Event::Accent(a) => {
                         let object_server = conn.object_server();
@@ -180,7 +211,7 @@ pub(crate) async fn process_changes(
                             log::error!("Error sending config update: {:?}", err)
                         }
                     }
-                    Event::Init(_) => {}
+                    Event::Init { .. } => {}
                 }
             }
         }
