@@ -1,10 +1,14 @@
 use crate::app::{CosmicPortal, OutputState};
 use crate::fl;
 use crate::wayland::{CaptureSource, WaylandHelper};
-use crate::widget::screenshot::MyImage;
+use crate::widget::{keyboard_wrapper::KeyboardWrapper, screenshot::MyImage};
 use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
 use cosmic::desktop::IconSource;
-use cosmic::iced::{self, window, Limits};
+use cosmic::iced::{
+    self,
+    keyboard::{key::Named, Key},
+    window, Limits,
+};
 use cosmic::iced_runtime::command::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::iced_sctk::commands::layer_surface::{
     destroy_layer_surface, get_layer_surface, KeyboardInteractivity, Layer,
@@ -321,7 +325,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     let Some(args) = portal.screencast_args.as_ref() else {
         return widget::horizontal_space(iced::Length::Fixed(1.0)).into();
     };
-    let mut cancel_button = widget::button::standard(fl!("cancel")).on_press(Msg::Cancel);
+    let cancel_button = widget::button::standard(fl!("cancel")).on_press(Msg::Cancel);
     let mut share_button =
         widget::button::standard(fl!("share")).style(cosmic::style::Button::Suggested);
     if !args.capture_sources.is_empty() {
@@ -370,10 +374,17 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
 
     let control = widget::column::with_children(vec![tabs.into(), list.into()]);
 
-    widget::dialog("Share your screen")
-        .body(description)
-        .secondary_action(cancel_button)
-        .primary_action(share_button)
-        .control(control)
-        .into()
+    KeyboardWrapper::new(
+        widget::dialog("Share your screen")
+            .body(description)
+            .secondary_action(cancel_button)
+            .primary_action(share_button)
+            .control(control),
+        |key| match key {
+            Key::Named(Named::Enter) => Some(Msg::Share),
+            Key::Named(Named::Escape) => Some(Msg::Cancel),
+            _ => None,
+        },
+    )
+    .into()
 }
