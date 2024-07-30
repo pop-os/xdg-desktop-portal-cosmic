@@ -23,6 +23,7 @@ pub enum Event {
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
+    Background(crate::background::Args),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -76,6 +77,14 @@ impl Debug for Event {
                 .finish(),
             Event::Screencast(s) => s.fmt(f),
             Event::CancelScreencast(h) => f.debug_tuple("CancelScreencast").field(h).finish(),
+            Event::Background(crate::background::Args {
+                handle, id, app_id, ..
+            }) => f
+                .debug_struct("Background")
+                .field("handle", handle)
+                .field("id", id)
+                .field("app_id", app_id)
+                .finish(),
             Event::Accent(a) => a.fmt(f),
             Event::IsDark(t) => t.fmt(f),
             Event::HighContrast(c) => c.fmt(f),
@@ -179,6 +188,11 @@ pub(crate) async fn process_changes(
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
                             log::error!("Error sending screencast cancel: {:?}", err);
                         };
+                    }
+                    Event::Background(args) => {
+                        if let Err(err) = output.send(Event::Background(args)).await {
+                            log::error!("Error sending background event: {err:?}")
+                        }
                     }
                     Event::Accent(a) => {
                         let object_server = conn.object_server();
