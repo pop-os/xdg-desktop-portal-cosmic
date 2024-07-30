@@ -9,3 +9,7 @@ save-to = Save to
 choose-folder = Choose folder
 
 share-screen = Share your screen
+    .description = The system wants to share the contents of your screen with "{$app_name}". Select a screen or window to share.
+unknown-application = Unknown Application
+output = Output
+window = Window
