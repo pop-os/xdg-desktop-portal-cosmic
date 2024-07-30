@@ -25,8 +25,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
 
-// TODO translate
-
 pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 
 pub async fn show_screencast_prompt(
@@ -243,14 +241,14 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
                 .screencast_tab_model
                 .insert()
                 .data(Tab::Outputs)
-                .text("Output");
+                .text(fl!("output"));
         }
         if args.source_types.contains(SourceType::Window) {
             portal
                 .screencast_tab_model
                 .insert()
                 .data(Tab::Windows)
-                .text("Window");
+                .text(fl!("window"));
         }
         portal.screencast_tab_model.activate_position(0);
         command = create_dialog();
@@ -367,16 +365,15 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
         }
     };
 
-    let app_name = args.app_name.as_deref().unwrap_or("Unkown Application"); // TODO translate
-
-    // TODO adjust text for multiple select, types?
-    let description = format!("The system wants to share the contents of your screen with \"{}\". Select a screen or window to share.", app_name);
+    let unknown = fl!("unknown-application");
+    let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
     let control = widget::column::with_children(vec![tabs.into(), list.into()]);
 
     KeyboardWrapper::new(
         widget::dialog("Share your screen")
-            .body(description)
+            // TODO adjust text for multiple select, types?
+            .body(fl!("share-screen", "description", app_name = app_name))
             .secondary_action(cancel_button)
             .primary_action(share_button)
             .control(control),
