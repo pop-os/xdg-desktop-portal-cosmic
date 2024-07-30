@@ -2,6 +2,7 @@
 
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
+use cosmic::iced::keyboard::{key::Named, Key};
 use cosmic::iced::wayland::actions::data_device::ActionInner;
 use cosmic::iced::wayland::actions::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::{window, Limits};
@@ -24,7 +25,7 @@ use zbus::zvariant;
 use crate::app::{CosmicPortal, OutputState};
 use crate::config::{self, screenshot::ImageSaveLocation};
 use crate::wayland::{CaptureSource, WaylandHelper};
-use crate::widget::rectangle_selection::DragState;
+use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::DragState};
 use crate::{fl, subscription, PortalResponse};
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
@@ -513,22 +514,29 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         return horizontal_space(Length::Fixed(1.0)).into();
     };
     let theme = portal.core.system_theme().cosmic();
-    crate::widget::screenshot::ScreenshotSelection::new(
-        args.choice.clone(),
-        raw_image.clone(),
-        Msg::Capture,
-        Msg::Cancel,
-        output,
-        id,
-        Msg::OutputChanged,
-        Msg::Choice,
-        Msg::DragCommand,
-        &args.toplevel_images,
-        Msg::WindowChosen,
-        &portal.location_options,
-        args.location as usize,
-        Msg::Location,
-        theme.spacing,
+    KeyboardWrapper::new(
+        crate::widget::screenshot::ScreenshotSelection::new(
+            args.choice.clone(),
+            raw_image.clone(),
+            Msg::Capture,
+            Msg::Cancel,
+            output,
+            id,
+            Msg::OutputChanged,
+            Msg::Choice,
+            Msg::DragCommand,
+            &args.toplevel_images,
+            Msg::WindowChosen,
+            &portal.location_options,
+            args.location as usize,
+            Msg::Location,
+            theme.spacing,
+        ),
+        |key| match key {
+            Key::Named(Named::Enter) => Some(Msg::Capture),
+            Key::Named(Named::Escape) => Some(Msg::Cancel),
+            _ => None,
+        },
     )
     .into()
 }
