@@ -257,6 +257,24 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
     command
 }
 
+fn output_button_appearance(
+    theme: &cosmic::Theme,
+    is_active: bool,
+    hovered: bool,
+) -> widget::button::Appearance {
+    let cosmic = theme.cosmic();
+    let mut appearance = widget::button::Appearance::new();
+    appearance.border_radius = cosmic.corner_radii.radius_s.into();
+    if is_active {
+        appearance.border_width = 2.0;
+        appearance.border_color = cosmic.accent.base.into();
+    }
+    if hovered {
+        appearance.background = Some(iced::Background::Color(cosmic.button.base.into()));
+    }
+    appearance
+}
+
 fn output_button<'a>(
     label: &'a str,
     is_selected: bool,
@@ -269,24 +287,37 @@ fn output_button<'a>(
             color: Some(container.on.into()),
         }
     }));
-    let button = widget::button(text)
-        .width(iced::Length::Fill)
-        .padding(0)
-        // TODO hover style? Etc.
-        // .style(theme::style::Button::Text)
-        .style(theme::style::Button::Transparent)
-        .selected(is_selected)
-        .on_press(msg);
+    let mut row_children = vec![text.into()];
+    if is_selected {
+        row_children.push(widget::text("✓").into());
+    }
+    let row = widget::row::with_children(row_children).spacing(12);
+
     let mut children = Vec::new();
     if let Some(image_handle) = image_handle {
         children.push(widget::image::Image::new(image_handle.clone()).into());
     }
-    children.push(button.into());
-    // TODO
-    if is_selected {
-        children.push(widget::text("✓").into());
-    }
-    widget::column::with_children(children).spacing(12).into()
+    children.push(row.into());
+    let column = widget::column::with_children(children).spacing(12);
+
+    widget::button(column)
+        .width(iced::Length::Fill)
+        .padding(8)
+        .selected(is_selected)
+        .style(cosmic::theme::Button::Custom {
+            active: Box::new(move |_focused, theme| {
+                output_button_appearance(theme, is_selected, false)
+            }),
+            disabled: Box::new(|_theme| unreachable!()),
+            hovered: Box::new(move |_focused, theme| {
+                output_button_appearance(theme, is_selected, true)
+            }),
+            pressed: Box::new(move |_focused, theme| {
+                output_button_appearance(theme, is_selected, true)
+            }),
+        })
+        .on_press(msg)
+        .into()
 }
 
 fn toplevel_button(
@@ -368,7 +399,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     let unknown = fl!("unknown-application");
     let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
-    let control = widget::column::with_children(vec![tabs.into(), list.into()]);
+    let control = widget::column::with_children(vec![tabs.into(), list.into()]).spacing(8);
 
     KeyboardWrapper::new(
         widget::dialog("Share your screen")
