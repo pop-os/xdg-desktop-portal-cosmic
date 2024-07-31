@@ -392,7 +392,10 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
                     Msg::SelectToplevel(toplevel.clone()),
                 ));
             }
-            list.into()
+            cosmic::widget::scrollable(list)
+                .height(iced::Length::Fill)
+                .width(iced::Length::Fill)
+                .into()
         }
     };
 
