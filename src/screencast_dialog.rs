@@ -25,10 +25,16 @@ use std::mem;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
+use zbus::zvariant;
 
 pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 
-struct HideDialogOnDrop(Option<mpsc::Sender<crate::subscription::Event>>);
+struct HideDialogOnDrop(
+    Option<(
+        mpsc::Sender<crate::subscription::Event>,
+        zvariant::ObjectPath<'static>,
+    )>,
+);
 
 impl HideDialogOnDrop {
     fn clear(mut self) {
@@ -39,21 +45,22 @@ impl HideDialogOnDrop {
 // Want to hide dialog if future is cancelled
 impl Drop for HideDialogOnDrop {
     fn drop(&mut self) {
-        if let Some(tx) = &self.0 {
+        if let Some((tx, session_handle)) = self.0.take() {
             // TODO async destructor
-            let _ = tx.try_send(crate::subscription::Event::Screencast(None));
+            let _ = tx.try_send(crate::subscription::Event::CancelScreencast(session_handle));
         }
     }
 }
 
 pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
+    session_handle: zvariant::ObjectPath<'static>,
     app_id: String,
     multiple: bool,
     source_types: BitFlags<SourceType>,
     wayland_helper: &WaylandHelper,
 ) -> Option<CaptureSources> {
-    let hide_on_drop = HideDialogOnDrop(Some(subscription_tx.clone()));
+    let hide_on_drop = HideDialogOnDrop(Some((subscription_tx.clone(), session_handle.clone())));
 
     let locales = get_languages_from_env();
     let desktop_entries = load_desktop_entries(&locales).await;
@@ -93,6 +100,7 @@ pub async fn show_screencast_prompt(
 
     let (tx, mut rx) = mpsc::channel(1);
     let args = Args {
+        session_handle,
         outputs,
         toplevels,
         multiple,
@@ -102,7 +110,7 @@ pub async fn show_screencast_prompt(
         capture_sources: Default::default(),
     };
     subscription_tx
-        .send(crate::subscription::Event::Screencast(Some(args)))
+        .send(crate::subscription::Event::Screencast(args))
         .await
         .unwrap();
     let resp = rx.recv().await.unwrap();
@@ -148,6 +156,7 @@ enum Tab {
 
 #[derive(Debug, Clone)]
 pub struct Args {
+    session_handle: zvariant::ObjectPath<'static>,
     multiple: bool,
     source_types: BitFlags<SourceType>,
     outputs: Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
@@ -162,7 +171,7 @@ impl Args {
     fn send_response(self, response: Option<CaptureSources>) {
         tokio::spawn(async move {
             if let Err(err) = self.tx.send(response).await {
-                log::error!("Failed to send screencast event");
+                log::error!("Failed to send screencast event: {}", err);
             }
         });
     }
@@ -255,20 +264,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
     cosmic::Command::none()
 }
 
-pub fn update_args(
-    portal: &mut CosmicPortal,
-    args: Option<Args>,
-) -> cosmic::Command<crate::app::Msg> {
-    // Hide dialog if `args` is `None`
-    let Some(args) = args else {
-        return if portal.screencast_args.is_some() {
-            portal.screencast_args = None;
-            destroy_layer_surface(*SCREENCAST_ID)
-        } else {
-            cosmic::Command::none()
-        };
-    };
-
+pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<crate::app::Msg> {
     // If the dialog is already open, cancel previous request, but re-use dialog surface
     let command = if let Some(args) = portal.screencast_args.take() {
         args.send_response(None);
@@ -297,6 +293,23 @@ pub fn update_args(
     portal.screencast_args = Some(args);
 
     command
+}
+
+pub fn cancel(
+    portal: &mut CosmicPortal,
+    session_handle: zvariant::ObjectPath<'static>,
+) -> cosmic::Command<crate::app::Msg> {
+    if portal
+        .screencast_args
+        .as_ref()
+        .map_or(false, |args| args.session_handle == session_handle)
+    {
+        let args = portal.screencast_args.take().unwrap();
+        args.send_response(None);
+        destroy_layer_surface(*SCREENCAST_ID)
+    } else {
+        cosmic::Command::none()
+    }
 }
 
 fn output_button_appearance(

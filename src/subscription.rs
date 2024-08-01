@@ -21,7 +21,8 @@ pub enum Event {
     Access(crate::access::AccessDialogArgs),
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
-    Screencast(Option<crate::screencast_dialog::Args>),
+    Screencast(crate::screencast_dialog::Args),
+    CancelScreencast(zvariant::ObjectPath<'static>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -73,7 +74,8 @@ impl Debug for Event {
                 .field("location", location)
                 .field("toplevel_images", toplevel_images)
                 .finish(),
-            Event::Screencast(_) => todo!(),
+            Event::Screencast(s) => s.fmt(f),
+            Event::CancelScreencast(h) => f.debug_tuple("CancelScreencast").field(h).finish(),
             Event::Accent(a) => a.fmt(f),
             Event::IsDark(t) => t.fmt(f),
             Event::HighContrast(c) => c.fmt(f),
@@ -170,6 +172,11 @@ pub(crate) async fn process_changes(
                     Event::Screencast(args) => {
                         if let Err(err) = output.send(Event::Screencast(args)).await {
                             log::error!("Error sending screencast event: {:?}", err);
+                        };
+                    }
+                    Event::CancelScreencast(handle) => {
+                        if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
+                            log::error!("Error sending screencast cancel: {:?}", err);
                         };
                     }
                     Event::Accent(a) => {
