@@ -21,6 +21,7 @@ use freedesktop_desktop_entry as fde;
 use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry};
 use once_cell::sync::Lazy;
 use std::fs;
+use std::mem;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -135,6 +136,16 @@ pub struct Args {
     capture_sources: CaptureSources,
 }
 
+impl Args {
+    fn send_response(self, response: Option<CaptureSources>) {
+        tokio::spawn(async move {
+            if let Err(err) = self.tx.send(response).await {
+                log::error!("Failed to send screencast event");
+            }
+        });
+    }
+}
+
 // TODO order?
 #[derive(Clone, Debug, Default)]
 pub struct CaptureSources {
@@ -206,25 +217,15 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
             }
         }
         Msg::Share => {
-            if let Some(args) = portal.screencast_args.take() {
-                let tx = args.tx;
-                let response = args.capture_sources;
-                tokio::spawn(async move {
-                    if let Err(err) = tx.send(Some(response)).await {
-                        log::error!("Failed to send screencast event");
-                    }
-                });
+            if let Some(mut args) = portal.screencast_args.take() {
+                let response = mem::take(&mut args.capture_sources);
+                args.send_response(Some(response));
                 return destroy_layer_surface(*SCREENCAST_ID);
             }
         }
         Msg::Cancel => {
             if let Some(args) = portal.screencast_args.take() {
-                let tx = args.tx;
-                tokio::spawn(async move {
-                    if let Err(err) = tx.send(None).await {
-                        log::error!("Failed to send screencast event");
-                    }
-                });
+                args.send_response(None);
                 return destroy_layer_surface(*SCREENCAST_ID);
             }
         }
@@ -233,27 +234,33 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
 }
 
 pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<crate::app::Msg> {
-    let mut command = cosmic::Command::none();
-    if portal.screencast_args.is_none() {
-        portal.screencast_tab_model.clear();
-        if args.source_types.contains(SourceType::Monitor) {
-            portal
-                .screencast_tab_model
-                .insert()
-                .data(Tab::Outputs)
-                .text(fl!("output"));
-        }
-        if args.source_types.contains(SourceType::Window) {
-            portal
-                .screencast_tab_model
-                .insert()
-                .data(Tab::Windows)
-                .text(fl!("window"));
-        }
-        portal.screencast_tab_model.activate_position(0);
-        command = create_dialog();
-    } // TODO: else, update dialog? or error.
+    // If the dialog is already open, cancel previous request, but re-use dialog surface
+    let command = if let Some(args) = portal.screencast_args.take() {
+        args.send_response(None);
+        cosmic::Command::none()
+    } else {
+        create_dialog()
+    };
+
+    portal.screencast_tab_model.clear();
+    if args.source_types.contains(SourceType::Monitor) {
+        portal
+            .screencast_tab_model
+            .insert()
+            .data(Tab::Outputs)
+            .text(fl!("output"));
+    }
+    if args.source_types.contains(SourceType::Window) {
+        portal
+            .screencast_tab_model
+            .insert()
+            .data(Tab::Windows)
+            .text(fl!("window"));
+    }
+    portal.screencast_tab_model.activate_position(0);
+
     portal.screencast_args = Some(args);
+
     command
 }
 
