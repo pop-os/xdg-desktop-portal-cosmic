@@ -1,4 +1,5 @@
 use cosmic::cosmic_theme::palette::Srgba;
+use futures::future::AbortHandle;
 use std::collections::HashMap;
 use zbus::zvariant::{self, OwnedValue};
 
@@ -51,11 +52,13 @@ impl<T: zvariant::Type + serde::Serialize> serde::Serialize for PortalResponse<T
     }
 }
 
-struct Request;
+struct Request(AbortHandle);
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Request")]
 impl Request {
-    fn close(&self) {}
+    fn close(&self) {
+        self.0.abort();
+    }
 }
 
 struct Session {

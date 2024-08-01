@@ -1,7 +1,10 @@
 #![allow(dead_code, unused_variables)]
 
 use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
-use futures::stream::{FuturesOrdered, StreamExt};
+use futures::{
+    future::abortable,
+    stream::{FuturesOrdered, StreamExt},
+};
 use std::{
     collections::HashMap,
     mem,
@@ -14,7 +17,7 @@ use crate::screencast_dialog;
 use crate::screencast_thread::ScreencastThread;
 use crate::subscription;
 use crate::wayland::{CaptureSource, WaylandHelper};
-use crate::PortalResponse;
+use crate::{PortalResponse, Request};
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
 const CURSOR_MODE_EMBEDDED: u32 = 2;
@@ -139,6 +142,7 @@ impl ScreenCast {
 
     async fn start(
         &self,
+        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
@@ -168,15 +172,23 @@ impl ScreenCast {
         }
 
         // Show dialog to prompt for what to capture
-        let Some(capture_sources) = screencast_dialog::show_screencast_prompt(
+        let (abortable, abort_handle) = abortable(screencast_dialog::show_screencast_prompt(
             &self.tx,
             app_id,
             multiple,
             source_types,
             &self.wayland_helper,
-        )
-        .await
-        else {
+        ));
+        let _ = connection
+            .object_server()
+            .at(&handle, Request(abort_handle))
+            .await;
+        let resp = abortable.await;
+        let _ = connection
+            .object_server()
+            .remove::<Request, _>(&handle)
+            .await;
+        let Ok(Some(capture_sources)) = resp else {
             return PortalResponse::Cancelled;
         };
 

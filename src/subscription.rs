@@ -21,7 +21,7 @@ pub enum Event {
     Access(crate::access::AccessDialogArgs),
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
-    Screencast(crate::screencast_dialog::Args),
+    Screencast(Option<crate::screencast_dialog::Args>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
