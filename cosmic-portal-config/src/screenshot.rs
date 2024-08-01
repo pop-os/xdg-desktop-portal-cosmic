@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]

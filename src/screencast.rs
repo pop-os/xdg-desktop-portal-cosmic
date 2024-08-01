@@ -5,11 +5,7 @@ use futures::{
     future::abortable,
     stream::{FuturesOrdered, StreamExt},
 };
-use std::{
-    collections::HashMap,
-    mem,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, mem};
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
@@ -157,7 +153,7 @@ impl ScreenCast {
         };
 
         // XXX
-        let mut outputs = self.wayland_helper.outputs();
+        let outputs = self.wayland_helper.outputs();
         if outputs.is_empty() {
             log::error!("No output");
             return PortalResponse::Other;
@@ -224,8 +220,7 @@ impl ScreenCast {
         }
 
         // Session may have already been cancelled
-        let mut session_data = interface.get_mut().await;
-        if session_data.closed {
+        if interface.get().await.closed {
             for thread in screencast_threads {
                 thread.stop();
             }

@@ -1,29 +1,15 @@
-use cosmic::{
-    app,
-    iced::{
-        wayland::actions::{layer_surface::SctkLayerSurfaceSettings, window::SctkWindowSettings},
-        widget::{column, row},
-        window, Length,
-    },
-    iced_core::Alignment,
-    iced_sctk::commands::{
-        layer_surface::{destroy_layer_surface, get_layer_surface},
-        window::{close_window, get_window},
-    },
-    widget,
-};
+use cosmic::{app, iced::window, widget};
 use cosmic_files::dialog::{
     DialogChoice, DialogChoiceOption, DialogFilter, DialogFilterPattern, DialogKind, DialogMessage,
     DialogResult,
 };
-use once_cell::sync::Lazy;
-use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf, sync::Arc};
+use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
 use crate::{
     app::{CosmicPortal, Msg as AppMsg},
-    fl, subscription, PortalResponse,
+    subscription, PortalResponse,
 };
 
 pub(crate) type Dialog = cosmic_files::dialog::Dialog<Msg>;
@@ -36,6 +22,7 @@ type Filters = Vec<Filter>;
 #[zvariant(signature = "a{sv}")]
 pub struct OpenFileOptions {
     accept_label: Option<String>,
+    #[allow(dead_code)]
     modal: Option<bool>,
     multiple: Option<bool>,
     directory: Option<bool>,
@@ -49,12 +36,14 @@ pub struct OpenFileOptions {
 #[zvariant(signature = "a{sv}")]
 pub struct SaveFileOptions {
     accept_label: Option<String>,
+    #[allow(dead_code)]
     modal: Option<bool>,
     filters: Option<Filters>,
     current_filter: Option<Filter>,
     choices: Option<Choices>,
     current_name: Option<String>,
     current_folder: Option<Vec<u8>>,
+    #[allow(dead_code)]
     current_file: Option<Vec<u8>>,
 }
 
@@ -62,9 +51,11 @@ pub struct SaveFileOptions {
 #[zvariant(signature = "a{sv}")]
 pub struct SaveFilesOptions {
     accept_label: Option<String>,
+    #[allow(dead_code)]
     modal: Option<bool>,
     choices: Option<Choices>,
     current_folder: Option<Vec<u8>>,
+    #[allow(dead_code)]
     files: Option<Vec<Vec<u8>>>,
 }
 
@@ -108,6 +99,7 @@ impl FileChooserOptions {
         }
     }
 
+    #[allow(dead_code)]
     fn modal(&self) -> bool {
         // Defaults to true
         match self {
@@ -189,7 +181,6 @@ impl FileChooser {
 impl FileChooser {
     async fn open_file(
         &self,
-        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
@@ -208,7 +199,6 @@ impl FileChooser {
 
     async fn save_file(
         &self,
-        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
@@ -227,7 +217,6 @@ impl FileChooser {
 
     async fn save_files(
         &self,
-        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,

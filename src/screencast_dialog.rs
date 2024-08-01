@@ -1,4 +1,4 @@
-use crate::app::{CosmicPortal, OutputState};
+use crate::app::CosmicPortal;
 use crate::fl;
 use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::widget::{keyboard_wrapper::KeyboardWrapper, screenshot::MyImage};
@@ -7,7 +7,7 @@ use cosmic::desktop::IconSource;
 use cosmic::iced::{
     self,
     keyboard::{key::Named, Key},
-    window, Limits,
+    window,
 };
 use cosmic::iced_runtime::command::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::iced_sctk::commands::layer_surface::{
@@ -20,7 +20,6 @@ use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::Zco
 use freedesktop_desktop_entry as fde;
 use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry};
 use once_cell::sync::Lazy;
-use std::fs;
 use std::mem;
 use std::sync::Arc;
 use tokio::sync::mpsc;

@@ -1,6 +1,5 @@
 use crate::{access, config, file_chooser, fl, screencast_dialog, screenshot, subscription};
 use cosmic::iced_core::event::wayland::OutputEvent;
-use cosmic::iced_core::keyboard::key::Named;
 use cosmic::widget::{self, dropdown};
 use cosmic::Command;
 use cosmic::{
