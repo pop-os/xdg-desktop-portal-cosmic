@@ -61,20 +61,22 @@ impl Request {
     }
 }
 
-struct Session {
-    close_cb: Option<Box<dyn FnOnce() + Send + Sync + 'static>>,
+struct Session<T: Send + Sync + 'static> {
+    data: T,
+    close_cb: Option<Box<dyn FnOnce(&mut T) + Send + Sync + 'static>>,
 }
 
-impl Session {
-    fn new<F: FnOnce() + Send + Sync + 'static>(cb: F) -> Self {
+impl<T: Send + Sync + 'static> Session<T> {
+    fn new<F: FnOnce(&mut T) + Send + Sync + 'static>(data: T, cb: F) -> Self {
         Self {
+            data,
             close_cb: Some(Box::new(cb)),
         }
     }
 }
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Session")]
-impl Session {
+impl<T: Send + Sync + 'static> Session<T> {
     async fn close(&mut self, #[zbus(signal_context)] signal_ctxt: zbus::SignalContext<'_>) {
         // XXX error?
         let _ = self.closed(&signal_ctxt).await;
@@ -84,7 +86,7 @@ impl Session {
             .remove::<Self, _>(signal_ctxt.path())
             .await;
         if let Some(cb) = self.close_cb.take() {
-            cb();
+            cb(&mut self.data);
         }
     }
 
@@ -95,6 +97,31 @@ impl Session {
     fn version(&self) -> u32 {
         1 // XXX?
     }
+}
+
+impl<Data: Send + Sync + 'static> std::ops::Deref for Session<Data> {
+    type Target = Data;
+
+    fn deref(&self) -> &Data {
+        &self.data
+    }
+}
+
+impl<Data: Send + Sync + 'static> std::ops::DerefMut for Session<Data> {
+    fn deref_mut(&mut self) -> &mut Data {
+        &mut self.data
+    }
+}
+
+async fn session_interface<Data: Send + Sync + 'static>(
+    connection: &zbus::Connection,
+    session_handle: zvariant::ObjectPath<'_>,
+) -> Option<zbus::InterfaceRef<Session<Data>>> {
+    connection
+        .object_server()
+        .interface(session_handle)
+        .await
+        .ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
