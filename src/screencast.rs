@@ -69,23 +69,17 @@ impl SessionData {
             thread.stop();
         }
         self.closed = true
-        // XXX Remove from hashmap?
     }
 }
 
 pub struct ScreenCast {
-    sessions: Mutex<HashMap<zvariant::ObjectPath<'static>, Arc<Mutex<SessionData>>>>,
     wayland_helper: WaylandHelper,
     tx: Sender<subscription::Event>,
 }
 
 impl ScreenCast {
     pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-            wayland_helper,
-            tx,
-        }
+        Self { wayland_helper, tx }
     }
 }
 
@@ -100,15 +94,13 @@ impl ScreenCast {
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> PortalResponse<CreateSessionResult> {
         // TODO: handle
-        let session_data = Arc::new(Mutex::new(SessionData::default()));
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(session_handle.to_owned(), session_data.clone());
-        let destroy_session = move || session_data.lock().unwrap().close();
+        let session_data = SessionData::default();
         connection
             .object_server()
-            .at(&session_handle, crate::Session::new(destroy_session))
+            .at(
+                &session_handle,
+                crate::Session::new(session_data, |session_data| session_data.close()),
+            )
             .await
             .unwrap(); // XXX unwrap
         PortalResponse::Success(CreateSessionResult {
@@ -118,15 +110,16 @@ impl ScreenCast {
 
     async fn select_sources(
         &self,
+        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: SelectSourcesOptions,
     ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
         // TODO: Handle other options
-        match self.sessions.lock().unwrap().get(&session_handle) {
-            Some(session_data) => {
-                let mut session_data = session_data.lock().unwrap();
+        match crate::session_interface::<SessionData>(connection, session_handle).await {
+            Some(interface) => {
+                let mut session_data = interface.get_mut().await;
                 session_data.cursor_mode = options.cursor_mode;
                 session_data.multiple = options.multiple.unwrap_or(false);
                 session_data.source_types =
@@ -149,15 +142,14 @@ impl ScreenCast {
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> PortalResponse<StartResult> {
-        let session_data = match self.sessions.lock().unwrap().get(&session_handle) {
-            Some(session_data) => session_data.clone(),
-            None => {
-                return PortalResponse::Other;
-            }
+        let Some(interface) =
+            crate::session_interface::<SessionData>(connection, session_handle.clone()).await
+        else {
+            return PortalResponse::Other;
         };
 
         let (cursor_mode, multiple, source_types) = {
-            let session_data = session_data.lock().unwrap();
+            let session_data = interface.get_mut().await;
             let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
             let multiple = session_data.multiple;
             let source_types = session_data.source_types;
@@ -232,7 +224,7 @@ impl ScreenCast {
         }
 
         // Session may have already been cancelled
-        let mut session_data = session_data.lock().unwrap();
+        let mut session_data = interface.get_mut().await;
         if session_data.closed {
             for thread in screencast_threads {
                 thread.stop();
@@ -244,7 +236,7 @@ impl ScreenCast {
             .iter()
             .map(|thread| (thread.node_id(), HashMap::new()))
             .collect();
-        session_data.screencast_threads = screencast_threads;
+        interface.get_mut().await.screencast_threads = screencast_threads;
 
         PortalResponse::Success(StartResult {
             // XXX
