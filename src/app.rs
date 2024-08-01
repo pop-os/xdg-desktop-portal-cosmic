@@ -179,6 +179,9 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Screencast(args) => {
                     screencast_dialog::update_args(self, args).map(cosmic::app::Message::App)
                 }
+                subscription::Event::CancelScreencast(handle) => {
+                    screencast_dialog::cancel(self, handle).map(cosmic::app::Message::App)
+                }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)

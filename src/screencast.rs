@@ -174,6 +174,7 @@ impl ScreenCast {
         // Show dialog to prompt for what to capture
         let (abortable, abort_handle) = abortable(screencast_dialog::show_screencast_prompt(
             &self.tx,
+            session_handle.to_owned(),
             app_id,
             multiple,
             source_types,
