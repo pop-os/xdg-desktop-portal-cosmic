@@ -28,6 +28,24 @@ use wayland_client::protocol::wl_output::WlOutput;
 
 pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 
+struct HideDialogOnDrop(Option<mpsc::Sender<crate::subscription::Event>>);
+
+impl HideDialogOnDrop {
+    fn clear(mut self) {
+        self.0 = None;
+    }
+}
+
+// Want to hide dialog if future is cancelled
+impl Drop for HideDialogOnDrop {
+    fn drop(&mut self) {
+        if let Some(tx) = &self.0 {
+            // TODO async destructor
+            let _ = tx.try_send(crate::subscription::Event::Screencast(None));
+        }
+    }
+}
+
 pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
     app_id: String,
@@ -35,6 +53,8 @@ pub async fn show_screencast_prompt(
     source_types: BitFlags<SourceType>,
     wayland_helper: &WaylandHelper,
 ) -> Option<CaptureSources> {
+    let hide_on_drop = HideDialogOnDrop(Some(subscription_tx.clone()));
+
     let locales = get_languages_from_env();
     let desktop_entries = load_desktop_entries(&locales).await;
 
@@ -82,10 +102,12 @@ pub async fn show_screencast_prompt(
         capture_sources: Default::default(),
     };
     subscription_tx
-        .send(crate::subscription::Event::Screencast(args))
+        .send(crate::subscription::Event::Screencast(Some(args)))
         .await
         .unwrap();
-    rx.recv().await.unwrap()
+    let resp = rx.recv().await.unwrap();
+    hide_on_drop.clear();
+    resp
 }
 
 async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry<'static>> {
@@ -124,7 +146,7 @@ enum Tab {
     Windows,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Args {
     multiple: bool,
     source_types: BitFlags<SourceType>,
@@ -233,7 +255,20 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
     cosmic::Command::none()
 }
 
-pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<crate::app::Msg> {
+pub fn update_args(
+    portal: &mut CosmicPortal,
+    args: Option<Args>,
+) -> cosmic::Command<crate::app::Msg> {
+    // Hide dialog if `args` is `None`
+    let Some(args) = args else {
+        return if portal.screencast_args.is_some() {
+            portal.screencast_args = None;
+            destroy_layer_surface(*SCREENCAST_ID)
+        } else {
+            cosmic::Command::none()
+        };
+    };
+
     // If the dialog is already open, cancel previous request, but re-use dialog surface
     let command = if let Some(args) = portal.screencast_args.take() {
         args.send_response(None);
