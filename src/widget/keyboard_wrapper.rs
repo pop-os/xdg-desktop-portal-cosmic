@@ -1,9 +1,8 @@
 use cosmic::{
-    iced::Limits,
     iced_core::{
         event::{self, Event},
-        keyboard, layout, mouse, overlay, renderer, touch,
-        widget::{tree, Operation, Tree},
+        keyboard, layout, mouse, overlay, renderer,
+        widget::{Operation, Tree},
         Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
     },
     iced_renderer::core::widget::OperationOutputWrapper,

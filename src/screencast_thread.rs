@@ -16,7 +16,7 @@ use pipewire::{
 };
 use std::{ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
 use tokio::sync::oneshot;
-use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
+use wayland_client::protocol::{wl_buffer, wl_shm};
 
 use crate::{
     buffer,
