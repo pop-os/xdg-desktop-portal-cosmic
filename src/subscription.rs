@@ -7,7 +7,7 @@ use std::{
 
 use cosmic::{cosmic_theme::palette::Srgba, iced::subscription};
 use futures::{future, SinkExt};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
 use zbus::{zvariant, Connection};
 
 use crate::{
@@ -24,6 +24,7 @@ pub enum Event {
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
     Background(crate::background::Args),
+    BackgroundGetAppPerm(String, Sender<crate::background::ConfigAppPerm>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -77,13 +78,11 @@ impl Debug for Event {
                 .finish(),
             Event::Screencast(s) => s.fmt(f),
             Event::CancelScreencast(h) => f.debug_tuple("CancelScreencast").field(h).finish(),
-            Event::Background(crate::background::Args {
-                handle, id, app_id, ..
-            }) => f
-                .debug_struct("Background")
-                .field("handle", handle)
-                .field("id", id)
-                .field("app_id", app_id)
+            Event::Background(b) => b.fmt(f),
+            Event::BackgroundGetAppPerm(app_id, tx) => f
+                .debug_tuple("BackgroundGetAppPerm")
+                .field(app_id)
+                .field(tx)
                 .finish(),
             Event::Accent(a) => a.fmt(f),
             Event::IsDark(t) => t.fmt(f),
@@ -191,7 +190,13 @@ pub(crate) async fn process_changes(
                     }
                     Event::Background(args) => {
                         if let Err(err) = output.send(Event::Background(args)).await {
-                            log::error!("Error sending background event: {err:?}")
+                            log::error!("Error sending background event: {:?}", err);
+                        }
+                    }
+                    Event::BackgroundGetAppPerm(app_id, tx) => {
+                        if let Err(err) = output.send(Event::BackgroundGetAppPerm(app_id, tx)).await
+                        {
+                            log::error!("Error sending background config request event: {:?}", err);
                         }
                     }
                     Event::Accent(a) => {

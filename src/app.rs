@@ -196,6 +196,28 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Background(args) => {
                     background::update_args(self, args).map(cosmic::app::Message::App)
                 }
+                subscription::Event::BackgroundGetAppPerm(app_id, tx) => {
+                    let perm = match self.config.background.default_perm {
+                        config::background::PermissionDialog::Allow => {
+                            background::ConfigAppPerm::DefaultAllow
+                        }
+                        config::background::PermissionDialog::Deny => {
+                            background::ConfigAppPerm::DefaultDeny
+                        }
+                        _ => match self.config.background.apps.get(&app_id) {
+                            Some(true) => background::ConfigAppPerm::UserAllow,
+                            Some(false) => background::ConfigAppPerm::UserDeny,
+                            None => background::ConfigAppPerm::Unset,
+                        },
+                    };
+                    cosmic::Command::perform(
+                        async move {
+                            let _ = tx.send(perm).await;
+                            cosmic::app::message::none()
+                        },
+                        |x| x,
+                    )
+                }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)

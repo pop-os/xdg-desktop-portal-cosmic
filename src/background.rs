@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 
-use cosmic::{iced::window, iced_runtime::command::Action, widget};
+use cosmic::{iced::window, widget};
 use futures::{FutureExt, TryFutureExt};
 use tokio::sync::mpsc::Sender;
 use zbus::{fdo, object_server::SignalContext, zvariant};
 
-use crate::{
-    app::CosmicPortal,
-    config::{self, background::PermissionDialog},
-    fl, subscription, PortalResponse,
-};
+use crate::{app::CosmicPortal, fl, subscription, PortalResponse};
 
 const POP_SHELL_DEST: &str = "com.System76.PopShell";
 const POP_SHELL_PATH: &str = "/com.System76.PopShell";
@@ -21,17 +17,12 @@ const POP_SHELL_PATH: &str = "/com.System76.PopShell";
 /// https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.impl.portal.Background.html
 pub struct Background {
     tx: Sender<subscription::Event>,
-    config: config::background::Background,
 }
 
 impl Background {
-    pub fn new(tx: Sender<subscription::Event>) -> Self {
-        // FIXME: Will need to change this to handle external updates (e.g. from cosmic-settings)
-        let config = config::Config::load().0.background;
-        Self { tx, config }
+    pub const fn new(tx: Sender<subscription::Event>) -> Self {
+        Self { tx }
     }
-
-    // fn dialog(name: &str) -> widget::Dialog<'_, PermissionResponse> {}
 }
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Background")]
@@ -41,14 +32,14 @@ impl Background {
         &self,
         // #[zbus(connection)] connection: &zbus::Connection,
     ) -> fdo::Result<HashMap<String, AppStatus>> {
-        // TODO: How do I get running programs?
+        // TODO: Subscribe to Wayland window open events for running apps
         log::warn!("[background] GetAppState is currently unimplemented");
         Ok(HashMap::default())
     }
 
     /// Notifies the user that an app is running in the background
     async fn notify_background(
-        &mut self,
+        &self,
         // #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(signal_context)] context: SignalContext<'_>,
         handle: zvariant::ObjectPath<'_>,
@@ -57,30 +48,45 @@ impl Background {
     ) -> PortalResponse<NotifyBackgroundResult> {
         log::debug!("[background] Request handle: {handle:?}");
 
-        match self.config.apps.entry(app_id) {
+        // Request only what's needed to avoid cloning and receiving the entire config
+        // This is also cleaner than storing the config because it's difficult to keep it
+        // updated without synch primitives and we also avoid &mut self
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let config = self
+            .tx
+            .send(subscription::Event::BackgroundGetAppPerm(
+                app_id.clone(),
+                tx,
+            ))
+            .inspect_err(|e| {
+                log::error!("[background] Failed receiving background config from main app {e:?}")
+            })
+            .map_ok(|_| ConfigAppPerm::default())
+            .map_err(|_| ())
+            .and_then(|_| rx.recv().map(|out| out.ok_or(())))
+            .await
+            .unwrap_or_default();
+
+        match config {
             // Skip dialog based on default response set in configs
-            _ if self.config.default_perm == PermissionDialog::Allow => {
+            ConfigAppPerm::DefaultAllow => {
                 log::debug!("[background] AUTO ALLOW {name} based on default permission");
                 PortalResponse::Success(NotifyBackgroundResult {
                     result: PermissionResponse::Allow,
                 })
             }
-            _ if self.config.default_perm == PermissionDialog::Deny => {
+            ConfigAppPerm::DefaultDeny => {
                 log::debug!("[background] AUTO DENY {name} based on default permission");
                 PortalResponse::Success(NotifyBackgroundResult {
                     result: PermissionResponse::Deny,
                 })
             }
             // Dialog
-            Entry::Vacant(entry) => {
-                log::debug!(
-                    "[background] Requesting permission for {} ({name})",
-                    entry.key()
-                );
+            ConfigAppPerm::Unset => {
+                log::debug!("[background] Requesting permission for {app_id} ({name})",);
 
                 let handle = handle.to_owned();
                 let id = window::Id::unique();
-                let app_id = entry.key().clone();
                 let (tx, mut rx) = tokio::sync::mpsc::channel(1);
                 self.tx
                     .send(subscription::Event::Background(Args {
@@ -99,20 +105,14 @@ impl Background {
                     .await
             }
             // We asked the user about this app already
-            Entry::Occupied(entry) if *entry.get() => {
-                log::debug!(
-                    "[background] AUTO ALLOW {} ({name}) based on cached response",
-                    entry.key()
-                );
+            ConfigAppPerm::UserAllow => {
+                log::debug!("[background] AUTO ALLOW {app_id} ({name}) based on cached response");
                 PortalResponse::Success(NotifyBackgroundResult {
                     result: PermissionResponse::Allow,
                 })
             }
-            Entry::Occupied(entry) => {
-                log::debug!(
-                    "[background] AUTO DENY {} ({name}) based on cached response",
-                    entry.key()
-                );
+            ConfigAppPerm::UserDeny => {
+                log::debug!("[background] AUTO DENY {app_id} ({name}) based on cached response");
                 PortalResponse::Success(NotifyBackgroundResult {
                     result: PermissionResponse::Deny,
                 })
@@ -176,7 +176,19 @@ pub enum PermissionResponse {
     AllowOnce,
 }
 
-#[derive(Clone)]
+/// Evaluated permissions from background config
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum ConfigAppPerm {
+    DefaultAllow,
+    DefaultDeny,
+    #[default]
+    Unset,
+    UserAllow,
+    UserDeny,
+}
+
+/// Background permissions dialog state
+#[derive(Clone, Debug)]
 pub struct Args {
     pub handle: zvariant::ObjectPath<'static>,
     pub id: window::Id,
@@ -184,6 +196,7 @@ pub struct Args {
     tx: Sender<PortalResponse<NotifyBackgroundResult>>,
 }
 
+/// Background permissions dialog response
 #[derive(Debug, Clone)]
 pub enum Msg {
     Response {
