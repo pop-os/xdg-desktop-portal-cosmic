@@ -3,9 +3,9 @@ cancel = Abbrechen
 capture = Aufnehmen
 share = Teilen
 save-to = Speichern in
-    .clipboard = { save-to } Zwischenablage
-    .pictures = { save-to } Bilder
-    .documents = { save-to } Dokumente
+    .clipboard = In Zwischenablage speichern
+    .pictures = In Bilder speichern
+    .documents = In Dokumente speichern
 choose-folder = Ordner auswählen
 
 share-screen = Bildschirm teilen
