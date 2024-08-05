@@ -1,4 +1,4 @@
-allow = Erlauben
+allow = Zulassen
 cancel = Abbrechen
 capture = Aufnehmen
 share = Teilen
