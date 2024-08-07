@@ -1,37 +1,51 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::{Arc, Condvar, Mutex}};
 
+use ashpd::enumflags2::BitFlags;
 use cosmic::{iced::window, widget};
 use futures::{FutureExt, TryFutureExt};
 use tokio::sync::mpsc::Sender;
 use zbus::{fdo, object_server::SignalContext, zvariant};
 
-use crate::{app::CosmicPortal, fl, subscription, PortalResponse};
-
-const POP_SHELL_DEST: &str = "com.System76.PopShell";
-const POP_SHELL_PATH: &str = "/com.System76.PopShell";
+use crate::{app::CosmicPortal, fl, subscription, wayland::WaylandHelper, PortalResponse};
 
 /// Background portal backend
 ///
 /// https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.impl.portal.Background.html
 pub struct Background {
+    wayland_helper: WaylandHelper,
     tx: Sender<subscription::Event>,
 }
 
 impl Background {
-    pub const fn new(tx: Sender<subscription::Event>) -> Self {
-        Self { tx }
+    pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
+        let toplevel_signal = wayland_helper.toplevel_signal();
+        let toplevel_handle = std::thread::Builder::new()
+            .name("background-toplevel-updates".into())
+            .spawn(move || Background::toplevel_signal(toplevel_signal))
+            .expect("Spawning toplevels update thread should succeed");
+
+        Self {
+            wayland_helper,
+            tx,
+            toplevel_handle,
+        }
+    }
+
+    fn toplevel_signal(signal: Arc<(Mutex<bool>, Condvar)>) {
+        let connection = zbus::blocking::Connection::session().unwrap();
+
+        loop {
+
+        }
     }
 }
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Background")]
 impl Background {
     /// Current status on running apps
-    async fn get_app_state(
-        &self,
-        // #[zbus(connection)] connection: &zbus::Connection,
-    ) -> fdo::Result<HashMap<String, AppStatus>> {
+    async fn get_app_state(&self) -> fdo::Result<HashMap<String, AppStatus>> {
         // TODO: Subscribe to Wayland window open events for running apps
         log::warn!("[background] GetAppState is currently unimplemented");
         Ok(HashMap::default())
@@ -147,7 +161,7 @@ impl Background {
 // }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, zvariant::Type)]
-#[zvariant(signature = "u")]
+#[zvariant(signature = "v")]
 pub enum AppStatus {
     /// No open windows
     Background = 0,

@@ -144,7 +144,10 @@ pub(crate) async fn process_changes(
             let connection = zbus::ConnectionBuilder::session()?
                 .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
-                .serve_at(DBUS_PATH, Background::new(tx.clone()))?
+                .serve_at(
+                    DBUS_PATH,
+                    Background::new(wayland_helper.clone(), tx.clone()),
+                )?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
