@@ -1,4 +1,6 @@
-use crate::{access, config, file_chooser, fl, screencast_dialog, screenshot, subscription};
+use crate::{
+    access, background, config, file_chooser, fl, screencast_dialog, screenshot, subscription,
+};
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::widget::{self, dropdown};
 use cosmic::Command;
@@ -43,6 +45,8 @@ pub struct CosmicPortal {
     pub prev_rectangle: Option<screenshot::Rect>,
     pub wayland_helper: crate::wayland::WaylandHelper,
 
+    pub background_prompts: HashMap<window::Id, background::Args>,
+
     pub outputs: Vec<OutputState>,
     pub active_output: Option<WlOutput>,
 }
@@ -64,8 +68,13 @@ pub enum Msg {
     FileChooser(window::Id, file_chooser::Msg),
     Screenshot(screenshot::Msg),
     Screencast(screencast_dialog::Msg),
+    Background(background::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
+    ConfigUpdateBackground {
+        app_id: String,
+        choice: Option<background::PermissionResponse>,
+    },
     ConfigSetScreenshot(config::screenshot::Screenshot),
     /// Update config from external changes
     ConfigSubUpdate(config::Config),
@@ -135,6 +144,7 @@ impl cosmic::Application for CosmicPortal {
                 screencast_tab_model: Default::default(),
                 location_options: Vec::new(),
                 prev_rectangle: Default::default(),
+                background_prompts: Default::default(),
                 outputs: Default::default(),
                 active_output: Default::default(),
                 wayland_helper,
@@ -155,6 +165,8 @@ impl cosmic::Application for CosmicPortal {
             screencast_dialog::view(self).map(Msg::Screencast)
         } else if self.outputs.iter().any(|o| o.id == id) {
             screenshot::view(self, id).map(Msg::Screenshot)
+        } else if self.background_prompts.contains_key(&id) {
+            background::view(self, id).map(Msg::Background)
         } else {
             file_chooser::view(self, id)
         }
@@ -181,6 +193,31 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::CancelScreencast(handle) => {
                     screencast_dialog::cancel(self, handle).map(cosmic::app::Message::App)
                 }
+                subscription::Event::Background(args) => {
+                    background::update_args(self, args).map(cosmic::app::Message::App)
+                }
+                subscription::Event::BackgroundGetAppPerm(app_id, tx) => {
+                    let perm = match self.config.background.default_perm {
+                        config::background::PermissionDialog::Allow => {
+                            background::ConfigAppPerm::DefaultAllow
+                        }
+                        config::background::PermissionDialog::Deny => {
+                            background::ConfigAppPerm::DefaultDeny
+                        }
+                        _ => match self.config.background.apps.get(&app_id) {
+                            Some(true) => background::ConfigAppPerm::UserAllow,
+                            Some(false) => background::ConfigAppPerm::UserDeny,
+                            None => background::ConfigAppPerm::Unset,
+                        },
+                    };
+                    cosmic::Command::perform(
+                        async move {
+                            let _ = tx.send(perm).await;
+                            cosmic::app::message::none()
+                        },
+                        |x| x,
+                    )
+                }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
@@ -194,6 +231,7 @@ impl cosmic::Application for CosmicPortal {
             Msg::Screencast(m) => {
                 screencast_dialog::update_msg(self, m).map(cosmic::app::Message::App)
             }
+            Msg::Background(m) => background::update_msg(self, m).map(cosmic::app::Message::App),
             Msg::Output(o_event, wl_output) => {
                 match o_event {
                     OutputEvent::Created(Some(info))
@@ -262,6 +300,22 @@ impl cosmic::Application for CosmicPortal {
                             .max(output.logical_pos.1 + output.logical_size.1 as i32);
                     }
                     self.prev_rectangle = Some(rect);
+                }
+
+                cosmic::iced::Command::none()
+            }
+            Msg::ConfigUpdateBackground { app_id, choice } => {
+                if let (Some(choice), Some(handler)) = (choice, &mut self.config_handler) {
+                    self.config
+                        .background
+                        .apps
+                        .insert(app_id, choice == background::PermissionResponse::Allow);
+                    if let Err(e) = self
+                        .config
+                        .set_background(handler, self.config.background.clone())
+                    {
+                        log::error!("Failed to save background config: {e}");
+                    }
                 }
 
                 cosmic::iced::Command::none()

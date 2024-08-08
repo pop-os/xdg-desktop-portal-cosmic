@@ -7,13 +7,13 @@ use std::{
 
 use cosmic::{cosmic_theme::palette::Srgba, iced::subscription};
 use futures::{future, SinkExt};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
 use zbus::{zvariant, Connection};
 
 use crate::{
-    access::Access, config, file_chooser::FileChooser, screencast::ScreenCast,
-    screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings, ACCENT_COLOR_KEY,
-    APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
+    access::Access, background::Background, config, file_chooser::FileChooser,
+    screencast::ScreenCast, screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings,
+    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
 };
 
 #[derive(Clone)]
@@ -23,6 +23,8 @@ pub enum Event {
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
+    Background(crate::background::Args),
+    BackgroundGetAppPerm(String, Sender<crate::background::ConfigAppPerm>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -76,6 +78,12 @@ impl Debug for Event {
                 .finish(),
             Event::Screencast(s) => s.fmt(f),
             Event::CancelScreencast(h) => f.debug_tuple("CancelScreencast").field(h).finish(),
+            Event::Background(b) => b.fmt(f),
+            Event::BackgroundGetAppPerm(app_id, tx) => f
+                .debug_tuple("BackgroundGetAppPerm")
+                .field(app_id)
+                .field(tx)
+                .finish(),
             Event::Accent(a) => a.fmt(f),
             Event::IsDark(t) => t.fmt(f),
             Event::HighContrast(c) => c.fmt(f),
@@ -136,6 +144,10 @@ pub(crate) async fn process_changes(
             let connection = zbus::ConnectionBuilder::session()?
                 .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
+                .serve_at(
+                    DBUS_PATH,
+                    Background::new(wayland_helper.clone(), tx.clone()),
+                )?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
@@ -178,6 +190,17 @@ pub(crate) async fn process_changes(
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
                             log::error!("Error sending screencast cancel: {:?}", err);
                         };
+                    }
+                    Event::Background(args) => {
+                        if let Err(err) = output.send(Event::Background(args)).await {
+                            log::error!("Error sending background event: {:?}", err);
+                        }
+                    }
+                    Event::BackgroundGetAppPerm(app_id, tx) => {
+                        if let Err(err) = output.send(Event::BackgroundGetAppPerm(app_id, tx)).await
+                        {
+                            log::error!("Error sending background config request event: {:?}", err);
+                        }
                     }
                     Event::Accent(a) => {
                         let object_server = conn.object_server();
