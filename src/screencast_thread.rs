@@ -4,7 +4,7 @@
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
-use cosmic_client_toolkit::screencopy::Rect;
+use cosmic_client_toolkit::screencopy::{Formats, Rect};
 use futures::executor::block_on;
 use pipewire::{
     spa::{
@@ -74,6 +74,7 @@ struct StreamData {
     wayland_helper: WaylandHelper,
     modifier: gbm::Modifier,
     session: Session,
+    formats: Formats,
     width: u32,
     height: u32,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
@@ -180,6 +181,7 @@ impl StreamData {
                                 plane_count,
                                 self.dmabuf_helper.as_ref(),
                                 Some(modifier),
+                                &self.formats,
                             );
                             let mut params: Vec<_> = params
                                 .iter()
@@ -337,12 +339,12 @@ fn start_stream(
 
     let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
 
-    let Some((width, height)) = block_on(session.wait_for_formats(|formats| formats.buffer_size))
-    else {
+    let Some(formats) = block_on(session.wait_for_formats(|formats| formats.clone())) else {
         return Err(anyhow::anyhow!(
             "failed to get formats for image copy; session stopped"
         ));
     };
+    let (width, height) = formats.buffer_size;
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
@@ -355,7 +357,7 @@ fn start_stream(
         },
     )?;
 
-    let initial_params = params(width, height, 1, dmabuf_helper.as_ref(), None);
+    let initial_params = params(width, height, 1, dmabuf_helper.as_ref(), None, &formats);
     let mut initial_params: Vec<_> = initial_params
         .iter()
         .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
@@ -374,6 +376,7 @@ fn start_stream(
         wayland_helper,
         dmabuf_helper,
         session,
+        formats,
         // XXX Should use implicit modifier if none set?
         modifier: gbm::Modifier::Linear,
         width,
@@ -447,13 +450,14 @@ fn params(
     blocks: u32,
     dmabuf: Option<&DmabufHelper>,
     fixated_modifier: Option<gbm::Modifier>,
+    formats: &Formats,
 ) -> Vec<Vec<u8>> {
     [
         Some(buffers(width, height, blocks)),
-        fixated_modifier.map(|x| format(width, height, None, Some(x))),
+        fixated_modifier.map(|x| format(width, height, None, Some(x), formats)),
         // Favor dmabuf over shm by listing it first
-        dmabuf.map(|x| format(width, height, Some(x), None)),
-        Some(format(width, height, None, None)),
+        dmabuf.map(|x| format(width, height, Some(x), None, formats)),
+        Some(format(width, height, None, None, formats)),
         Some(meta()),
     ]
     .into_iter()
@@ -526,6 +530,7 @@ fn format(
     height: u32,
     dmabuf: Option<&DmabufHelper>,
     fixated_modifier: Option<gbm::Modifier>,
+    formats: &Formats,
 ) -> Vec<u8> {
     let mut properties = vec![
         pod::Property {
@@ -562,8 +567,17 @@ fn format(
             value: pod::Value::Long(u64::from(modifier) as i64),
         });
     } else if let Some(dmabuf) = dmabuf {
+        // TODO: Support other formats
+        let format = gbm::Format::Abgr8888 as u32;
+        let screencopy_modifiers = formats
+            .dmabuf_formats
+            .iter()
+            .find(|(x, _)| *x == format)
+            .map(|(_, modifiers)| modifiers.as_slice())
+            .unwrap_or_default();
         let mut modifiers: Vec<_> = dmabuf
-            .modifiers_for_format(gbm::Format::Abgr8888 as u32)
+            .modifiers_for_format(format)
+            .filter(|x| screencopy_modifiers.contains(x))
             .map(|x| x as i64)
             .collect();
         if modifiers.is_empty() {
