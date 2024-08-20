@@ -9,7 +9,7 @@ save-to = Spara till
 choose-folder = Välj katalog
 
 share-screen = Dela din skärm
-    .description = Systemet vill dela innehållet på din skärm med "{$app_name}". Välj en skärm eller fönster att för att börja dela.
+    .description = Systemet vill dela innehållet på din skärm med "{$app_name}". Välj en skärm eller fönster för att börja dela.
 unknown-application = Okänt program
 output = Utgång
 window = Fönster
