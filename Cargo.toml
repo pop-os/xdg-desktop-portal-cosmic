@@ -63,7 +63,7 @@ rust-embed = "8.2.0"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-freedesktop-desktop-entry = "0.7.0"
+freedesktop-desktop-entry = "=0.7.0"
 
 [workspace.dependencies]
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
