@@ -51,7 +51,7 @@ impl Access {
     }
 }
 
-#[zbus::interface(name = "")]
+#[zbus::interface(name = "org.freedesktop.impl.portal.Access")]
 impl Access {
     #[allow(clippy::too_many_arguments)]
     async fn access_dialog(
