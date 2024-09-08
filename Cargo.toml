@@ -51,6 +51,7 @@ time = { version = "0.3.31", features = [
     "macros",
 ] }
 url = "2.5"
+shlex = "1"
 # i18n
 i18n-embed = { version = "0.14.1", features = [
     "fluent-system",

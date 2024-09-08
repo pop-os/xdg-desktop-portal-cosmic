@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::sync::{Arc, Condvar, Mutex};
+use std::{
+    borrow::Cow,
+    io,
+    path::Path,
+    sync::{Arc, Condvar, Mutex},
+};
 
 // use ashpd::enumflags2::{bitflags, BitFlag, BitFlags};
 use cosmic::{iced::window, widget};
 use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
 use futures::{FutureExt, TryFutureExt};
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    fs,
+    io::AsyncWriteExt,
+    sync::{mpsc, watch},
+};
 use zbus::{fdo, object_server::SignalContext, zvariant};
 
 use crate::{
@@ -65,13 +74,34 @@ impl Background {
             }
         }
     }
+
+    /// Write `desktop_entry` to path `launch_entry`.
+    ///
+    /// The primary purpose of this function is to ease error handling.
+    async fn write_autostart(
+        autostart_entry: &Path,
+        desktop_entry: &freedesktop_desktop_entry::DesktopEntry<'_>,
+    ) -> io::Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o644)
+            .open(&autostart_entry)
+            .map_ok(tokio::io::BufWriter::new)
+            .await?;
+
+        file.write_all(desktop_entry.to_string().as_bytes()).await?;
+        /// Shouldn't be needed, but the file never seemed to flush to disk until I did it manually
+        file.flush().await
+    }
 }
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Background")]
 impl Background {
     /// Status on running apps (active, running, or background)
-    async fn get_app_state(&self) -> fdo::Result<Vec<AppState>> {
-        let toplevels: Vec<_> = self
+    async fn get_app_state(&self) -> fdo::Result<AppStates> {
+        let apps: Vec<_> = self
             .wayland_helper
             .toplevels()
             .into_iter()
@@ -97,11 +127,11 @@ impl Background {
             })
             .collect();
 
-        log::debug!("GetAppState returning {} toplevels", toplevels.len());
+        log::debug!("GetAppState returning {} toplevels", apps.len());
         #[cfg(debug_assertions)]
-        log::trace!("App status: {toplevels:#?}");
+        log::trace!("App status: {apps:#?}");
 
-        Ok(toplevels)
+        Ok(AppStates { apps })
     }
 
     /// Notifies the user that an app is running in the background
@@ -134,7 +164,7 @@ impl Background {
             }
             // Dialog
             PermissionDialog::Ask => {
-                log::debug!("Requesting user permission for {app_id} ({name})",);
+                log::debug!("Requesting background permission for running app {app_id} ({name})",);
 
                 let handle = handle.to_owned();
                 let id = window::Id::unique();
@@ -160,16 +190,106 @@ impl Background {
 
     /// Enable or disable autostart for an application
     ///
-    /// Deprecated but seemingly still in use
+    /// Deprecated in terms of the portal but seemingly still in use
+    /// Spec: https://specifications.freedesktop.org/autostart-spec/latest/
     pub async fn enable_autostart(
         &self,
-        app_id: String,
+        appid: String,
         enable: bool,
-        commandline: Vec<String>,
+        exec: Vec<String>,
         flags: u32,
     ) -> fdo::Result<bool> {
-        log::warn!("Autostart not implemented");
-        Ok(enable)
+        log::info!(
+            "{} autostart for {appid}",
+            if enable { "Enabling" } else { "Disabling" }
+        );
+
+        let Some((autostart_dir, launch_entry)) = dirs::config_dir().map(|config| {
+            let autostart = config.join("autostart");
+            (
+                autostart.clone(),
+                autostart.join(format!("{appid}.desktop")),
+            )
+        }) else {
+            return Err(fdo::Error::FileNotFound("XDG_CONFIG_HOME".into()));
+        };
+
+        if !enable {
+            log::debug!("Removing autostart entry {}", launch_entry.display());
+            match fs::remove_file(&launch_entry).await {
+                Ok(()) => Ok(false),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    log::warn!("Service asked to disable autostart for {appid} but the entry doesn't exist");
+                    Ok(false)
+                }
+                Err(e) => {
+                    log::error!(
+                        "Error removing autostart entry for {appid}\n\tPath: {}\n\tError: {e}",
+                        launch_entry.display()
+                    );
+                    Err(fdo::Error::FileNotFound(format!(
+                        "{e}: ({})",
+                        launch_entry.display()
+                    )))
+                }
+            }
+        } else {
+            match fs::create_dir(&autostart_dir).await {
+                Ok(()) => log::debug!("Created autostart directory at {}", autostart_dir.display()),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+                Err(e) => {
+                    log::error!(
+                        "Error creating autostart directory: {e} (app: {appid}) (dir: {})",
+                        autostart_dir.display()
+                    );
+                    return Err(fdo::Error::IOError(format!(
+                        "{e}: ({})",
+                        autostart_dir.display()
+                    )));
+                }
+            }
+
+            let mut autostart_fde = freedesktop_desktop_entry::DesktopEntry {
+                appid: Cow::Borrowed(&appid),
+                path: Default::default(),
+                groups: Default::default(),
+                ubuntu_gettext_domain: None,
+            };
+            autostart_fde.add_desktop_entry("Type", "Application");
+            autostart_fde.add_desktop_entry("Name", &appid);
+
+            log::debug!("{appid} autostart command line: {exec:?}");
+            let exec = match shlex::try_join(exec.iter().map(|term| term.as_str())) {
+                Ok(exec) => exec,
+                Err(e) => {
+                    log::error!("Failed to sanitize command line for {appid}\n\tCommand: {exec:?}\n\tError: {e}");
+                    return Err(fdo::Error::InvalidArgs(format!("{e}: {exec:?}")));
+                }
+            };
+            log::debug!("{appid} sanitized autostart command line: {exec}");
+            autostart_fde.add_desktop_entry("Exec", &exec);
+
+            /// xxx Replace with enumflags later when it's added as a dependency instead of adding
+            /// it now for one bit (literally)
+            let dbus_activation = flags & 0x1 == 1;
+            if dbus_activation {
+                autostart_fde.add_desktop_entry("DBusActivatable", "true");
+            }
+
+            // GNOME and KDE both set this key
+            autostart_fde.add_desktop_entry("X-Flatpak", &appid);
+
+            Self::write_autostart(&launch_entry, &autostart_fde)
+                .inspect_err(|e| {
+                    log::error!(
+                        "Failed to write autostart entry for {appid} to `{}`: {e}",
+                        launch_entry.display()
+                    );
+                })
+                .map_err(|e| fdo::Error::IOError(format!("{e}: {}", launch_entry.display())))
+                .map_ok(|()| true)
+                .await
+        }
     }
 
     /// Emitted when running applications change their state
@@ -188,7 +308,13 @@ pub enum AppStatus {
     Active,
 }
 
-#[derive(Clone, Debug, serde::Serialize, zvariant::Type)]
+#[derive(Clone, Debug, zvariant::SerializeDict, zvariant::Type)]
+#[zvariant(signature = "a{sv}")]
+struct AppStates {
+    apps: Vec<AppState>,
+}
+
+#[derive(Clone, Debug, zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "{sv}")]
 struct AppState {
     app_id: String,
