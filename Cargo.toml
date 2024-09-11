@@ -14,7 +14,7 @@ members = ["cosmic-portal-config"]
 [dependencies]
 anyhow = "1.0.60"
 ashpd = "0.8.1"
-cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = ["wayland"] }
+cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = ["gvfs", "wayland"] }
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c8d3a1c" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c8d3a1c" }
 futures = "0.3"
