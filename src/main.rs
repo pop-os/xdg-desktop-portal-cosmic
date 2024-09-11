@@ -1,6 +1,6 @@
 use cosmic::cosmic_theme::palette::Srgba;
-use futures::future::AbortHandle;
-use std::collections::HashMap;
+use futures::future::{abortable, AbortHandle};
+use std::{collections::HashMap, future::Future};
 use zbus::zvariant::{self, OwnedValue};
 
 pub use cosmic_portal_config as config;
@@ -58,6 +58,29 @@ struct Request(AbortHandle);
 impl Request {
     fn close(&self) {
         self.0.abort();
+    }
+}
+
+impl Request {
+    async fn run<T: zvariant::Type + serde::Serialize, Fut: Future<Output = PortalResponse<T>>>(
+        connection: &zbus::Connection,
+        handle: zvariant::ObjectPath<'_>,
+        task: Fut,
+    ) -> PortalResponse<T> {
+        let (abortable, abort_handle) = abortable(task);
+        let _ = connection
+            .object_server()
+            .at(&handle, Request(abort_handle))
+            .await;
+        let resp = abortable.await;
+        let _ = connection
+            .object_server()
+            .remove::<Request, _>(&handle)
+            .await;
+        match resp {
+            Ok(resp) => resp,
+            _ => PortalResponse::Cancelled,
+        }
     }
 }
 

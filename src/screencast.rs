@@ -138,107 +138,102 @@ impl ScreenCast {
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> PortalResponse<StartResult> {
-        let Some(interface) =
-            crate::session_interface::<SessionData>(connection, session_handle.clone()).await
-        else {
-            return PortalResponse::Other;
-        };
+        Request::run(connection, handle, async {
+            let Some(interface) =
+                crate::session_interface::<SessionData>(connection, session_handle.clone()).await
+            else {
+                return PortalResponse::Other;
+            };
 
-        let (cursor_mode, multiple, source_types) = {
-            let session_data = interface.get_mut().await;
-            let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
-            let multiple = session_data.multiple;
-            let source_types = session_data.source_types;
-            (cursor_mode, multiple, source_types)
-        };
+            let (cursor_mode, multiple, source_types) = {
+                let session_data = interface.get_mut().await;
+                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
+                let multiple = session_data.multiple;
+                let source_types = session_data.source_types;
+                (cursor_mode, multiple, source_types)
+            };
 
-        // XXX
-        let outputs = self.wayland_helper.outputs();
-        if outputs.is_empty() {
-            log::error!("No output");
-            return PortalResponse::Other;
-        }
+            // XXX
+            let outputs = self.wayland_helper.outputs();
+            if outputs.is_empty() {
+                log::error!("No output");
+                return PortalResponse::Other;
+            }
 
-        // Show dialog to prompt for what to capture
-        let (abortable, abort_handle) = abortable(screencast_dialog::show_screencast_prompt(
-            &self.tx,
-            session_handle.to_owned(),
-            app_id,
-            multiple,
-            source_types,
-            &self.wayland_helper,
-        ));
-        let _ = connection
-            .object_server()
-            .at(&handle, Request(abort_handle))
+            // Show dialog to prompt for what to capture
+            let resp = screencast_dialog::show_screencast_prompt(
+                &self.tx,
+                session_handle.to_owned(),
+                app_id,
+                multiple,
+                source_types,
+                &self.wayland_helper,
+            )
             .await;
-        let resp = abortable.await;
-        let _ = connection
-            .object_server()
-            .remove::<Request, _>(&handle)
-            .await;
-        let Ok(Some(capture_sources)) = resp else {
-            return PortalResponse::Cancelled;
-        };
+            let Some(capture_sources) = resp else {
+                return PortalResponse::Cancelled;
+            };
 
-        let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
-        // Use `FuturesOrdered` so streams are in consistent order
-        let mut res_futures = FuturesOrdered::new();
-        for output in capture_sources.outputs {
-            res_futures.push_back(ScreencastThread::new(
-                self.wayland_helper.clone(),
-                CaptureSource::Output(output),
-                overlay_cursor,
-            ));
-        }
-        for toplevel in capture_sources.toplevels {
-            res_futures.push_back(ScreencastThread::new(
-                self.wayland_helper.clone(),
-                CaptureSource::Toplevel(toplevel),
-                overlay_cursor,
-            ));
-        }
+            let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
+            // Use `FuturesOrdered` so streams are in consistent order
+            let mut res_futures = FuturesOrdered::new();
+            for output in capture_sources.outputs {
+                res_futures.push_back(ScreencastThread::new(
+                    self.wayland_helper.clone(),
+                    CaptureSource::Output(output),
+                    overlay_cursor,
+                ));
+            }
+            for toplevel in capture_sources.toplevels {
+                res_futures.push_back(ScreencastThread::new(
+                    self.wayland_helper.clone(),
+                    CaptureSource::Toplevel(toplevel),
+                    overlay_cursor,
+                ));
+            }
 
-        let mut failed = false;
-        let mut screencast_threads = Vec::new();
-        while let Some(res) = res_futures.next().await {
-            match res {
-                Ok(thread) => screencast_threads.push(thread),
-                Err(err) => {
-                    log::error!("Screencast thread failed: {}", err);
-                    failed = true;
+            let mut failed = false;
+            let mut screencast_threads = Vec::new();
+            while let Some(res) = res_futures.next().await {
+                match res {
+                    Ok(thread) => screencast_threads.push(thread),
+                    Err(err) => {
+                        log::error!("Screencast thread failed: {}", err);
+                        failed = true;
+                    }
                 }
             }
-        }
 
-        // Stop any thread that didn't fail
-        if failed {
-            for thread in screencast_threads {
-                thread.stop();
+            // Stop any thread that didn't fail
+            if failed {
+                for thread in screencast_threads {
+                    thread.stop();
+                }
+                return PortalResponse::Other;
             }
-            return PortalResponse::Other;
-        }
 
-        // Session may have already been cancelled
-        if interface.get().await.closed {
-            for thread in screencast_threads {
-                thread.stop();
+            // Session may have already been cancelled
+            if interface.get().await.closed {
+                for thread in screencast_threads {
+                    thread.stop();
+                }
+                return PortalResponse::Cancelled;
             }
-            return PortalResponse::Cancelled;
-        }
 
-        let streams = screencast_threads
-            .iter()
-            .map(|thread| (thread.node_id(), HashMap::new()))
-            .collect();
-        interface.get_mut().await.screencast_threads = screencast_threads;
+            let streams = screencast_threads
+                .iter()
+                .map(|thread| (thread.node_id(), HashMap::new()))
+                .collect();
+            interface.get_mut().await.screencast_threads = screencast_threads;
 
-        PortalResponse::Success(StartResult {
-            // XXX
-            streams,
-            persist_mode: None,
-            restore_data: None,
+            PortalResponse::Success(StartResult {
+                // XXX
+                streams,
+                persist_mode: None,
+                restore_data: None,
+            })
         })
+        .await
     }
 
     #[zbus(property)]
