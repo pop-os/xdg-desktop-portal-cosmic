@@ -15,6 +15,7 @@ use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivit
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
@@ -116,6 +117,18 @@ impl Rect {
             bottom: self.bottom + y,
         }
     }
+
+    pub fn dimensions(self: Self) -> Option<RectDimension> {
+        let width = NonZeroU32::new((self.right - self.left).unsigned_abs())?;
+        let height = NonZeroU32::new((self.bottom - self.top).unsigned_abs())?;
+        Some(RectDimension { width, height })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RectDimension {
+    width: NonZeroU32,
+    height: NonZeroU32,
 }
 
 pub struct Screenshot {
@@ -587,82 +600,85 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     }
                 }
                 Choice::Rectangle(r, s) => {
-                    // Construct Rgba image with size of rect
-                    // then overlay the part of each image that intersects with the rect
-                    let mut img = RgbaImage::new(
-                        (r.right - r.left).unsigned_abs(),
-                        (r.bottom - r.top).unsigned_abs(),
-                    );
+                    if let Some(RectDimension { width, height }) = r.dimensions() {
+                        // Construct Rgba image with size of rect
+                        // then overlay the part of each image that intersects with the rect
+                        let mut img = RgbaImage::new(width.get(), height.get());
 
-                    for (name, raw_img) in images {
-                        let Some(output) = outputs.iter().find(|o| o.name == name) else {
-                            continue;
-                        };
-                        let pos = output.logical_pos;
-                        let output_rect = Rect {
-                            left: pos.0,
-                            top: pos.1,
-                            right: pos.0 + output.logical_size.0 as i32,
-                            bottom: pos.1 + output.logical_size.1 as i32,
-                        };
+                        for (name, raw_img) in images {
+                            let Some(output) = outputs.iter().find(|o| o.name == name) else {
+                                continue;
+                            };
+                            let pos = output.logical_pos;
+                            let output_rect = Rect {
+                                left: pos.0,
+                                top: pos.1,
+                                right: pos.0 + output.logical_size.0 as i32,
+                                bottom: pos.1 + output.logical_size.1 as i32,
+                            };
 
-                        let Some(intersect) = r.intersect(output_rect) else {
-                            continue;
-                        };
-                        let mut translated_intersect = intersect.translate(-pos.0, -pos.1);
-                        let scale = raw_img.width() as f32 / output.logical_size.0 as f32;
-                        translated_intersect.left =
-                            (translated_intersect.left as f32 * scale).round() as i32;
-                        translated_intersect.top =
-                            (translated_intersect.top as f32 * scale).round() as i32;
-                        translated_intersect.right =
-                            (translated_intersect.right as f32 * scale).round() as i32;
-                        translated_intersect.bottom =
-                            (translated_intersect.bottom as f32 * scale).round() as i32;
+                            let Some(intersect) = r.intersect(output_rect) else {
+                                continue;
+                            };
+                            let mut translated_intersect = intersect.translate(-pos.0, -pos.1);
+                            let scale = raw_img.width() as f32 / output.logical_size.0 as f32;
+                            translated_intersect.left =
+                                (translated_intersect.left as f32 * scale).round() as i32;
+                            translated_intersect.top =
+                                (translated_intersect.top as f32 * scale).round() as i32;
+                            translated_intersect.right =
+                                (translated_intersect.right as f32 * scale).round() as i32;
+                            translated_intersect.bottom =
+                                (translated_intersect.bottom as f32 * scale).round() as i32;
 
-                        let overlay = image::imageops::crop_imm(
-                            raw_img.as_ref(),
-                            u32::try_from(translated_intersect.left).unwrap_or_default(),
-                            u32::try_from(translated_intersect.top).unwrap_or_default(),
-                            (translated_intersect.right - translated_intersect.left).unsigned_abs(),
-                            (translated_intersect.bottom - translated_intersect.top).unsigned_abs(),
-                        );
-
-                        if img.width() != output.logical_size.0 as u32 {
-                            let overlay = image::imageops::resize(
-                                &overlay.to_image(),
-                                (intersect.right - intersect.left) as u32,
-                                (intersect.bottom - intersect.top) as u32,
-                                image::imageops::FilterType::Lanczos3,
+                            let overlay = image::imageops::crop_imm(
+                                raw_img.as_ref(),
+                                u32::try_from(translated_intersect.left).unwrap_or_default(),
+                                u32::try_from(translated_intersect.top).unwrap_or_default(),
+                                (translated_intersect.right - translated_intersect.left)
+                                    .unsigned_abs(),
+                                (translated_intersect.bottom - translated_intersect.top)
+                                    .unsigned_abs(),
                             );
-                            image::imageops::overlay(
-                                &mut img,
-                                &overlay,
-                                (intersect.left - r.left).into(),
-                                (intersect.top - r.top).into(),
-                            );
-                        } else {
-                            image::imageops::overlay(
-                                &mut img,
-                                &*overlay,
-                                (intersect.left - r.left).into(),
-                                (intersect.top - r.top).into(),
-                            );
+
+                            if img.width() != output.logical_size.0 as u32 {
+                                let overlay = image::imageops::resize(
+                                    &overlay.to_image(),
+                                    (intersect.right - intersect.left) as u32,
+                                    (intersect.bottom - intersect.top) as u32,
+                                    image::imageops::FilterType::Lanczos3,
+                                );
+                                image::imageops::overlay(
+                                    &mut img,
+                                    &overlay,
+                                    (intersect.left - r.left).into(),
+                                    (intersect.top - r.top).into(),
+                                );
+                            } else {
+                                image::imageops::overlay(
+                                    &mut img,
+                                    &*overlay,
+                                    (intersect.left - r.left).into(),
+                                    (intersect.top - r.top).into(),
+                                );
+                            }
                         }
-                    }
 
-                    if let Some(ref image_path) = image_path {
-                        if let Err(err) = Screenshot::save_rgba(&img, image_path) {
-                            success = false;
+                        if let Some(ref image_path) = image_path {
+                            if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                                success = false;
+                            }
+                        } else {
+                            let mut buffer = Vec::new();
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                                log::error!("Failed to save screenshot to buffer: {:?}", e);
+                                success = false;
+                            } else {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                            };
                         }
                     } else {
-                        let mut buffer = Vec::new();
-                        if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                            log::error!("Failed to save screenshot to buffer: {:?}", e);
-                            success = false;
-                        } else {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                        };
+                        success = false;
                     }
                 }
                 Choice::Window(output, Some(window_i)) => {

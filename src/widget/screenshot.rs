@@ -291,7 +291,14 @@ where
                     .spacing(space_s)
                     .align_items(cosmic::iced_core::Alignment::Center),
                     vertical::light().height(Length::Fixed(64.0)),
-                    button(text(fl!("capture"))).on_press(on_capture),
+                    button(text(fl!("capture"))).on_press_maybe(
+                        if let Choice::Rectangle(r, ..) = choice {
+                            // Disable button on empty selection
+                            r.dimensions().is_some().then_some(on_capture)
+                        } else {
+                            Some(on_capture)
+                        }
+                    ),
                     vertical::light().height(Length::Fixed(64.0)),
                     dropdown(
                         save_locations.as_slice(),
