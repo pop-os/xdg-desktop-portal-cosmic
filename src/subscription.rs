@@ -1,9 +1,6 @@
 // contains the subscription which sends portal events and response channels to iced.
 
-use std::{
-    any::TypeId,
-    fmt::{Debug, Formatter},
-};
+use std::any::TypeId;
 
 use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
 use futures::{future, SinkExt};
@@ -16,7 +13,7 @@ use crate::{
     APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Event {
     Access(crate::access::AccessDialogArgs),
     FileChooser(crate::file_chooser::Args),
@@ -28,61 +25,6 @@ pub enum Event {
     HighContrast(bool),
     Config(config::Config),
     Init(tokio::sync::mpsc::Sender<Event>),
-}
-
-impl Debug for Event {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Event::Access(args) => f
-                .debug_struct("Access")
-                .field("title", &args.title)
-                .field("subtitle", &args.subtitle)
-                .field("body", &args.body)
-                .field("options", &args.options)
-                .field("app_id", &args.app_id)
-                .field("parent_window", &args.parent_window)
-                .field("handle", &args.handle)
-                .finish(),
-            Event::FileChooser(args) => f
-                .debug_struct("FileChooser")
-                .field("handle", &args.handle)
-                .field("app_id", &args.app_id)
-                .field("parent_window", &args.parent_window)
-                .field("title", &args.title)
-                .field("options", &args.options)
-                .finish(),
-            Event::Screenshot(crate::screenshot::Args {
-                handle,
-                app_id,
-                parent_window,
-                options,
-                output_images: images,
-                choice,
-                action,
-                location,
-                tx: _tx,
-                toplevel_images,
-            }) => f
-                .debug_struct("Screenshot")
-                .field("handle", handle)
-                .field("app_id", app_id)
-                .field("parent_window", parent_window)
-                .field("images", &images.keys().collect::<Vec<_>>())
-                .field("options", options)
-                .field("choice", choice)
-                .field("action", action)
-                .field("location", location)
-                .field("toplevel_images", toplevel_images)
-                .finish(),
-            Event::Screencast(s) => s.fmt(f),
-            Event::CancelScreencast(h) => f.debug_tuple("CancelScreencast").field(h).finish(),
-            Event::Accent(a) => a.fmt(f),
-            Event::IsDark(t) => t.fmt(f),
-            Event::HighContrast(c) => c.fmt(f),
-            Event::Config(c) => c.fmt(f),
-            Event::Init(tx) => tx.fmt(f),
-        }
-    }
 }
 
 pub enum State {
