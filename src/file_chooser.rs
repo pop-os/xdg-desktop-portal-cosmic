@@ -240,7 +240,7 @@ pub enum Msg {
     DialogResult(DialogResult),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Args {
     pub handle: zvariant::ObjectPath<'static>,
     pub app_id: String,

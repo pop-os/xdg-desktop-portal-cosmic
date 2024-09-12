@@ -17,7 +17,7 @@ use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::{collections::HashMap, fmt::Debug, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
@@ -385,7 +385,7 @@ pub enum Action {
     Choice(Choice),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Args {
     pub handle: zvariant::ObjectPath<'static>,
     pub app_id: String,
@@ -399,7 +399,6 @@ pub struct Args {
     pub action: Action,
 }
 
-#[derive(Clone, Debug)]
 struct Output {
     output: WlOutput,
     logical_position: (i32, i32),
