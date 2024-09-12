@@ -62,24 +62,34 @@ impl Request {
 }
 
 impl Request {
-    async fn run<T: zvariant::Type + serde::Serialize, Fut: Future<Output = PortalResponse<T>>>(
+    async fn run<T, DropFut, F, Fut>(
         connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
+        handle: &zvariant::ObjectPath<'_>,
+        on_cancel: F,
         task: Fut,
-    ) -> PortalResponse<T> {
+    ) -> PortalResponse<T>
+    where
+        T: zvariant::Type + serde::Serialize,
+        DropFut: Future<Output = ()>,
+        F: FnOnce() -> DropFut,
+        Fut: Future<Output = PortalResponse<T>>,
+    {
         let (abortable, abort_handle) = abortable(task);
         let _ = connection
             .object_server()
-            .at(&handle, Request(abort_handle))
+            .at(handle, Request(abort_handle))
             .await;
         let resp = abortable.await;
         let _ = connection
             .object_server()
-            .remove::<Request, _>(&handle)
+            .remove::<Request, _>(handle)
             .await;
         match resp {
             Ok(resp) => resp,
-            _ => PortalResponse::Cancelled,
+            _ => {
+                on_cancel().await;
+                PortalResponse::Cancelled
+            }
         }
     }
 }
@@ -138,7 +148,7 @@ impl<Data: Send + Sync + 'static> std::ops::DerefMut for Session<Data> {
 
 async fn session_interface<Data: Send + Sync + 'static>(
     connection: &zbus::Connection,
-    session_handle: zvariant::ObjectPath<'_>,
+    session_handle: &zvariant::ObjectPath<'_>,
 ) -> Option<zbus::InterfaceRef<Session<Data>>> {
     connection
         .object_server()

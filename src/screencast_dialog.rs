@@ -31,39 +31,25 @@ pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 pub static SCREENCAST_WIDGET_ID: Lazy<widget::Id> =
     Lazy::new(|| widget::Id::new("screencast".to_string()));
 
-struct HideDialogOnDrop(
-    Option<(
-        mpsc::Sender<crate::subscription::Event>,
-        zvariant::ObjectPath<'static>,
-    )>,
-);
-
-impl HideDialogOnDrop {
-    fn clear(mut self) {
-        self.0 = None;
-    }
-}
-
-// Want to hide dialog if future is cancelled
-impl Drop for HideDialogOnDrop {
-    fn drop(&mut self) {
-        if let Some((tx, session_handle)) = self.0.take() {
-            // TODO async destructor
-            let _ = tx.try_send(crate::subscription::Event::CancelScreencast(session_handle));
-        }
-    }
+pub async fn hide_screencast_prompt(
+    subscription_tx: &mpsc::Sender<crate::subscription::Event>,
+    session_handle: &zvariant::ObjectPath<'_>,
+) {
+    let _ = subscription_tx
+        .send(crate::subscription::Event::CancelScreencast(
+            session_handle.to_owned(),
+        ))
+        .await;
 }
 
 pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
-    session_handle: zvariant::ObjectPath<'static>,
+    session_handle: &zvariant::ObjectPath<'_>,
     app_id: String,
     multiple: bool,
     source_types: BitFlags<SourceType>,
     wayland_helper: &WaylandHelper,
 ) -> Option<CaptureSources> {
-    let hide_on_drop = HideDialogOnDrop(Some((subscription_tx.clone(), session_handle.clone())));
-
     let locales = get_languages_from_env();
     let desktop_entries = load_desktop_entries(&locales).await;
 
@@ -98,7 +84,7 @@ pub async fn show_screencast_prompt(
 
     let (tx, mut rx) = mpsc::channel(1);
     let args = Args {
-        session_handle,
+        session_handle: session_handle.to_owned(),
         outputs,
         toplevels,
         multiple,
@@ -111,9 +97,7 @@ pub async fn show_screencast_prompt(
         .send(crate::subscription::Event::Screencast(args))
         .await
         .unwrap();
-    let resp = rx.recv().await.unwrap();
-    hide_on_drop.clear();
-    resp
+    rx.recv().await.unwrap()
 }
 
 async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry<'static>> {
