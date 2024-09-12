@@ -1,10 +1,7 @@
 #![allow(dead_code, unused_variables)]
 
 use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
-use futures::{
-    future::abortable,
-    stream::{FuturesOrdered, StreamExt},
-};
+use futures::stream::{FuturesOrdered, StreamExt};
 use std::{collections::HashMap, mem};
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
@@ -113,7 +110,7 @@ impl ScreenCast {
         options: SelectSourcesOptions,
     ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
         // TODO: Handle other options
-        match crate::session_interface::<SessionData>(connection, session_handle).await {
+        match crate::session_interface::<SessionData>(connection, &session_handle).await {
             Some(interface) => {
                 let mut session_data = interface.get_mut().await;
                 session_data.cursor_mode = options.cursor_mode;
@@ -138,9 +135,10 @@ impl ScreenCast {
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> PortalResponse<StartResult> {
-        Request::run(connection, handle, async {
+        let on_cancel = || screencast_dialog::hide_screencast_prompt(&self.tx, &session_handle);
+        Request::run(connection, &handle, on_cancel, async {
             let Some(interface) =
-                crate::session_interface::<SessionData>(connection, session_handle.clone()).await
+                crate::session_interface::<SessionData>(connection, &session_handle).await
             else {
                 return PortalResponse::Other;
             };
@@ -163,7 +161,7 @@ impl ScreenCast {
             // Show dialog to prompt for what to capture
             let resp = screencast_dialog::show_screencast_prompt(
                 &self.tx,
-                session_handle.to_owned(),
+                &session_handle,
                 app_id,
                 multiple,
                 source_types,
