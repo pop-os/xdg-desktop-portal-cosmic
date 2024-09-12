@@ -15,7 +15,7 @@ use crate::screencast::ScreenCast;
 use crate::screenshot::Screenshot;
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
-    DBUS_NAME, DBUS_PATH, Settings, config, wayland,
+    DBUS_NAME, DBUS_PATH, Settings, config, remote_desktop::RemoteDesktop, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -90,6 +90,7 @@ pub(crate) async fn process_changes(
             let connection = zbus::connection::Builder::session()?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
+                .serve_at(DBUS_PATH, RemoteDesktop)?
                 .serve_at(
                     DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
