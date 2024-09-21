@@ -127,7 +127,7 @@ where
                     let portion =
                         (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
                     layer_container(
-                        cosmic::widget::button(
+                        button::custom(
                             image::Image::new(image::Handle::from_pixels(
                                 img.width(),
                                 img.height(),
@@ -232,7 +232,7 @@ where
             menu_element: cosmic::widget::container(
                 row![
                     row![
-                        button(
+                        button::custom(
                             icon::Icon::from(
                                 icon::from_name("screenshot-selection-symbolic").size(64)
                             )
@@ -253,7 +253,7 @@ where
                             DragState::None
                         )))
                         .padding(space_xs),
-                        button(
+                        button::custom(
                             icon::Icon::from(
                                 icon::from_name("screenshot-window-symbolic").size(64)
                             )
@@ -269,7 +269,7 @@ where
                         .style(cosmic::theme::Button::Icon)
                         .on_press(on_choice_change(Choice::Window(output.name.clone(), None)))
                         .padding(space_xs),
-                        button(
+                        button::custom(
                             icon::Icon::from(
                                 icon::from_name("screenshot-screen-symbolic").size(64)
                             )
@@ -291,7 +291,7 @@ where
                     .spacing(space_s)
                     .align_items(cosmic::iced_core::Alignment::Center),
                     vertical::light().height(Length::Fixed(64.0)),
-                    button(text(fl!("capture"))).on_press_maybe(
+                    button::custom(text(fl!("capture"))).on_press_maybe(
                         if let Choice::Rectangle(r, ..) = choice {
                             // Disable button on empty selection
                             r.dimensions().is_some().then_some(on_capture)
@@ -306,7 +306,7 @@ where
                         dropdown_selected
                     ),
                     vertical::light().height(Length::Fixed(64.0)),
-                    button(
+                    button::custom(
                         icon::Icon::from(icon::from_name("window-close-symbolic").size(63))
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))

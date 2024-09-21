@@ -354,7 +354,7 @@ fn output_button<'a>(
     children.push(row.into());
     let column = widget::column::with_children(children).spacing(12);
 
-    widget::button(column)
+    widget::button::custom(column)
         .width(iced::Length::Fill)
         .padding(8)
         .selected(is_selected)
@@ -386,7 +386,7 @@ fn toplevel_button(
             color: Some(container.on.into()),
         }
     }));
-    let button = widget::button(text)
+    let button = widget::button::custom(text)
         .width(iced::Length::Fill)
         .padding(0)
         // TODO hover style? Etc.
