@@ -202,7 +202,7 @@ impl Session {
         self.0.condvar.notify_all();
     }
 
-    fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> T {
+    pub fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> T {
         let data = self
             .0
             .condvar
