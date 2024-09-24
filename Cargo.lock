@@ -1443,7 +1443,7 @@ dependencies = [
 [[package]]
 name = "cosmic-files"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-files#c7117049478712de70ea4ea1982ae35db8e531a8"
+source = "git+https://github.com/pop-os/cosmic-files#d2344b56aa7775872a798273b763dc35cb1ee226"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -1516,7 +1516,7 @@ dependencies = [
 [[package]]
 name = "cosmic-settings-daemon"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/dbus-settings-bindings#063c2ad0dbe090d7e1221817128098493838b13a"
+source = "git+https://github.com/pop-os/dbus-settings-bindings#8059e6bdaa35fecd70d228a999ca342fb00d313b"
 dependencies = [
  "zbus 4.4.0",
 ]
