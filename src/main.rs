@@ -20,6 +20,7 @@ mod screencast_dialog;
 mod screencast_thread;
 mod screenshot;
 mod subscription;
+mod systemd;
 mod wayland;
 mod widget;
 

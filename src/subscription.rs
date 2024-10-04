@@ -148,7 +148,7 @@ pub(crate) async fn process_changes(
                             .object_server()
                             .interface::<_, Background>(DBUS_PATH)
                             .await?;
-                        Background::running_applications_changed(background.signal_context())
+                        Background::running_applications_changed(background.signal_emitter())
                             .await?;
                     }
                     Event::Accent(a) => {

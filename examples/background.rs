@@ -70,7 +70,7 @@ impl cosmic::Application for App {
             })
             .width(Length::Fill)
             .into(),
-            widget::button("Run in background")
+            widget::button::standard("Run in background")
                 .on_press(Message::RequestBackground)
                 .padding(8.0)
                 .into(),
