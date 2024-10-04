@@ -155,7 +155,7 @@ impl cosmic::Application for CosmicPortal {
                     screencast_dialog::cancel(self, handle).map(cosmic::Action::App)
                 }
                 subscription::Event::Background(args) => {
-                    background::update_args(self, args).map(cosmic::app::Message::App)
+                    background::update_args(self, args).map(cosmic::Action::App)
                 }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
