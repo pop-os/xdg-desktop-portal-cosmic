@@ -2,6 +2,7 @@
 
 use std::{
     borrow::Cow,
+    collections::HashSet,
     io,
     path::Path,
     sync::{Arc, Condvar, Mutex},
@@ -21,7 +22,7 @@ use zbus::{fdo, object_server::SignalContext, zvariant};
 use crate::{
     app::CosmicPortal,
     config::{self, background::PermissionDialog},
-    fl, subscription,
+    fl, subscription, systemd,
     wayland::WaylandHelper,
     PortalResponse,
 };
@@ -92,7 +93,7 @@ impl Background {
             .await?;
 
         file.write_all(desktop_entry.to_string().as_bytes()).await?;
-        /// Shouldn't be needed, but the file never seemed to flush to disk until I did it manually
+        // Shouldn't be needed, but the file never seemed to flush to disk until I did it manually
         file.flush().await
     }
 }
@@ -100,38 +101,53 @@ impl Background {
 #[zbus::interface(name = "org.freedesktop.impl.portal.Background")]
 impl Background {
     /// Status on running apps (active, running, or background)
-    async fn get_app_state(&self) -> fdo::Result<AppStates> {
-        let apps: Vec<_> = self
-            .wayland_helper
-            .toplevels()
+    async fn get_app_state(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> fdo::Result<AppStates> {
+        let apps: HashSet<_> = systemd::Systemd1Proxy::new(connection)
+            .await?
+            .list_units()
+            .await?
             .into_iter()
-            .map(|(_, info)| {
-                let status = if info
-                    .state
-                    .contains(&zcosmic_toplevel_handle_v1::State::Activated)
-                {
-                    AppStatus::Active
-                } else if !info.state.is_empty() {
-                    AppStatus::Running
-                } else {
-                    // xxx Is this the correct way to determine if a program is running in the
-                    // background? If a toplevel exists but isn't running, activated, et cetera,
-                    // then it logically must be in the background (?)
-                    AppStatus::Background
-                };
-
-                AppState {
-                    app_id: info.app_id,
-                    status,
-                }
+            // Apps launched by COSMIC/Flatpak are considered running in the background by default
+            .filter_map(|unit| {
+                unit.cosmic_flatpak_name().map(|app_id| AppState {
+                    app_id: app_id.to_owned(),
+                    status: AppStatus::Background,
+                })
             })
+            .chain(
+                self.wayland_helper
+                    .toplevels()
+                    .into_iter()
+                    // Unless that app is found to have windows open in which case the state is
+                    // overridden as Active/Running
+                    .map(|(_, info)| {
+                        let status = if info
+                            .state
+                            .contains(&zcosmic_toplevel_handle_v1::State::Activated)
+                        {
+                            AppStatus::Active
+                        } else {
+                            AppStatus::Running
+                        };
+
+                        AppState {
+                            app_id: info.app_id,
+                            status,
+                        }
+                    }),
+            )
             .collect();
 
         log::debug!("GetAppState returning {} toplevels", apps.len());
         #[cfg(debug_assertions)]
         log::trace!("App status: {apps:#?}");
 
-        Ok(AppStates { apps })
+        Ok(AppStates {
+            apps: apps.into_iter().collect(),
+        })
     }
 
     /// Notifies the user that an app is running in the background
@@ -269,8 +285,8 @@ impl Background {
             log::debug!("{appid} sanitized autostart command line: {exec}");
             autostart_fde.add_desktop_entry("Exec", &exec);
 
-            /// xxx Replace with enumflags later when it's added as a dependency instead of adding
-            /// it now for one bit (literally)
+            // xxx Replace with enumflags later when it's added as a dependency instead of adding
+            // it now for one bit (literally)
             let dbus_activation = flags & 0x1 == 1;
             if dbus_activation {
                 autostart_fde.add_desktop_entry("DBusActivatable", "true");
@@ -297,7 +313,7 @@ impl Background {
     pub async fn running_applications_changed(context: &SignalContext<'_>) -> zbus::Result<()>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, zvariant::Type)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, zvariant::Type)]
 #[zvariant(signature = "u")]
 pub enum AppStatus {
     /// No open windows
@@ -314,7 +330,7 @@ struct AppStates {
     apps: Vec<AppState>,
 }
 
-#[derive(Clone, Debug, zvariant::SerializeDict, zvariant::Type)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "{sv}")]
 struct AppState {
     app_id: String,
