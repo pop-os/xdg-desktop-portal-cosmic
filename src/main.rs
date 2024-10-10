@@ -1,6 +1,6 @@
 use cosmic::cosmic_theme::palette::Srgba;
-use futures::future::AbortHandle;
-use std::collections::HashMap;
+use futures::future::{abortable, AbortHandle};
+use std::{collections::HashMap, future::Future};
 use zbus::zvariant::{self, OwnedValue};
 
 pub use cosmic_portal_config as config;
@@ -61,6 +61,39 @@ impl Request {
     }
 }
 
+impl Request {
+    async fn run<T, DropFut, F, Fut>(
+        connection: &zbus::Connection,
+        handle: &zvariant::ObjectPath<'_>,
+        on_cancel: F,
+        task: Fut,
+    ) -> PortalResponse<T>
+    where
+        T: zvariant::Type + serde::Serialize,
+        DropFut: Future<Output = ()>,
+        F: FnOnce() -> DropFut,
+        Fut: Future<Output = PortalResponse<T>>,
+    {
+        let (abortable, abort_handle) = abortable(task);
+        let _ = connection
+            .object_server()
+            .at(handle, Request(abort_handle))
+            .await;
+        let resp = abortable.await;
+        let _ = connection
+            .object_server()
+            .remove::<Request, _>(handle)
+            .await;
+        match resp {
+            Ok(resp) => resp,
+            _ => {
+                on_cancel().await;
+                PortalResponse::Cancelled
+            }
+        }
+    }
+}
+
 struct Session<T: Send + Sync + 'static> {
     data: T,
     close_cb: Option<Box<dyn FnOnce(&mut T) + Send + Sync + 'static>>,
@@ -115,7 +148,7 @@ impl<Data: Send + Sync + 'static> std::ops::DerefMut for Session<Data> {
 
 async fn session_interface<Data: Send + Sync + 'static>(
     connection: &zbus::Connection,
-    session_handle: zvariant::ObjectPath<'_>,
+    session_handle: &zvariant::ObjectPath<'_>,
 ) -> Option<zbus::InterfaceRef<Session<Data>>> {
     connection
         .object_server()

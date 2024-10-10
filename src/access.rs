@@ -4,19 +4,22 @@ use cosmic::iced::wayland::actions::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::iced::wayland::actions::window::SctkWindowSettings;
 use cosmic::iced_sctk::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::iced_sctk::commands::window::{close_window, get_window};
-use cosmic::widget::{button, container, dropdown, horizontal_space, icon, text, Row};
+use cosmic::widget::{self, button, dropdown, icon, text, Column};
 use cosmic::{
     iced::{
+        keyboard::{key::Named, Key},
         widget::{column, row},
-        window, Length,
+        window,
     },
     iced_core::Alignment,
 };
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
 use crate::wayland::WaylandHelper;
+use crate::widget::keyboard_wrapper::KeyboardWrapper;
 use crate::{app::CosmicPortal, fl};
 use crate::{subscription, PortalResponse};
 
@@ -51,7 +54,7 @@ impl Access {
     }
 }
 
-#[zbus::interface(name = "")]
+#[zbus::interface(name = "org.freedesktop.impl.portal.Access")]
 impl Access {
     #[allow(clippy::too_many_arguments)]
     async fn access_dialog(
@@ -68,6 +71,20 @@ impl Access {
         // await response via channel
         log::debug!("Access dialog {app_id} {parent_window} {title} {subtitle} {body} {options:?}");
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        // `widget::dialog` needs a slice of labels
+        let choice_labels: Vec<Vec<String>> = options
+            .choices
+            .iter()
+            .flatten()
+            .map(|(_, _, choices, _)| choices.iter().map(|(_, label)| label.clone()).collect())
+            .collect();
+        let active_choices = options
+            .choices
+            .iter()
+            .flatten()
+            .map(|(id, _, _, initial)| (id.clone(), initial.clone()))
+            .filter(|(_, value)| !value.is_empty())
+            .collect();
         if let Err(err) = self
             .tx
             .send(subscription::Event::Access(AccessDialogArgs {
@@ -78,6 +95,8 @@ impl Access {
                 subtitle: subtitle.to_string(),
                 body: body.to_string(),
                 options,
+                active_choices,
+                choice_labels,
                 tx,
             }))
             .await
@@ -99,7 +118,7 @@ pub enum Msg {
     Choice(usize, usize),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct AccessDialogArgs {
     pub handle: zvariant::ObjectPath<'static>,
     pub app_id: String,
@@ -108,6 +127,8 @@ pub(crate) struct AccessDialogArgs {
     pub subtitle: String,
     pub body: String,
     pub options: AccessDialogOptions,
+    pub active_choices: HashMap<String, String>,
+    pub choice_labels: Vec<Vec<String>>,
     pub tx: Sender<PortalResponse<AccessDialogResult>>,
 }
 
@@ -155,57 +176,65 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
         return text("Oops, no access dialog args").into();
     };
 
-    let choices = &portal.access_choices;
-    let mut options = Vec::with_capacity(choices.len() + 3);
-    for (i, choice) in choices.iter().enumerate() {
-        options.push(dropdown(choice.1.as_slice(), choice.0, move |j| Msg::Choice(i, j)).into());
+    let choices = &args.options.choices.as_deref().unwrap_or(&[]);
+    let mut options = Vec::with_capacity(choices.len());
+    for (i, ((id, label, choices, initial), choice_labels)) in
+        choices.iter().zip(&args.choice_labels).enumerate()
+    {
+        let label = text(label);
+        let active_choice = args
+            .active_choices
+            .get(id)
+            .and_then(|choice_id| choices.iter().position(|(x, _)| x == choice_id));
+        let dropdown = dropdown(&choice_labels, active_choice, move |j| Msg::Choice(i, j));
+        options.push(row![label, dropdown].into());
     }
-    options.push(horizontal_space(Length::Fill).into());
-    options.push(
-        button::text(
+
+    let options = Column::with_children(options)
+        .spacing(spacing.space_xxs as f32) // space_l
+        .align_items(Alignment::Center);
+
+    let icon = icon::Icon::from(
+        icon::from_name(
             args.options
-                .deny_label
-                .clone()
-                .unwrap_or_else(|| fl!("cancel")),
+                .icon
+                .as_ref()
+                .map_or("image-missing", |name| name.as_str()),
         )
-        .on_press(Msg::Cancel)
-        .into(),
-    );
-    options.push(
-        button::text(
-            args.options
-                .grant_label
-                .clone()
-                .unwrap_or_else(|| fl!("allow")),
-        )
-        .on_press(Msg::Allow)
-        .style(cosmic::theme::Button::Suggested)
-        .into(),
+        .size(64),
     );
 
-    container(
-        column![
-            row![
-                icon::Icon::from(
-                    icon::from_name(
-                        args.options
-                            .icon
-                            .as_ref()
-                            .map_or("image-missing", |name| name.as_str())
-                    )
-                    .size(64)
-                )
-                .width(Length::Fixed(64.0))
-                .height(Length::Fixed(64.0)), // TODO icon for the dialog
-                text(args.title.as_str()),
-                text(args.subtitle.as_str()),
-                text(args.body.as_str()),
-            ],
-            Row::with_children(options)
-                .spacing(spacing.space_xxs as f32) // space_l
-                .align_items(Alignment::Center),
-        ]
-        .spacing(spacing.space_l as f32), // space_l
+    let control = column![text(args.body.as_str()), options].spacing(spacing.space_m as f32);
+
+    let cancel_button = button::text(
+        args.options
+            .deny_label
+            .clone()
+            .unwrap_or_else(|| fl!("cancel")),
+    )
+    .on_press(Msg::Cancel);
+
+    let allow_button = button::text(
+        args.options
+            .grant_label
+            .clone()
+            .unwrap_or_else(|| fl!("allow")),
+    )
+    .on_press(Msg::Allow)
+    .style(cosmic::theme::Button::Suggested);
+
+    KeyboardWrapper::new(
+        widget::dialog(&args.title)
+            .body(&args.subtitle)
+            .control(control)
+            .icon(icon)
+            .secondary_action(cancel_button)
+            .primary_action(allow_button),
+        |key| match key {
+            Key::Named(Named::Enter) => Some(Msg::Allow),
+            Key::Named(Named::Escape) => Some(Msg::Cancel),
+            _ => None,
+        },
     )
     .into()
 }
@@ -215,11 +244,10 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         Msg::Allow => {
             let args = portal.access_args.take().unwrap();
             let tx = args.tx.clone();
+            let choices = args.active_choices.clone().into_iter().collect();
             tokio::spawn(async move {
-                tx.send(PortalResponse::Success(AccessDialogResult {
-                    choices: vec![],
-                }))
-                .await
+                tx.send(PortalResponse::Success(AccessDialogResult { choices }))
+                    .await
             });
 
             args.destroy_surface()
@@ -236,7 +264,12 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         }
         Msg::Choice(i, j) => {
             let args = portal.access_args.as_mut().unwrap();
-            portal.access_choices[i].0 = Some(j);
+            if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i)) {
+                if let Some((option_id, _)) = choice.2.get(j) {
+                    args.active_choices
+                        .insert(choice.0.clone(), option_id.clone());
+                }
+            }
             cosmic::iced::Command::none()
         }
     }

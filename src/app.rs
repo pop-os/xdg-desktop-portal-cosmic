@@ -31,7 +31,6 @@ pub struct CosmicPortal {
     pub config: config::Config,
 
     pub access_args: Option<access::AccessDialogArgs>,
-    pub access_choices: Vec<(Option<usize>, Vec<String>)>,
 
     pub file_choosers: HashMap<window::Id, (file_chooser::Args, file_chooser::Dialog)>,
 
@@ -128,7 +127,6 @@ impl cosmic::Application for CosmicPortal {
                 config_handler,
                 config,
                 access_args: Default::default(),
-                access_choices: Default::default(),
                 file_choosers: Default::default(),
                 screenshot_args: Default::default(),
                 screencast_args: Default::default(),
