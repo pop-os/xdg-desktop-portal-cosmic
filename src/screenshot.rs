@@ -511,7 +511,9 @@ impl Screenshot {
 
     #[zbus(property)]
     fn version(&self) -> u32 {
-        2
+        //TODO: increase version when color picking is implemented
+        // return 1 to indicate that the portal only supports screenshots, not color picking
+        1
     }
 }
 
