@@ -184,6 +184,13 @@ impl Screenshot {
     }
 
     pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
+        let path_parent = path
+            .parent()
+            .expect("Unable to get the screenshot file's parent directory");
+        if !path_parent.exists() {
+            std::fs::create_dir_all(path_parent)?;
+        }
+
         let mut encoder =
             png::Encoder::new(std::fs::File::create(path)?, img.width(), img.height());
         encoder.set_color(png::ColorType::Rgba);
