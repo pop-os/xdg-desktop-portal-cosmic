@@ -83,3 +83,4 @@ clap = { version = "4.5.9", features = ["derive"] }
 
 [profile.release]
 debug = true
+lto = "fat"
