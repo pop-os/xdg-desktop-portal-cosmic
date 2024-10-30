@@ -3,20 +3,20 @@
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::{key::Named, Key};
-use cosmic::iced::wayland::actions::data_device::ActionInner;
-use cosmic::iced::wayland::actions::layer_surface::{IcedOutput, SctkLayerSurfaceSettings};
 use cosmic::iced::{window, Limits};
+use cosmic::iced_core::image::Bytes;
 use cosmic::iced_core::Length;
 use cosmic::iced_runtime::clipboard;
-use cosmic::iced_sctk::commands::data_device;
-use cosmic::iced_sctk::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+    IcedOutput, SctkLayerSurfaceSettings,
+};
+use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
@@ -30,14 +30,6 @@ use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::Drag
 use crate::{fl, subscription, PortalResponse};
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
-#[derive(Clone)]
-pub struct DndCommand(pub Arc<Box<dyn Send + Sync + Fn() -> ActionInner>>);
-
-impl Debug for DndCommand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DndCommand").finish()
-    }
-}
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
 #[zvariant(signature = "a{sv}")]
@@ -144,17 +136,17 @@ impl Screenshot {
     async fn interactive_toplevel_images(
         &self,
         outputs: Vec<(wl_output::WlOutput, (i32, i32), String)>,
-    ) -> anyhow::Result<HashMap<String, Vec<Arc<RgbaImage>>>> {
+    ) -> anyhow::Result<HashMap<String, Vec<(u32, u32, Bytes)>>> {
         let wayland_helper = self.wayland_helper.clone();
 
-        let mut map: HashMap<String, Vec<Arc<RgbaImage>>> = HashMap::with_capacity(outputs.len());
+        let mut map: HashMap<String, _> = HashMap::with_capacity(outputs.len());
         for (output, _, name) in outputs {
             let frame = wayland_helper
                 .capture_output_toplevels_shm(&output, false)
                 .await
                 .into_iter()
                 .filter_map(|img| img.image().ok())
-                .map(Arc::new)
+                .map(|img| (img.width(), img.height(), img.into_vec().into()))
                 .collect();
             map.insert(name.clone(), frame);
         }
@@ -166,7 +158,7 @@ impl Screenshot {
         &self,
         outputs: Vec<(wl_output::WlOutput, (i32, i32), String)>,
         app_id: &str,
-    ) -> anyhow::Result<HashMap<String, Arc<RgbaImage>>> {
+    ) -> anyhow::Result<HashMap<String, (u32, u32, Bytes)>> {
         // collect screenshots from each output
 
         let wayland_helper = self.wayland_helper.clone();
@@ -177,7 +169,12 @@ impl Screenshot {
                 .capture_source_shm(CaptureSource::Output(output), false)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
-            map.insert(name, Arc::new(frame.image()?));
+            map.insert(
+                name,
+                frame
+                    .image()
+                    .map(|img| (img.width(), img.height(), img.into_vec().into()))?,
+            );
         }
 
         Ok(map)
@@ -335,7 +332,6 @@ pub enum Msg {
     Cancel,
     Choice(Choice),
     OutputChanged(WlOutput),
-    DragCommand(DndCommand),
     WindowChosen(String, usize),
     Location(usize),
 }
@@ -375,8 +371,8 @@ pub struct Args {
     pub app_id: String,
     pub parent_window: String,
     pub options: ScreenshotOptions,
-    pub output_images: HashMap<String, Arc<RgbaImage>>,
-    pub toplevel_images: HashMap<String, Vec<Arc<RgbaImage>>>,
+    pub output_images: HashMap<String, (u32, u32, Bytes)>,
+    pub toplevel_images: HashMap<String, Vec<(u32, u32, Bytes)>>,
     pub tx: Sender<PortalResponse<ScreenshotResult>>,
     pub choice: Choice,
     pub location: ImageSaveLocation,
@@ -516,34 +512,34 @@ impl Screenshot {
 }
 
 pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg> {
-    let Some(output) = portal.outputs.iter().find(|o| o.id == id) else {
-        return horizontal_space(Length::Fixed(1.0)).into();
+    let Some((i, output)) = portal.outputs.iter().enumerate().find(|(i, o)| o.id == id) else {
+        return horizontal_space().width(Length::Fixed(1.0)).into();
     };
     let Some(args) = portal.screenshot_args.as_ref() else {
-        return horizontal_space(Length::Fixed(1.0)).into();
+        return horizontal_space().width(Length::Fixed(1.0)).into();
     };
 
-    let Some(raw_image) = args.output_images.get(&output.name) else {
-        return horizontal_space(Length::Fixed(1.0)).into();
+    let Some((width, height, pixels)) = args.output_images.get(&output.name).cloned() else {
+        return horizontal_space().width(Length::Fixed(1.0)).into();
     };
     let theme = portal.core.system_theme().cosmic();
     KeyboardWrapper::new(
         crate::widget::screenshot::ScreenshotSelection::new(
             args.choice.clone(),
-            raw_image.clone(),
+            cosmic::widget::image::Handle::from_rgba(width, height, pixels),
             Msg::Capture,
             Msg::Cancel,
             output,
             id,
             Msg::OutputChanged,
             Msg::Choice,
-            Msg::DragCommand,
             &args.toplevel_images,
             Msg::WindowChosen,
             &portal.location_options,
             args.location as usize,
             Msg::Location,
             theme.spacing,
+            i as u128,
         ),
         |key| match key {
             Key::Named(Named::Enter) => Some(Msg::Capture),
@@ -554,17 +550,17 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
     .into()
 }
 
-pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate::app::Msg> {
+pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
     match msg {
         Msg::Capture => {
-            let mut cmds: Vec<cosmic::Command<crate::app::Msg>> = portal
+            let mut cmds: Vec<cosmic::Task<crate::app::Msg>> = portal
                 .outputs
                 .iter()
                 .map(|o| destroy_layer_surface(o.id))
                 .collect();
             let Some(args) = portal.screenshot_args.take() else {
                 log::error!("Failed to find screenshot Args for Capture message.");
-                return cosmic::Command::batch(cmds);
+                return cosmic::Task::batch(cmds);
             };
             let outputs = portal.outputs.clone();
             let Args {
@@ -580,19 +576,29 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
 
             match choice {
                 Choice::Output(name) => {
-                    if let Some(img) = images.remove(&name) {
+                    if let Some((width, height, buf)) = images.remove(&name) {
                         if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img, image_path) {
-                                log::error!("Failed to capture screenshot: {:?}", err);
-                            };
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                success = false;
+                            if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
+                                if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                                    log::error!("Failed to capture screenshot: {:?}", err);
+                                };
                             } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
+                                log::error!("Failed to produce rgba image for screenshot");
+                                success = false;
+                            }
+                        } else {
+                            if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
+                                let mut buffer = Vec::new();
+                                if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                                    log::error!("Failed to save screenshot to buffer: {:?}", e);
+                                    success = false;
+                                } else {
+                                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                                };
+                            } else {
+                                log::error!("Failed to produce rgba image for screenshot");
+                                success = false;
+                            }
                         }
                     } else {
                         log::error!("Failed to find output {}", name);
@@ -621,7 +627,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                                 continue;
                             };
                             let mut translated_intersect = intersect.translate(-pos.0, -pos.1);
-                            let scale = raw_img.width() as f32 / output.logical_size.0 as f32;
+                            let scale = raw_img.0 as f32 / output.logical_size.0 as f32;
                             translated_intersect.left =
                                 (translated_intersect.left as f32 * scale).round() as i32;
                             translated_intersect.top =
@@ -630,9 +636,13 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                                 (translated_intersect.right as f32 * scale).round() as i32;
                             translated_intersect.bottom =
                                 (translated_intersect.bottom as f32 * scale).round() as i32;
-
+                            let Some(raw_img) =
+                                RgbaImage::from_raw(raw_img.0, raw_img.1, raw_img.2.to_vec())
+                            else {
+                                continue;
+                            };
                             let overlay = image::imageops::crop_imm(
-                                raw_img.as_ref(),
+                                &raw_img,
                                 u32::try_from(translated_intersect.left).unwrap_or_default(),
                                 u32::try_from(translated_intersect.top).unwrap_or_default(),
                                 (translated_intersect.right - translated_intersect.left)
@@ -682,24 +692,34 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     }
                 }
                 Choice::Window(output, Some(window_i)) => {
-                    if let Some(img) = args
+                    if let Some((width, height, buf)) = args
                         .toplevel_images
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
                         if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(img, image_path) {
-                                log::error!("Failed to capture screenshot: {:?}", err);
+                            if let Some(img) = RgbaImage::from_raw(*width, *height, buf.to_vec()) {
+                                if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                                    log::error!("Failed to capture screenshot: {:?}", err);
+                                    success = false;
+                                }
+                            } else {
+                                log::error!("Failed to produce rgba image for screenshot");
                                 success = false;
                             }
                         } else {
                             let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                success = false;
+                            if let Some(img) = RgbaImage::from_raw(*width, *height, buf.to_vec()) {
+                                if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                                    log::error!("Failed to save screenshot to buffer: {:?}", e);
+                                    success = false;
+                                } else {
+                                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                                };
                             } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
+                                log::error!("Failed to produce rgba image for screenshot");
+                                success = false;
+                            }
                         }
                     } else {
                         success = false;
@@ -727,13 +747,13 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                     log::error!("Failed to send screenshot event");
                 }
             });
-            cosmic::Command::batch(cmds)
+            cosmic::Task::batch(cmds)
         }
         Msg::Cancel => {
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
             let Some(args) = portal.screenshot_args.take() else {
                 log::error!("Failed to find screenshot Args for Cancel message.");
-                return cosmic::Command::batch(cmds);
+                return cosmic::Task::batch(cmds);
             };
             let Args { tx, .. } = args;
             tokio::spawn(async move {
@@ -742,7 +762,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 }
             });
 
-            cosmic::Command::batch(cmds)
+            cosmic::Task::batch(cmds)
         }
         Msg::Choice(c) => {
             let choice = (&c).into();
@@ -778,11 +798,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 );
             }
             portal.active_output = Some(wl_output);
-            cosmic::Command::none()
-        }
-        Msg::DragCommand(DndCommand(cmd)) => {
-            let action = cmd();
-            data_device::action(action)
+            cosmic::Task::none()
         }
         Msg::WindowChosen(name, i) => {
             if let Some(args) = portal.screenshot_args.as_mut() {
@@ -815,13 +831,13 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
                 ))
             } else {
                 log::error!("Failed to find screenshot Args for Location message.");
-                cosmic::Command::none()
+                cosmic::Task::none()
             }
         }
     }
 }
 
-pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<crate::app::Msg> {
+pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate::app::Msg> {
     let Args {
         handle,
         app_id,
@@ -843,7 +859,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
         );
         log::warn!("Screenshot outputs: {:?}", portal.outputs);
         log::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
-        return cosmic::Command::none();
+        return cosmic::Task::none();
     }
 
     // update output bg sources
@@ -905,9 +921,9 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<cra
                 },
             )
             .collect();
-        cosmic::Command::batch(cmds)
+        cosmic::Task::batch(cmds)
     } else {
         log::info!("Existing screenshot args updated");
-        cosmic::Command::none()
+        cosmic::Task::none()
     }
 }

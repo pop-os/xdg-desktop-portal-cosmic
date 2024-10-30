@@ -1,10 +1,11 @@
 #![allow(dead_code, unused_variables)]
 
-use cosmic::iced::wayland::actions::layer_surface::SctkLayerSurfaceSettings;
-use cosmic::iced::wayland::actions::window::SctkWindowSettings;
-use cosmic::iced_sctk::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
-use cosmic::iced_sctk::commands::window::{close_window, get_window};
-use cosmic::widget::{button, container, dropdown, horizontal_space, icon, text, Row};
+use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+    IcedOutput, SctkLayerSurfaceSettings,
+};
+use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::widget::autosize::autosize;
+use cosmic::widget::{button, container, dropdown, horizontal_space, icon, text, Id, Row};
 use cosmic::{
     iced::{
         widget::{column, row},
@@ -12,7 +13,6 @@ use cosmic::{
     },
     iced_core::Alignment,
 };
-use once_cell::sync::Lazy;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
@@ -31,8 +31,6 @@ pub(crate) struct AccessDialogOptions {
     #[allow(clippy::type_complexity)]
     choices: Option<Vec<(String, String, Vec<(String, String)>, String)>>,
 }
-
-pub static ACCESS_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
 
 #[derive(zvariant::SerializeDict, zvariant::Type, Debug, Clone)]
 #[zvariant(signature = "a{sv}")]
@@ -79,6 +77,8 @@ impl Access {
                 body: body.to_string(),
                 options,
                 tx,
+                access_id: window::Id::NONE,
+                autosize: false,
             }))
             .await
         {
@@ -97,6 +97,7 @@ pub enum Msg {
     Allow,
     Cancel,
     Choice(usize, usize),
+    Ignore,
 }
 
 #[derive(Clone)]
@@ -109,42 +110,44 @@ pub(crate) struct AccessDialogArgs {
     pub body: String,
     pub options: AccessDialogOptions,
     pub tx: Sender<PortalResponse<AccessDialogResult>>,
+    pub access_id: window::Id,
+    pub autosize: bool,
 }
 
 impl AccessDialogArgs {
-    pub(crate) fn get_surface(&self) -> cosmic::Command<Msg> {
+    pub(crate) fn get_surface(&mut self) -> cosmic::Task<Msg> {
         if self.options.modal.unwrap_or_default() {
             // create a modal surface
-            get_window(SctkWindowSettings {
-                window_id: *ACCESS_ID,
-                app_id: Some(crate::DBUS_NAME.to_string()),
-                title: Some(self.title.clone()),
-                parent: None, // TODO parse parent window and set parent
-                autosize: true,
-                resizable: None,
+            let (id, task) = window::open(window::Settings {
+                resizable: false,
                 ..Default::default()
-            })
+            });
+            self.autosize = true;
+            self.access_id = id;
+            task.map(|_| Msg::Ignore)
         } else {
             // create a layer surface
+            self.access_id = window::Id::unique();
+            self.autosize = false;
             get_layer_surface(SctkLayerSurfaceSettings {
-                id: *ACCESS_ID,
+                id: self.access_id,
                 layer: cosmic_client_toolkit::sctk::shell::wlr_layer::Layer::Top,
                 keyboard_interactivity:
                     cosmic_client_toolkit::sctk::shell::wlr_layer::KeyboardInteractivity::OnDemand,
                 pointer_interactivity: true,
                 anchor: cosmic_client_toolkit::sctk::shell::wlr_layer::Anchor::empty(),
-                output: cosmic::iced::wayland::actions::layer_surface::IcedOutput::Active,
+                output: IcedOutput::Active,
                 namespace: "access portal".to_string(),
                 ..Default::default()
             })
         }
     }
 
-    pub(crate) fn destroy_surface(&self) -> cosmic::Command<Msg> {
+    pub(crate) fn destroy_surface(&self) -> cosmic::Task<Msg> {
         if self.options.modal.unwrap_or_default() {
-            close_window(*ACCESS_ID)
+            window::close(self.access_id)
         } else {
-            destroy_layer_surface(*ACCESS_ID)
+            destroy_layer_surface(self.access_id)
         }
     }
 }
@@ -160,7 +163,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     for (i, choice) in choices.iter().enumerate() {
         options.push(dropdown(choice.1.as_slice(), choice.0, move |j| Msg::Choice(i, j)).into());
     }
-    options.push(horizontal_space(Length::Fill).into());
+    options.push(horizontal_space().width(Length::Fill).into());
     options.push(
         button::text(
             args.options
@@ -179,11 +182,11 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
                 .unwrap_or_else(|| fl!("allow")),
         )
         .on_press(Msg::Allow)
-        .style(cosmic::theme::Button::Suggested)
+        .class(cosmic::theme::Button::Suggested)
         .into(),
     );
 
-    container(
+    let content = container(
         column![
             row![
                 icon::Icon::from(
@@ -203,14 +206,22 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
             ],
             Row::with_children(options)
                 .spacing(spacing.space_xxs as f32) // space_l
-                .align_items(Alignment::Center),
+                .align_y(Alignment::Center),
         ]
         .spacing(spacing.space_l as f32), // space_l
-    )
-    .into()
+    );
+
+    if args.autosize {
+        autosize(content, Id::new(args.app_id.clone()))
+            .min_width(1.)
+            .min_height(1.)
+            .into()
+    } else {
+        content.into()
+    }
 }
 
-pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate::app::Msg> {
+pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
     match msg {
         Msg::Allow => {
             let args = portal.access_args.take().unwrap();
@@ -237,15 +248,16 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Command<crate:
         Msg::Choice(i, j) => {
             let args = portal.access_args.as_mut().unwrap();
             portal.access_choices[i].0 = Some(j);
-            cosmic::iced::Command::none()
+            cosmic::iced::Task::none()
         }
+        Msg::Ignore => cosmic::iced::Task::none(),
     }
     .map(crate::app::Msg::Access)
 }
 pub fn update_args(
     portal: &mut CosmicPortal,
-    msg: AccessDialogArgs,
-) -> cosmic::Command<crate::app::Msg> {
+    mut msg: AccessDialogArgs,
+) -> cosmic::Task<crate::app::Msg> {
     let mut cmds = Vec::with_capacity(2);
     if let Some(args) = portal.access_args.take() {
         // destroy surface and recreate
@@ -261,5 +273,5 @@ pub fn update_args(
 
     cmds.push(msg.get_surface());
     portal.access_args = Some(msg);
-    cosmic::iced::Command::batch(cmds).map(crate::app::Msg::Access)
+    cosmic::iced::Task::batch(cmds).map(crate::app::Msg::Access)
 }

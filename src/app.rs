@@ -1,7 +1,7 @@
 use crate::{access, config, file_chooser, fl, screencast_dialog, screenshot, subscription};
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::widget::{self, dropdown};
-use cosmic::Command;
+use cosmic::Task;
 use cosmic::{
     app, cosmic_config,
     iced::window,
@@ -100,7 +100,7 @@ impl cosmic::Application for CosmicPortal {
             config_handler,
             config,
         }: Self::Flags,
-    ) -> (Self, cosmic::iced::Command<app::Message<Self::Message>>) {
+    ) -> (Self, cosmic::iced::Task<app::Message<Self::Message>>) {
         let mut model = cosmic::widget::dropdown::multi::model();
         model.insert(dropdown::multi::list(
             Some(fl!("save-to")),
@@ -140,7 +140,7 @@ impl cosmic::Application for CosmicPortal {
                 wayland_helper,
                 tx: None,
             },
-            cosmic::iced::Command::none(),
+            cosmic::iced::Task::none(),
         )
     }
 
@@ -149,7 +149,7 @@ impl cosmic::Application for CosmicPortal {
     }
 
     fn view_window(&self, id: window::Id) -> cosmic::prelude::Element<Self::Message> {
-        if id == *access::ACCESS_ID {
+        if Some(id) == self.access_args.as_ref().map(|args| args.access_id) {
             access::view(self).map(Msg::Access)
         } else if id == *screencast_dialog::SCREENCAST_ID {
             screencast_dialog::view(self).map(Msg::Screencast)
@@ -163,7 +163,7 @@ impl cosmic::Application for CosmicPortal {
     fn update(
         &mut self,
         message: Self::Message,
-    ) -> cosmic::iced::Command<app::Message<Self::Message>> {
+    ) -> cosmic::iced::Task<app::Message<Self::Message>> {
         match message {
             Msg::Access(m) => access::update_msg(self, m).map(cosmic::app::Message::App),
             Msg::FileChooser(id, m) => file_chooser::update_msg(self, id, m),
@@ -184,10 +184,10 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
-                | subscription::Event::HighContrast(_) => cosmic::iced::Command::none(),
+                | subscription::Event::HighContrast(_) => cosmic::iced::Task::none(),
                 subscription::Event::Init(tx) => {
                     self.tx = Some(tx);
-                    Command::none()
+                    Task::none()
                 }
             },
             Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::app::Message::App),
@@ -264,7 +264,7 @@ impl cosmic::Application for CosmicPortal {
                     self.prev_rectangle = Some(rect);
                 }
 
-                cosmic::iced::Command::none()
+                cosmic::iced::Task::none()
             }
             Msg::ConfigSetScreenshot(screenshot) => {
                 match &mut self.config_handler {
@@ -276,11 +276,11 @@ impl cosmic::Application for CosmicPortal {
                     None => log::error!("Failed to save config: No config handler"),
                 }
 
-                cosmic::iced::Command::none()
+                cosmic::iced::Task::none()
             }
             Msg::ConfigSubUpdate(config) => {
                 self.config = config;
-                cosmic::iced::Command::none()
+                cosmic::iced::Task::none()
             }
         }
     }
@@ -289,7 +289,7 @@ impl cosmic::Application for CosmicPortal {
     fn subscription(&self) -> cosmic::iced_futures::Subscription<Self::Message> {
         let mut subscriptions = vec![
             subscription::portal_subscription(self.wayland_helper.clone()).map(Msg::Portal),
-            listen_with(|e, _| match e {
+            listen_with(|e, _, _| match e {
                 cosmic::iced_core::Event::PlatformSpecific(
                     cosmic::iced_core::event::PlatformSpecific::Wayland(w_e),
                 ) => match w_e {
@@ -312,7 +312,7 @@ impl cosmic::Application for CosmicPortal {
         &mut self,
         _keys: &[&'static str],
         new_theme: &cosmic::cosmic_theme::ThemeMode,
-    ) -> app::Command<Self::Message> {
+    ) -> app::Task<Self::Message> {
         let old = self.core.system_is_dark();
         let new = new_theme.is_dark;
         if new != old {
@@ -322,19 +322,19 @@ impl cosmic::Application for CosmicPortal {
                 });
             }
         }
-        Command::none()
+        Task::none()
     }
 
     fn system_theme_update(
         &mut self,
         _keys: &[&'static str],
         new_theme: &cosmic::cosmic_theme::Theme,
-    ) -> cosmic::iced::Command<app::Message<Self::Message>> {
+    ) -> cosmic::iced::Task<app::Message<Self::Message>> {
         let old = self.core.system_theme().cosmic();
         let mut msgs = Vec::with_capacity(3);
 
         if old.is_dark != new_theme.is_dark {
-            return Command::none();
+            return Task::none();
         }
 
         if old.accent_color() != new_theme.accent_color() {
@@ -354,6 +354,6 @@ impl cosmic::Application for CosmicPortal {
                 });
             }
         }
-        Command::none()
+        Task::none()
     }
 }

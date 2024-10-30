@@ -269,13 +269,13 @@ pub fn update_msg(
     portal: &mut CosmicPortal,
     id: window::Id,
     msg: Msg,
-) -> cosmic::Command<app::Message<AppMsg>> {
+) -> cosmic::Task<app::Message<AppMsg>> {
     match msg {
         Msg::DialogMessage(dialog_msg) => match portal.file_choosers.get_mut(&id) {
             Some((_args, dialog)) => dialog.update(dialog_msg).map(move |msg| map_msg(id, msg)),
             None => {
                 log::warn!("no file chooser dialog with ID {id:?}");
-                cosmic::Command::none()
+                cosmic::Task::none()
             }
         },
         Msg::DialogResult(dialog_res) => match portal.file_choosers.remove(&id) {
@@ -346,7 +346,7 @@ pub fn update_msg(
                         }
                     }
                 };
-                cosmic::Command::perform(
+                cosmic::Task::perform(
                     async move {
                         let _ = args.tx.send(response).await;
                         cosmic::app::message::none()
@@ -356,13 +356,13 @@ pub fn update_msg(
             }
             None => {
                 log::warn!("no file chooser dialog with ID {id:?}");
-                cosmic::Command::none()
+                cosmic::Task::none()
             }
         },
     }
 }
 
-pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<app::Message<AppMsg>> {
+pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<app::Message<AppMsg>> {
     let mut cmds = Vec::with_capacity(2);
 
     let kind = match &args.options {
@@ -465,5 +465,5 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Command<app
     }
     let id = dialog.window_id();
     portal.file_choosers.insert(id, (args, dialog));
-    cosmic::iced::Command::batch(cmds).map(move |msg| map_msg(id, msg))
+    cosmic::iced::Task::batch(cmds).map(move |msg| map_msg(id, msg))
 }

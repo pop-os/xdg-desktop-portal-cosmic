@@ -5,7 +5,7 @@ use std::{
     fmt::{Debug, Formatter},
 };
 
-use cosmic::{cosmic_theme::palette::Srgba, iced::subscription};
+use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
 use futures::{future, SinkExt};
 use tokio::sync::mpsc::Receiver;
 use zbus::{zvariant, Connection};
@@ -95,11 +95,10 @@ pub(crate) fn portal_subscription(
 ) -> cosmic::iced::Subscription<Event> {
     struct PortalSubscription;
     struct ConfigSubscription;
-    subscription::Subscription::batch([
-        subscription::channel(
+    Subscription::batch([
+        Subscription::run_with_id(
             TypeId::of::<PortalSubscription>(),
-            10,
-            |mut output| async move {
+            cosmic::iced_futures::stream::channel(10, |mut output| async move {
                 let mut state = State::Init;
                 loop {
                     if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
@@ -107,7 +106,7 @@ pub(crate) fn portal_subscription(
                         future::pending::<()>().await;
                     }
                 }
-            },
+            }),
         ),
         cosmic_config::config_subscription(
             TypeId::of::<ConfigSubscription>(),

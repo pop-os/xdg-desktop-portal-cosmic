@@ -1,29 +1,46 @@
-use std::sync::Arc;
+use std::{borrow::Cow, convert::Infallible};
 
 use cosmic::{
-    iced::{mouse, wayland::actions::data_device::DataFromMimeType},
-    iced_core::{
-        self,
-        event::{
-            wayland::{DataSourceEvent, DndOfferEvent},
-            PlatformSpecific,
+    iced::{
+        clipboard::{
+            dnd::{self, DndAction, DndDestinationRectangle, DndEvent, OfferEvent, SourceEvent},
+            mime::{AllowedMimeTypes, AsMimeTypes},
         },
-        layout::Node,
-        renderer::Quad,
-        Border, Color, Length, Point, Rectangle, Renderer, Shadow, Size,
+        mouse,
     },
-    iced_runtime::command::platform_specific::wayland::data_device::ActionInner,
-    widget::Widget,
+    iced_core::{
+        self, clipboard::DndSource, layout::Node, renderer::Quad, Border, Color, Length, Point,
+        Rectangle, Renderer, Shadow, Size,
+    },
+    widget::{self, Widget},
 };
-use wayland_client::protocol::wl_data_device_manager::DndAction;
 
-use crate::screenshot::{DndCommand, Rect};
+use crate::screenshot::Rect;
 
+pub const MIME: &'static str = "X-COSMIC-PORTAL-MyData";
 pub struct MyData;
 
-impl DataFromMimeType for MyData {
-    fn from_mime_type(&self, _mime_type: &str) -> Option<Vec<u8>> {
-        None
+impl TryFrom<(Vec<u8>, String)> for MyData {
+    type Error = Infallible;
+
+    fn try_from(_: (Vec<u8>, String)) -> Result<Self, Self::Error> {
+        Ok(MyData)
+    }
+}
+
+impl AllowedMimeTypes for MyData {
+    fn allowed() -> std::borrow::Cow<'static, [String]> {
+        std::borrow::Cow::Owned(vec![MIME.to_string()])
+    }
+}
+
+impl AsMimeTypes for MyData {
+    fn available(&self) -> std::borrow::Cow<'static, [String]> {
+        std::borrow::Cow::Owned(vec![MIME.to_string()])
+    }
+
+    fn as_bytes(&self, _: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
+        Some(std::borrow::Cow::Borrowed("rectangle".as_bytes()))
     }
 }
 
@@ -67,8 +84,9 @@ pub struct RectangleSelection<Msg> {
     pub rectangle_selection: Rect,
     pub window_id: iced_core::window::Id,
     pub on_rectangle: Box<dyn Fn(DragState, Rect) -> Msg>,
-    pub drag_cmd_produced: Box<dyn Fn(DndCommand) -> Msg>,
     pub drag_state: DragState,
+    widget_id: widget::Id,
+    drag_id: u128,
 }
 
 impl<Msg> RectangleSelection<Msg> {
@@ -77,8 +95,8 @@ impl<Msg> RectangleSelection<Msg> {
         rectangle_selection: Rect,
         drag_direction: DragState,
         window_id: iced_core::window::Id,
+        drag_id: u128,
         on_rectangle: impl Fn(DragState, Rect) -> Msg + 'static,
-        drag_cmd_produced: impl Fn(DndCommand) -> Msg + 'static,
     ) -> Self {
         Self {
             on_rectangle: Box::new(on_rectangle),
@@ -86,7 +104,8 @@ impl<Msg> RectangleSelection<Msg> {
             rectangle_selection,
             output_rect,
             window_id,
-            drag_cmd_produced: Box::new(drag_cmd_produced),
+            drag_id,
+            widget_id: widget::Id::new(format!("rectangle-selection-{window_id:?}")),
         }
     }
 
@@ -340,20 +359,18 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         layout: iced_core::Layout<'_>,
         cursor: iced_core::mouse::Cursor,
         _renderer: &cosmic::Renderer,
-        _clipboard: &mut dyn iced_core::Clipboard,
+        clipboard: &mut dyn iced_core::Clipboard,
         shell: &mut iced_core::Shell<'_, Msg>,
         _viewport: &Rectangle,
     ) -> iced_core::event::Status {
         match event {
-            cosmic::iced_core::Event::PlatformSpecific(PlatformSpecific::Wayland(
-                iced_core::event::wayland::Event::DndOffer(e),
-            )) => {
+            cosmic::iced_core::Event::Dnd(DndEvent::Offer(id, e)) if id == Some(self.drag_id) => {
                 if self.drag_state == DragState::None {
                     return cosmic::iced_core::event::Status::Ignored;
                 }
                 // Don't need to accept mime types or actions
                 match e {
-                    DndOfferEvent::Enter { x, y, .. } => {
+                    OfferEvent::Enter { x, y, .. } => {
                         let p = Point::new(x as f32, y as f32);
                         let cursor = mouse::Cursor::Available(p);
                         if !cursor.is_over(layout.bounds()) {
@@ -363,7 +380,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                         self.handle_drag_pos(x as i32, y as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
-                    DndOfferEvent::Motion { x, y } => {
+                    OfferEvent::Motion { x, y } => {
                         let p = Point::new(x as f32, y as f32);
                         let cursor = mouse::Cursor::Available(p);
                         if !cursor.is_over(layout.bounds()) {
@@ -372,7 +389,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                         self.handle_drag_pos(x as i32, y as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
-                    DndOfferEvent::DropPerformed => {
+                    OfferEvent::Drop => {
                         self.drag_state = DragState::None;
                         shell.publish((self.on_rectangle)(
                             DragState::None,
@@ -383,14 +400,10 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                     _ => cosmic::iced_core::event::Status::Ignored,
                 }
             }
-            cosmic::iced_core::Event::PlatformSpecific(PlatformSpecific::Wayland(
-                iced_core::event::wayland::Event::DataSource(e),
-            )) => {
+            cosmic::iced_core::Event::Dnd(DndEvent::Source(e)) => {
                 if matches!(
                     e,
-                    DataSourceEvent::DndFinished
-                        | DataSourceEvent::Cancelled
-                        | DataSourceEvent::DndDropPerformed
+                    SourceEvent::Finished | SourceEvent::Cancelled | SourceEvent::Dropped
                 ) {
                     self.drag_state = DragState::None;
                     shell.publish((self.on_rectangle)(
@@ -409,15 +422,14 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                 // on press start internal DnD and set drag state
                 if let iced_core::mouse::Event::ButtonPressed(iced_core::mouse::Button::Left) = e {
                     let window_id = self.window_id;
-                    shell.publish((self.drag_cmd_produced)(DndCommand(Arc::new(Box::new(
-                        move || ActionInner::StartDnd {
-                            mime_types: vec!["x-cosmic-screenshot".to_string()],
-                            actions: DndAction::all(),
-                            origin_id: window_id,
-                            icon_id: None,
-                            data: Box::new(MyData),
-                        },
-                    )))));
+
+                    clipboard.start_dnd(
+                        false,
+                        Some(DndSource::Surface(window_id)),
+                        None,
+                        Box::new(MyData),
+                        DndAction::Copy,
+                    );
 
                     let s = self.drag_state(cursor);
                     if let DragState::None = s {
@@ -586,6 +598,36 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
             };
             renderer.fill_quad(quad, accent);
         }
+    }
+
+    fn drag_destinations(
+        &self,
+        _state: &iced_core::widget::Tree,
+        layout: iced_core::Layout<'_>,
+        _renderer: &cosmic::Renderer,
+        dnd_rectangles: &mut iced_core::clipboard::DndDestinationRectangles,
+    ) {
+        let bounds = layout.bounds();
+        dnd_rectangles.push(DndDestinationRectangle {
+            id: self.drag_id,
+            rectangle: dnd::Rectangle {
+                x: bounds.x as f64,
+                y: bounds.y as f64,
+                width: bounds.width as f64,
+                height: bounds.height as f64,
+            },
+            mime_types: vec![Cow::Borrowed(MIME)],
+            actions: DndAction::Copy,
+            preferred: DndAction::Copy,
+        });
+    }
+
+    fn id(&self) -> Option<widget::Id> {
+        Some(self.widget_id.clone())
+    }
+
+    fn set_id(&mut self, id: widget::Id) {
+        self.widget_id = id;
     }
 }
 
