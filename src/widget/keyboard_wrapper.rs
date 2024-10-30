@@ -1,12 +1,8 @@
-use cosmic::{
-    iced_core::{
-        event::{self, Event},
-        keyboard, layout, mouse, overlay, renderer,
-        widget::{Operation, Tree},
-        Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
-    },
-    iced_renderer::core::widget::OperationOutputWrapper,
-    iced_style,
+use cosmic::iced_core::{
+    event::{self, Event},
+    keyboard, layout, mouse, overlay, renderer,
+    widget::{Operation, Tree},
+    Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
 };
 
 #[allow(missing_debug_implementations)]
@@ -60,7 +56,7 @@ where
         tree: &mut Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
-        operation: &mut dyn Operation<OperationOutputWrapper<Message>>,
+        operation: &mut dyn Operation<()>,
     ) {
         self.content
             .as_widget()
@@ -157,10 +153,11 @@ where
         tree: &'b mut Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
+        translation: cosmic::iced::Vector,
     ) -> Option<overlay::Element<'b, Message, cosmic::Theme, cosmic::Renderer>> {
         self.content
             .as_widget_mut()
-            .overlay(&mut tree.children[0], layout, renderer)
+            .overlay(&mut tree.children[0], layout, renderer, translation)
     }
 
     fn drag_destinations(
@@ -168,7 +165,7 @@ where
         state: &Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
-        dnd_rectangles: &mut iced_style::core::clipboard::DndDestinationRectangles,
+        dnd_rectangles: &mut cosmic::iced_core::clipboard::DndDestinationRectangles,
     ) {
         if let Some(state) = state.children.iter().next() {
             self.content

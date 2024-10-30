@@ -3,10 +3,10 @@ use std::{borrow::Cow, collections::HashMap, rc::Rc, sync::Arc};
 use ::image::{EncodableLayout, RgbaImage};
 use cosmic::{
     cosmic_theme::Spacing,
-    iced::window,
+    iced::{self, window},
     iced_core::{
-        alignment, gradient::Linear, layout, overlay, widget::Tree, Background, Border, ContentFit,
-        Degrees, Layout, Length, Point, Size,
+        alignment, gradient::Linear, image::Bytes, layout, overlay, widget::Tree, Background,
+        Border, ContentFit, Degrees, Layout, Length, Point, Size,
     },
     iced_widget::row,
     widget::{
@@ -21,7 +21,7 @@ use wayland_client::protocol::wl_output::WlOutput;
 use crate::{
     app::OutputState,
     fl,
-    screenshot::{Choice, DndCommand, Rect},
+    screenshot::{Choice, Rect},
 };
 
 use super::{
@@ -74,20 +74,20 @@ where
 {
     pub fn new(
         choice: Choice,
-        raw_image: Arc<RgbaImage>,
+        image_handle: image::Handle,
         on_capture: Msg,
         on_cancel: Msg,
         output: &OutputState,
         window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
         on_choice_change: impl Fn(Choice) -> Msg + 'static + Clone,
-        on_drag_cmd_produced: impl Fn(DndCommand) -> Msg + 'static,
-        toplevel_images: &HashMap<String, Vec<Arc<RgbaImage>>>,
+        toplevel_images: &HashMap<String, Vec<(u32, u32, Bytes)>>,
         toplevel_chosen: impl Fn(String, usize) -> Msg,
         save_locations: &'a Vec<String>,
         selected_save_location: usize,
         dropdown_selected: impl Fn(usize) -> Msg + 'static + Clone,
         spacing: Spacing,
+        dnd_id: u128,
     ) -> Self {
         let space_l = spacing.space_l;
         let space_s = spacing.space_s;
@@ -108,8 +108,8 @@ where
                 r,
                 drag_state,
                 window_id,
+                dnd_id,
                 move |s, r| on_choice_change_clone(Choice::Rectangle(r, s)),
-                on_drag_cmd_produced,
             )
             .into(),
             Choice::Output(_) => {
@@ -121,22 +121,17 @@ where
                     .get(&output.name)
                     .cloned()
                     .unwrap_or_default();
-                let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
+                let total_img_width = imgs.iter().map(|img| img.0).sum::<u32>();
 
                 let img_buttons = imgs.into_iter().enumerate().map(|(i, img)| {
-                    let portion =
-                        (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
+                    let portion = (img.0 as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
                     layer_container(
                         button::custom(
-                            image::Image::new(image::Handle::from_pixels(
-                                img.width(),
-                                img.height(),
-                                MyImage(img),
-                            ))
-                            .content_fit(ContentFit::ScaleDown),
+                            image::Image::new(image::Handle::from_rgba(img.0, img.1, img.2))
+                                .content_fit(ContentFit::ScaleDown),
                         )
                         .on_press(toplevel_chosen(output.name.clone(), i))
-                        .style(cosmic::theme::Button::Image),
+                        .class(cosmic::theme::Button::Image),
                     )
                     .align_x(alignment::Horizontal::Center)
                     .width(Length::FillPortion(portion as u16))
@@ -147,7 +142,7 @@ where
                     Row::with_children(img_buttons)
                         .spacing(space_l)
                         .width(Length::Fill)
-                        .align_items(alignment::Alignment::Center)
+                        .align_y(alignment::Alignment::Center)
                         .padding(space_l),
                 )
                 .align_x(alignment::Horizontal::Center)
@@ -159,56 +154,53 @@ where
         };
 
         let bg_element = match choice {
-            Choice::Output(_) | Choice::Rectangle(..) => {
-                image::Image::new(image::Handle::from_pixels(
-                    raw_image.width(),
-                    raw_image.height(),
-                    MyImage(raw_image),
-                ))
+            Choice::Output(_) | Choice::Rectangle(..) => image::Image::new(image_handle)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .into()
-            }
+                .into(),
             Choice::Window(..) => match output.bg_source.clone() {
                 Some(Source::Path(path)) => image::Image::new(image::Handle::from_path(path))
                     .content_fit(ContentFit::Cover)
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .into(),
-                Some(Source::Color(color)) => layer_container(horizontal_space(Length::Fill))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .style(cosmic::theme::Container::Custom(Box::new(move |_| {
-                        let color = color.clone();
-                        cosmic::iced_style::container::Appearance {
-                            background: Some(match color {
-                                cosmic_bg_config::Color::Single(c) => Background::Color(
-                                    cosmic::iced::Color::new(c[0], c[1], c[2], 1.0),
-                                ),
-                                cosmic_bg_config::Color::Gradient(cosmic_bg_config::Gradient {
-                                    colors,
-                                    radius,
-                                }) => {
-                                    let stop_increment = 1.0 / (colors.len() - 1) as f32;
-                                    let mut stop = 0.0;
+                Some(Source::Color(color)) => {
+                    layer_container(horizontal_space().width(Length::Fill))
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .class(cosmic::theme::Container::Custom(Box::new(move |_| {
+                            let color = color.clone();
+                            cosmic::iced_widget::container::Style {
+                                background: Some(match color {
+                                    cosmic_bg_config::Color::Single(c) => Background::Color(
+                                        cosmic::iced::Color::new(c[0], c[1], c[2], 1.0),
+                                    ),
+                                    cosmic_bg_config::Color::Gradient(
+                                        cosmic_bg_config::Gradient { colors, radius },
+                                    ) => {
+                                        let stop_increment = 1.0 / (colors.len() - 1) as f32;
+                                        let mut stop = 0.0;
 
-                                    let mut linear = Linear::new(Degrees(radius));
+                                        let mut linear = Linear::new(Degrees(radius));
 
-                                    for &[r, g, b] in colors.iter() {
-                                        linear = linear
-                                            .add_stop(stop, cosmic::iced::Color::from_rgb(r, g, b));
-                                        stop += stop_increment;
+                                        for &[r, g, b] in colors.iter() {
+                                            linear = linear.add_stop(
+                                                stop,
+                                                cosmic::iced::Color::from_rgb(r, g, b),
+                                            );
+                                            stop += stop_increment;
+                                        }
+
+                                        Background::Gradient(cosmic::iced_core::Gradient::Linear(
+                                            linear,
+                                        ))
                                     }
-
-                                    Background::Gradient(cosmic::iced_core::Gradient::Linear(
-                                        linear,
-                                    ))
-                                }
-                            }),
-                            ..Default::default()
-                        }
-                    })))
-                    .into(),
+                                }),
+                                ..Default::default()
+                            }
+                        })))
+                        .into()
+                }
                 None => image::Image::new(image::Handle::from_path(
                     "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png",
                 ))
@@ -219,7 +211,7 @@ where
             },
         };
         let active_icon =
-            cosmic::theme::Svg::Custom(Rc::new(|t| cosmic::iced_style::svg::Appearance {
+            cosmic::theme::Svg::Custom(Rc::new(|t| cosmic::iced_widget::svg::Style {
                 color: Some(t.cosmic().accent_color().into()),
             }));
         Self {
@@ -238,7 +230,7 @@ where
                             )
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
-                            .style(
+                            .class(
                                 if matches!(choice, Choice::Rectangle(..)) {
                                     active_icon.clone()
                                 } else {
@@ -247,7 +239,7 @@ where
                             )
                         )
                         .selected(matches!(choice, Choice::Rectangle(..)))
-                        .style(cosmic::theme::Button::Icon)
+                        .class(cosmic::theme::Button::Icon)
                         .on_press(on_choice_change(Choice::Rectangle(
                             Rect::default(),
                             DragState::None
@@ -257,7 +249,7 @@ where
                             icon::Icon::from(
                                 icon::from_name("screenshot-window-symbolic").size(64)
                             )
-                            .style(if matches!(choice, Choice::Window(..)) {
+                            .class(if matches!(choice, Choice::Window(..)) {
                                 active_icon.clone()
                             } else {
                                 cosmic::theme::Svg::default()
@@ -266,7 +258,7 @@ where
                             .height(Length::Fixed(40.0))
                         )
                         .selected(matches!(choice, Choice::Window(..)))
-                        .style(cosmic::theme::Button::Icon)
+                        .class(cosmic::theme::Button::Icon)
                         .on_press(on_choice_change(Choice::Window(output.name.clone(), None)))
                         .padding(space_xs),
                         button::custom(
@@ -275,7 +267,7 @@ where
                             )
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
-                            .style(
+                            .class(
                                 if matches!(choice, Choice::Output(..)) {
                                     active_icon.clone()
                                 } else {
@@ -284,12 +276,12 @@ where
                             )
                         )
                         .selected(matches!(choice, Choice::Output(..)))
-                        .style(cosmic::theme::Button::Icon)
+                        .class(cosmic::theme::Button::Icon)
                         .on_press(on_choice_change(Choice::Output(output.name.clone())))
                         .padding(space_xs)
                     ]
                     .spacing(space_s)
-                    .align_items(cosmic::iced_core::Alignment::Center),
+                    .align_y(cosmic::iced_core::Alignment::Center),
                     vertical::light().height(Length::Fixed(64.0)),
                     button::custom(text(fl!("capture"))).on_press_maybe(
                         if let Choice::Rectangle(r, ..) = choice {
@@ -311,16 +303,16 @@ where
                             .width(Length::Fixed(40.0))
                             .height(Length::Fixed(40.0))
                     )
-                    .style(cosmic::theme::Button::Icon)
+                    .class(cosmic::theme::Button::Icon)
                     .on_press(on_cancel),
                 ]
-                .align_items(cosmic::iced_core::Alignment::Center)
+                .align_y(cosmic::iced_core::Alignment::Center)
                 .spacing(space_s)
                 .padding([space_xxs, space_s, space_xxs, space_s]),
             )
-            .style(cosmic::theme::Container::Custom(Box::new(|theme| {
+            .class(cosmic::theme::Container::Custom(Box::new(|theme| {
                 let theme = theme.cosmic();
-                cosmic::iced_style::container::Appearance {
+                cosmic::iced::widget::container::Style {
                     background: Some(Background::Color(theme.background.component.base.into())),
                     text_color: Some(theme.background.component.on.into()),
                     border: Border {
@@ -360,6 +352,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         state: &'b mut Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
+        translation: iced::Vector,
     ) -> Option<cosmic::iced_core::overlay::Element<'b, Msg, cosmic::Theme, cosmic::Renderer>> {
         let children = [
             &mut self.bg_element,
@@ -370,7 +363,9 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         .zip(&mut state.children)
         .zip(layout.children())
         .filter_map(|((child, state), layout)| {
-            child.as_widget_mut().overlay(state, layout, renderer)
+            child
+                .as_widget_mut()
+                .overlay(state, layout, renderer, translation)
         })
         .collect::<Vec<_>>();
 
@@ -457,9 +452,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         tree: &mut cosmic::iced_core::widget::Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
-        operation: &mut dyn cosmic::widget::Operation<
-            cosmic::iced_core::widget::OperationOutputWrapper<Msg>,
-        >,
+        operation: &mut dyn cosmic::widget::Operation<()>,
     ) {
         let layout = layout.children().collect::<Vec<_>>();
         let children = [&self.bg_element, &self.fg_element, &self.menu_element];
@@ -528,13 +521,40 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         cursor: cosmic::iced_core::mouse::Cursor,
         viewport: &cosmic::iced_core::Rectangle,
     ) {
+        use cosmic::iced_core::Renderer;
         let children = &[&self.bg_element, &self.fg_element, &self.menu_element];
-        // draw children in order
-        for (i, (layout, child)) in layout.children().zip(children).enumerate() {
-            let tree = &tree.children[i];
+        let mut children = layout.children().zip(children).enumerate();
+        {
+            let (i, (layout, child)) = children.next().unwrap();
+            let bg_tree = &tree.children[i];
             child
                 .as_widget()
-                .draw(tree, renderer, theme, style, layout, cursor, viewport);
+                .draw(bg_tree, renderer, theme, style, layout, cursor, viewport);
+        }
+
+        // draw children in order
+        renderer.with_layer(layout.bounds(), |renderer| {
+            for (i, (layout, child)) in children {
+                let tree = &tree.children[i];
+                child
+                    .as_widget()
+                    .draw(tree, renderer, theme, style, layout, cursor, viewport);
+            }
+        });
+    }
+    fn drag_destinations(
+        &self,
+        state: &cosmic::iced_core::widget::Tree,
+        layout: cosmic::iced_core::Layout<'_>,
+        renderer: &cosmic::Renderer,
+        dnd_rectangles: &mut cosmic::iced_core::clipboard::DndDestinationRectangles,
+    ) {
+        let children = &[&self.bg_element, &self.fg_element, &self.menu_element];
+        for (i, (layout, child)) in layout.children().zip(children).enumerate() {
+            let state = &state.children[i];
+            child
+                .as_widget()
+                .drag_destinations(state, layout, renderer, dnd_rectangles);
         }
     }
 }
