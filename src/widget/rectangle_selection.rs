@@ -324,6 +324,11 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         ))
     }
 
+    fn tag(&self) -> iced_core::widget::tree::Tag {
+        struct MyState;
+        iced_core::widget::tree::Tag::of::<MyState>()
+    }
+
     fn mouse_interaction(
         &self,
         _state: &iced_core::widget::Tree,
@@ -620,10 +625,6 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
             actions: DndAction::Copy,
             preferred: DndAction::Copy,
         });
-    }
-
-    fn id(&self) -> Option<widget::Id> {
-        Some(self.widget_id.clone())
     }
 
     fn set_id(&mut self, id: widget::Id) {
