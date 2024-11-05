@@ -133,7 +133,7 @@ where
                         .on_press(toplevel_chosen(output.name.clone(), i))
                         .class(cosmic::theme::Button::Image),
                     )
-                    .align_x(alignment::Horizontal::Center)
+                    .align_x(alignment::Alignment::Center)
                     .width(Length::FillPortion(portion as u16))
                     .height(Length::Shrink)
                     .into()
@@ -145,8 +145,8 @@ where
                         .align_y(alignment::Alignment::Center)
                         .padding(space_l),
                 )
-                .align_x(alignment::Horizontal::Center)
-                .align_y(alignment::Vertical::Center)
+                .align_x(alignment::Alignment::Center)
+                .align_y(alignment::Alignment::Center)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -344,7 +344,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
             &mut self.bg_element,
             &mut self.fg_element,
             &mut self.menu_element,
-        ])
+        ]);
     }
 
     fn overlay<'b>(
@@ -533,15 +533,16 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         }
 
         // draw children in order
-        renderer.with_layer(layout.bounds(), |renderer| {
-            for (i, (layout, child)) in children {
+        for (i, (layout, child)) in children {
+            renderer.with_layer(layout.bounds(), |renderer| {
                 let tree = &tree.children[i];
                 child
                     .as_widget()
                     .draw(tree, renderer, theme, style, layout, cursor, viewport);
-            }
-        });
+            });
+        }
     }
+
     fn drag_destinations(
         &self,
         state: &cosmic::iced_core::widget::Tree,
