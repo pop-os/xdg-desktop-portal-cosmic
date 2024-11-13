@@ -12,15 +12,16 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
 };
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
+use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-use image::RgbaImage;
+use image::{imageops, RgbaImage};
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
-use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_output::{self, Transform, WlOutput};
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
@@ -166,14 +167,30 @@ impl Screenshot {
         let mut map = HashMap::with_capacity(outputs.len());
         for (output, _, name) in outputs {
             let frame = wayland_helper
-                .capture_source_shm(CaptureSource::Output(output), false)
+                .capture_source_shm(CaptureSource::Output(output.clone()), false)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
             map.insert(
                 name,
-                frame
-                    .image()
-                    .map(|img| (img.width(), img.height(), img.into_vec().into()))?,
+                frame.image().map(|mut img| {
+                    img = match wayland_helper.output_info(&output) {
+                        Some(OutputInfo {
+                            transform: Transform::_90,
+                            ..
+                        }) => imageops::rotate90(&img),
+                        Some(OutputInfo {
+                            transform: Transform::_180,
+                            ..
+                        }) => imageops::rotate180(&img),
+                        Some(OutputInfo {
+                            transform: Transform::_270,
+                            ..
+                        }) => imageops::rotate270(&img),
+                        _ => img,
+                    };
+                    dbg!(img.width(), img.height());
+                    (img.width(), img.height(), img.into_vec().into())
+                })?,
             );
         }
 
@@ -181,6 +198,7 @@ impl Screenshot {
     }
 
     pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
+        dbg!(img.width(), img.height());
         let mut encoder =
             png::Encoder::new(std::fs::File::create(path)?, img.width(), img.height());
         encoder.set_color(png::ColorType::Rgba);
@@ -578,6 +596,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 Choice::Output(name) => {
                     if let Some((width, height, buf)) = images.remove(&name) {
                         if let Some(ref image_path) = image_path {
+                            dbg!(width, height, buf.len());
                             if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
                                 if let Err(err) = Screenshot::save_rgba(&img, image_path) {
                                     log::error!("Failed to capture screenshot: {:?}", err);
