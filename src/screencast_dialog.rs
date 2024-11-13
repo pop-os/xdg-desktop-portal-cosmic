@@ -457,7 +457,8 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     let control = widget::column::with_children(vec![tabs.into(), list.into()]).spacing(8);
 
     KeyboardWrapper::new(
-        widget::dialog("Share your screen")
+        widget::dialog()
+            .title(fl!("share-screen"))
             // TODO adjust text for multiple select, types?
             .body(fl!("share-screen", "description", app_name = app_name))
             .secondary_action(cancel_button)
