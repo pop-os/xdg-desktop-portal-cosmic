@@ -14,6 +14,7 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::SctkLayerSu
 use cosmic::iced_winit::commands::layer_surface::{
     destroy_layer_surface, get_layer_surface, KeyboardInteractivity, Layer,
 };
+use cosmic::widget::autosize;
 use cosmic::{theme, widget};
 use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
@@ -27,6 +28,8 @@ use wayland_client::protocol::wl_output::WlOutput;
 use zbus::zvariant;
 
 pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
+pub static SCREENCAST_WIDGET_ID: Lazy<widget::Id> =
+    Lazy::new(|| widget::Id::new("screencast".to_string()));
 
 struct HideDialogOnDrop(
     Option<(
@@ -455,20 +458,24 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
     let control = widget::column::with_children(vec![tabs.into(), list.into()]).spacing(8);
-
-    KeyboardWrapper::new(
-        widget::dialog()
-            .title(fl!("share-screen"))
-            // TODO adjust text for multiple select, types?
-            .body(fl!("share-screen", "description", app_name = app_name))
-            .secondary_action(cancel_button)
-            .primary_action(share_button)
-            .control(control),
-        |key| match key {
-            Key::Named(Named::Enter) => Some(Msg::Share),
-            Key::Named(Named::Escape) => Some(Msg::Cancel),
-            _ => None,
-        },
+    autosize::autosize(
+        KeyboardWrapper::new(
+            widget::dialog()
+                .title(fl!("share-screen"))
+                // TODO adjust text for multiple select, types?
+                .body(fl!("share-screen", "description", app_name = app_name))
+                .secondary_action(cancel_button)
+                .primary_action(share_button)
+                .control(control),
+            |key| match key {
+                Key::Named(Named::Enter) => Some(Msg::Share),
+                Key::Named(Named::Escape) => Some(Msg::Cancel),
+                _ => None,
+            },
+        ),
+        SCREENCAST_WIDGET_ID.clone(),
     )
+    .min_width(1.)
+    .min_height(1.)
     .into()
 }
