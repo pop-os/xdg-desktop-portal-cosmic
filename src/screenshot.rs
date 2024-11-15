@@ -188,7 +188,6 @@ impl Screenshot {
                         }) => imageops::rotate270(&img),
                         _ => img,
                     };
-                    dbg!(img.width(), img.height());
                     (img.width(), img.height(), img.into_vec().into())
                 })?,
             );
@@ -198,8 +197,7 @@ impl Screenshot {
     }
 
     pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
-        dbg!(img.width(), img.height());
-        let mut encoder =
+        let mut encoder: png::Encoder<'_, std::fs::File> =
             png::Encoder::new(std::fs::File::create(path)?, img.width(), img.height());
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
@@ -596,7 +594,6 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 Choice::Output(name) => {
                     if let Some((width, height, buf)) = images.remove(&name) {
                         if let Some(ref image_path) = image_path {
-                            dbg!(width, height, buf.len());
                             if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
                                 if let Err(err) = Screenshot::save_rgba(&img, image_path) {
                                     log::error!("Failed to capture screenshot: {:?}", err);
