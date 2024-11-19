@@ -13,14 +13,14 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-use image::{imageops, RgbaImage};
+use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
-use wayland_client::protocol::wl_output::{self, Transform, WlOutput};
+use wayland_client::protocol::wl_output::{self, WlOutput};
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
@@ -171,15 +171,9 @@ impl Screenshot {
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
             map.insert(
                 name,
-                frame.image().map(|mut img| {
-                    img = match frame.transform {
-                        Transform::_90 => imageops::rotate90(&img),
-                        Transform::_180 => imageops::rotate180(&img),
-                        Transform::_270 => imageops::rotate270(&img),
-                        _ => img,
-                    };
-                    (img.width(), img.height(), img.into_vec().into())
-                })?,
+                frame
+                    .image_transformed()
+                    .map(|img| (img.width(), img.height(), img.into_vec().into()))?,
             );
         }
 
