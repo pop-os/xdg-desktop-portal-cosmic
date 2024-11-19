@@ -507,6 +507,25 @@ impl<T: AsFd> ShmImage<T> {
         image::RgbaImage::from_raw(self.width, self.height, mmap.to_vec())
             .ok_or_else(|| anyhow::anyhow!("ShmImage had incorrect size"))
     }
+
+    pub fn image_transformed(&self) -> anyhow::Result<image::RgbaImage> {
+        let mut image = image::DynamicImage::from(self.image()?);
+        image.apply_orientation(match self.transform {
+            wl_output::Transform::Normal => image::metadata::Orientation::NoTransforms,
+            wl_output::Transform::_90 => image::metadata::Orientation::Rotate90,
+            wl_output::Transform::_180 => image::metadata::Orientation::Rotate180,
+            wl_output::Transform::_270 => image::metadata::Orientation::Rotate270,
+            wl_output::Transform::Flipped => image::metadata::Orientation::FlipHorizontal,
+            wl_output::Transform::Flipped90 => image::metadata::Orientation::Rotate90FlipH,
+            wl_output::Transform::Flipped180 => image::metadata::Orientation::FlipVertical,
+            wl_output::Transform::Flipped270 => image::metadata::Orientation::Rotate270FlipH,
+            _ => unreachable!(),
+        });
+        match image {
+            image::DynamicImage::ImageRgba8(image) => Ok(image),
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl ProvidesRegistryState for AppData {
