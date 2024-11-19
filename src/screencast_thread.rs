@@ -16,7 +16,10 @@ use pipewire::{
 };
 use std::{ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
 use tokio::sync::oneshot;
-use wayland_client::protocol::{wl_buffer, wl_shm};
+use wayland_client::{
+    protocol::{wl_buffer, wl_output, wl_shm},
+    WEnum,
+};
 
 use crate::{
     buffer,
@@ -268,9 +271,21 @@ impl StreamData {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
-            if let Err(err) = block_on(self.session.capture_wl_buffer(wl_buffer)) {
-                log::error!("screencopy failed: {:?}", err);
-                // TODO terminate screencasting?
+            match block_on(self.session.capture_wl_buffer(wl_buffer)) {
+                Ok(frame) => {
+                    if let Some(video_transform) = unsafe {
+                        buffer_find_meta_data::<spa_sys::spa_meta_videotransform>(
+                            buffer,
+                            spa_sys::SPA_META_VideoTransform,
+                        )
+                    } {
+                        video_transform.transform = convert_transform(frame.transform);
+                    }
+                }
+                Err(err) => {
+                    log::error!("screencopy failed: {:?}", err);
+                    // TODO terminate screencasting?
+                }
             }
             unsafe { stream.queue_raw_buffer(buffer) };
         }
@@ -354,6 +369,53 @@ fn start_stream(
     Ok((loop_, stream, listener, context, node_id_rx))
 }
 
+fn convert_transform(transform: WEnum<wl_output::Transform>) -> u32 {
+    match transform {
+        WEnum::Value(wl_output::Transform::Normal) => spa_sys::SPA_META_TRANSFORMATION_None,
+        WEnum::Value(wl_output::Transform::_90) => spa_sys::SPA_META_TRANSFORMATION_90,
+        WEnum::Value(wl_output::Transform::_180) => spa_sys::SPA_META_TRANSFORMATION_180,
+        WEnum::Value(wl_output::Transform::_270) => spa_sys::SPA_META_TRANSFORMATION_270,
+        WEnum::Value(wl_output::Transform::Flipped) => spa_sys::SPA_META_TRANSFORMATION_Flipped,
+        WEnum::Value(wl_output::Transform::Flipped90) => spa_sys::SPA_META_TRANSFORMATION_Flipped90,
+        WEnum::Value(wl_output::Transform::Flipped180) => {
+            spa_sys::SPA_META_TRANSFORMATION_Flipped180
+        }
+        WEnum::Value(wl_output::Transform::Flipped270) => {
+            spa_sys::SPA_META_TRANSFORMATION_Flipped270
+        }
+        WEnum::Value(_) | WEnum::Unknown(_) => unreachable!(),
+    }
+}
+
+// SAFETY: buffer must be non-null, and valid as long as return value is used
+unsafe fn buffer_find_meta_data<'a, T>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+) -> Option<&'a mut T> {
+    let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size_of::<T>());
+    (ptr as *mut T).as_mut()
+}
+
+fn meta() -> Vec<u8> {
+    value_to_bytes(pod::Value::Object(pod::Object {
+        type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa_sys::SPA_PARAM_Meta,
+        properties: vec![
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_type,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_VideoTransform)),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_size,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Int(size_of::<spa_sys::spa_meta_videotransform>() as _),
+            },
+        ],
+    }))
+    // TODO: header, video damage
+}
+
 fn params(
     width: u32,
     height: u32,
@@ -367,6 +429,7 @@ fn params(
         // Favor dmabuf over shm by listing it first
         dmabuf.map(|x| format(width, height, Some(x), None)),
         Some(format(width, height, None, None)),
+        Some(meta()),
     ]
     .into_iter()
     .flatten()
