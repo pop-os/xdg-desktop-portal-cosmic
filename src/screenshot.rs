@@ -12,7 +12,6 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
 };
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
-use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use image::{imageops, RgbaImage};
 use rustix::fd::AsFd;
@@ -173,19 +172,10 @@ impl Screenshot {
             map.insert(
                 name,
                 frame.image().map(|mut img| {
-                    img = match wayland_helper.output_info(&output) {
-                        Some(OutputInfo {
-                            transform: Transform::_90,
-                            ..
-                        }) => imageops::rotate90(&img),
-                        Some(OutputInfo {
-                            transform: Transform::_180,
-                            ..
-                        }) => imageops::rotate180(&img),
-                        Some(OutputInfo {
-                            transform: Transform::_270,
-                            ..
-                        }) => imageops::rotate270(&img),
+                    img = match frame.transform {
+                        Transform::_90 => imageops::rotate90(&img),
+                        Transform::_180 => imageops::rotate180(&img),
+                        Transform::_270 => imageops::rotate270(&img),
                         _ => img,
                     };
                     (img.width(), img.height(), img.into_vec().into())
