@@ -86,7 +86,7 @@ pub async fn show_screencast_prompt(
         let image = wayland_helper
             .capture_source_shm(source, false)
             .await
-            .and_then(|image| image.image().ok())
+            .and_then(|image| image.image_transformed().ok())
             .map(|image| {
                 widget::image::Handle::from_rgba(image.width(), image.height(), image.into_vec())
             });
