@@ -20,7 +20,7 @@ use std::num::NonZeroU32;
 use std::{collections::HashMap, fmt::Debug, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
-use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_output::WlOutput;
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
@@ -135,12 +135,12 @@ impl Screenshot {
 
     async fn interactive_toplevel_images(
         &self,
-        outputs: Vec<(wl_output::WlOutput, (i32, i32), String)>,
+        outputs: &[Output],
     ) -> anyhow::Result<HashMap<String, Vec<(u32, u32, Bytes)>>> {
         let wayland_helper = self.wayland_helper.clone();
 
         let mut map: HashMap<String, _> = HashMap::with_capacity(outputs.len());
-        for (output, _, name) in outputs {
+        for Output { output, name, .. } in outputs {
             let frame = wayland_helper
                 .capture_output_toplevels_shm(&output, false)
                 .await
@@ -156,7 +156,7 @@ impl Screenshot {
 
     async fn interactive_output_images(
         &self,
-        outputs: Vec<(wl_output::WlOutput, (i32, i32), String)>,
+        outputs: &[Output],
         app_id: &str,
     ) -> anyhow::Result<HashMap<String, (u32, u32, Bytes)>> {
         // collect screenshots from each output
@@ -164,13 +164,19 @@ impl Screenshot {
         let wayland_helper = self.wayland_helper.clone();
 
         let mut map = HashMap::with_capacity(outputs.len());
-        for (output, _, name) in outputs {
+        for Output {
+            output,
+            logical_position: (output_x, output_y),
+            name,
+            ..
+        } in outputs
+        {
             let frame = wayland_helper
                 .capture_source_shm(CaptureSource::Output(output.clone()), false)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
             map.insert(
-                name,
+                name.clone(),
                 frame
                     .image_transformed()
                     .map(|img| (img.width(), img.height(), img.into_vec().into()))?,
@@ -224,7 +230,7 @@ impl Screenshot {
 
     async fn screenshot_inner(
         &self,
-        outputs: Vec<(wl_output::WlOutput, (i32, i32), String)>,
+        outputs: Vec<Output>,
         app_id: &str,
     ) -> anyhow::Result<PathBuf> {
         use ashpd::documents::Permission;
@@ -233,7 +239,12 @@ impl Screenshot {
         let (file, path) = async {
             let mut bounds_opt: Option<Rect> = None;
             let mut frames = Vec::with_capacity(outputs.len());
-            for (output, (output_x, output_y), _) in outputs {
+            for Output {
+                output,
+                logical_position: (output_x, output_y),
+                ..
+            } in outputs
+            {
                 let frame = wayland_helper
                     .capture_source_shm(CaptureSource::Output(output), false)
                     .await
@@ -379,6 +390,14 @@ pub struct Args {
     pub action: Action,
 }
 
+#[derive(Clone, Debug)]
+struct Output {
+    output: WlOutput,
+    logical_position: (i32, i32),
+    logical_size: (i32, i32),
+    name: String,
+}
+
 #[zbus::interface(name = "org.freedesktop.impl.portal.Screenshot")]
 impl Screenshot {
     async fn screenshot(
@@ -409,11 +428,20 @@ impl Screenshot {
                 log::warn!("Output {:?} has no name", output);
                 continue;
             };
-            let Some(pos) = info.logical_position else {
+            let Some(logical_position) = info.logical_position else {
                 log::warn!("Output {:?} has no position", output);
                 continue;
             };
-            outputs.push((output, pos, name));
+            let Some(logical_size) = info.logical_size else {
+                log::warn!("Output {:?} has no size", output);
+                continue;
+            };
+            outputs.push(Output {
+                output,
+                logical_position,
+                logical_size,
+                name,
+            });
         }
         if outputs.is_empty() {
             log::error!("No output");
@@ -423,19 +451,19 @@ impl Screenshot {
         // if interactive, send image to be used by screenshot editor & await response via channel
         if options.interactive.unwrap_or_default() {
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-            let first_output = &*outputs[0].2;
+            let first_output = &*outputs[0].name;
             let output_images = self
-                .interactive_output_images(outputs.clone(), app_id)
+                .interactive_output_images(&outputs, app_id)
                 .await
                 .unwrap_or_default();
             let toplevel_images = self
-                .interactive_toplevel_images(outputs.clone())
+                .interactive_toplevel_images(&outputs)
                 .await
                 .unwrap_or_default();
             // TODO: Maybe replace config's Choice with Choice from this file
             let choice = match config.choice {
                 config::screenshot::Choice::Output(Some(output))
-                    if outputs.iter().any(|(_, _, name)| output == *name) =>
+                    if outputs.iter().any(|Output { name, .. }| output == *name) =>
                 {
                     Choice::Output(output)
                 }
