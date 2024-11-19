@@ -414,8 +414,17 @@ impl WaylandHelper {
         let res = session.capture_wl_buffer(&buffer).await;
         buffer.destroy();
 
-        if res.is_ok() {
-            Some(ShmImage { fd, width, height })
+        if let Ok(frame) = res {
+            let transform = match frame.transform {
+                WEnum::Value(value) => value,
+                WEnum::Unknown(value) => panic!("invalid capture transform: {}", value),
+            };
+            Some(ShmImage {
+                fd,
+                width,
+                height,
+                transform,
+            })
         } else {
             None
         }
@@ -489,6 +498,7 @@ pub struct ShmImage<T: AsFd> {
     fd: T,
     pub width: u32,
     pub height: u32,
+    pub transform: wl_output::Transform,
 }
 
 impl<T: AsFd> ShmImage<T> {
