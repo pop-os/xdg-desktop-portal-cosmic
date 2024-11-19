@@ -145,7 +145,7 @@ impl Screenshot {
                 .capture_output_toplevels_shm(&output, false)
                 .await
                 .into_iter()
-                .filter_map(|img| img.image().ok())
+                .filter_map(|img| img.image_transformed().ok())
                 .map(|img| (img.width(), img.height(), img.into_vec().into()))
                 .collect();
             map.insert(name.clone(), frame);
@@ -270,7 +270,7 @@ impl Screenshot {
                     .unwrap_or_default();
                 let mut image = image::RgbaImage::new(width, height);
                 for (frame, rect) in frames {
-                    let frame_image = frame.image()?;
+                    let frame_image = frame.image_transformed()?;
                     image::imageops::overlay(
                         &mut image,
                         &frame_image,
