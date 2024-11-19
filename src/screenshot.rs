@@ -242,6 +242,7 @@ impl Screenshot {
             for Output {
                 output,
                 logical_position: (output_x, output_y),
+                logical_size: (output_w, output_h),
                 ..
             } in outputs
             {
@@ -252,8 +253,8 @@ impl Screenshot {
                 let rect = Rect {
                     left: output_x,
                     top: output_y,
-                    right: output_x.saturating_add(frame.width.try_into().unwrap_or_default()),
-                    bottom: output_y.saturating_add(frame.height.try_into().unwrap_or_default()),
+                    right: output_x.saturating_add(output_w.try_into().unwrap_or_default()),
+                    bottom: output_y.saturating_add(output_h.try_into().unwrap_or_default()),
                 };
                 bounds_opt = Some(match bounds_opt.take() {
                     Some(bounds) => Rect {
@@ -281,7 +282,15 @@ impl Screenshot {
                     .unwrap_or_default();
                 let mut image = image::RgbaImage::new(width, height);
                 for (frame, rect) in frames {
+                    let width = (rect.right - rect.left) as u32;
+                    let height = (rect.bottom - rect.top) as u32;
                     let frame_image = frame.image_transformed()?;
+                    let frame_image = image::imageops::resize(
+                        &frame_image,
+                        width,
+                        height,
+                        image::imageops::FilterType::Lanczos3,
+                    );
                     image::imageops::overlay(
                         &mut image,
                         &frame_image,
