@@ -97,7 +97,6 @@ impl Access {
                 choice_labels,
                 tx,
                 access_id: window::Id::NONE,
-                autosize: false,
             }))
             .await
         {
@@ -132,7 +131,6 @@ pub(crate) struct AccessDialogArgs {
     pub choice_labels: Vec<Vec<String>>,
     pub tx: Sender<PortalResponse<AccessDialogResult>>,
     pub access_id: window::Id,
-    pub autosize: bool,
 }
 
 impl AccessDialogArgs {
@@ -143,13 +141,11 @@ impl AccessDialogArgs {
                 resizable: false,
                 ..Default::default()
             });
-            self.autosize = true;
             self.access_id = id;
             task.map(|_| Msg::Ignore)
         } else {
             // create a layer surface
             self.access_id = window::Id::unique();
-            self.autosize = false;
             get_layer_surface(SctkLayerSurfaceSettings {
                 id: self.access_id,
                 layer: cosmic_client_toolkit::sctk::shell::wlr_layer::Layer::Top,
@@ -241,14 +237,10 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
         },
     );
 
-    if args.autosize {
-        autosize(content, Id::new(args.app_id.clone()))
-            .min_width(1.)
-            .min_height(1.)
-            .into()
-    } else {
-        content.into()
-    }
+    autosize(content, Id::new(args.app_id.clone()))
+        .min_width(1.)
+        .min_height(1.)
+        .into()
 }
 
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
