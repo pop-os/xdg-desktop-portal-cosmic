@@ -13,7 +13,7 @@ members = ["cosmic-portal-config"]
 
 [dependencies]
 anyhow = "1.0.60"
-ashpd = "0.8.1"
+ashpd = "0.10.2"
 cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
     "gvfs",
     "wayland",
