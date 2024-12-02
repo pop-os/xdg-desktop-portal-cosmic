@@ -9,14 +9,18 @@ use cosmic::iced_runtime::clipboard;
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced_winit::{
+    commands::layer_surface::{destroy_layer_surface, get_layer_surface},
+    platform_specific::wayland::subsurface_widget::{Shmbuf, SubsurfaceBuffer},
+};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::{collections::HashMap, path::PathBuf};
+use std::os::fd::OwnedFd;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
@@ -33,18 +37,17 @@ use crate::{fl, subscription, PortalResponse};
 #[derive(Clone, Debug)]
 pub struct ScreenshotImage {
     pub rgba: RgbaImage,
-    pub handle: cosmic::widget::image::Handle,
+    pub subsurface_buffer: SubsurfaceBuffer,
 }
 
 impl ScreenshotImage {
-    fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
+    fn new<T: AsFd + Into<OwnedFd>>(img: ShmImage<T>) -> anyhow::Result<Self> {
         let rgba = img.image_transformed()?;
-        let handle = cosmic::widget::image::Handle::from_rgba(
-            rgba.width(),
-            rgba.height(),
-            rgba.clone().into_vec(),
-        );
-        Ok(Self { rgba, handle })
+        let (subsurface_buffer, _) = SubsurfaceBuffer::new(Arc::new(Shmbuf::from(img).into()));
+        Ok(Self {
+            rgba,
+            subsurface_buffer,
+        })
     }
 }
 
