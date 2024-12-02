@@ -568,14 +568,14 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         return horizontal_space().width(Length::Fixed(1.0)).into();
     };
 
-    let Some(img) = args.output_images.get(&output.name) else {
+    let Some(output_image) = args.output_images.get(&output.name) else {
         return horizontal_space().width(Length::Fixed(1.0)).into();
     };
     let theme = portal.core.system_theme().cosmic();
     KeyboardWrapper::new(
         crate::widget::screenshot::ScreenshotSelection::new(
             args.choice.clone(),
-            img.handle.clone(),
+            &output_image,
             Msg::Capture,
             Msg::Cancel,
             output,
