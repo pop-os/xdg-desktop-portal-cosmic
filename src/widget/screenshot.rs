@@ -5,8 +5,8 @@ use cosmic::{
     cosmic_theme::Spacing,
     iced::{self, window},
     iced_core::{
-        alignment, gradient::Linear, image::Bytes, layout, overlay, widget::Tree, Background,
-        Border, ContentFit, Degrees, Layout, Length, Point, Size,
+        alignment, gradient::Linear, layout, overlay, widget::Tree, Background, Border, ContentFit,
+        Degrees, Layout, Length, Point, Size,
     },
     iced_widget::row,
     widget::{
@@ -81,7 +81,7 @@ where
         window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
         on_choice_change: impl Fn(Choice) -> Msg + 'static + Clone,
-        toplevel_images: &HashMap<String, Vec<(u32, u32, Bytes)>>,
+        toplevel_images: &HashMap<String, Vec<RgbaImage>>,
         toplevel_chosen: impl Fn(String, usize) -> Msg,
         save_locations: &'a Vec<String>,
         selected_save_location: usize,
@@ -121,14 +121,19 @@ where
                     .get(&output.name)
                     .cloned()
                     .unwrap_or_default();
-                let total_img_width = imgs.iter().map(|img| img.0).sum::<u32>();
+                let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
 
                 let img_buttons = imgs.into_iter().enumerate().map(|(i, img)| {
-                    let portion = (img.0 as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
+                    let portion =
+                        (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
                     layer_container(
                         button::custom(
-                            image::Image::new(image::Handle::from_rgba(img.0, img.1, img.2))
-                                .content_fit(ContentFit::ScaleDown),
+                            image::Image::new(image::Handle::from_rgba(
+                                img.width(),
+                                img.height(),
+                                img.into_vec(),
+                            ))
+                            .content_fit(ContentFit::ScaleDown),
                         )
                         .on_press(toplevel_chosen(output.name.clone(), i))
                         .class(cosmic::theme::Button::Image),
