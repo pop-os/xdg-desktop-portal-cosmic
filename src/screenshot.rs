@@ -24,11 +24,29 @@ use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
 use crate::config::{self, screenshot::ImageSaveLocation};
-use crate::wayland::{CaptureSource, WaylandHelper};
+use crate::wayland::{CaptureSource, ShmImage, WaylandHelper};
 use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::DragState};
 use crate::{fl, subscription, PortalResponse};
 
 // TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
+
+#[derive(Clone, Debug)]
+pub struct ScreenshotImage {
+    pub rgba: RgbaImage,
+    pub handle: cosmic::widget::image::Handle,
+}
+
+impl ScreenshotImage {
+    fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
+        let rgba = img.image_transformed()?;
+        let handle = cosmic::widget::image::Handle::from_rgba(
+            rgba.width(),
+            rgba.height(),
+            rgba.clone().into_vec(),
+        );
+        Ok(Self { rgba, handle })
+    }
+}
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
 #[zvariant(signature = "a{sv}")]
@@ -135,7 +153,7 @@ impl Screenshot {
     async fn interactive_toplevel_images(
         &self,
         outputs: &[Output],
-    ) -> anyhow::Result<HashMap<String, Vec<RgbaImage>>> {
+    ) -> anyhow::Result<HashMap<String, Vec<ScreenshotImage>>> {
         let wayland_helper = self.wayland_helper.clone();
 
         let mut map: HashMap<String, _> = HashMap::with_capacity(outputs.len());
@@ -144,7 +162,7 @@ impl Screenshot {
                 .capture_output_toplevels_shm(&output, false)
                 .await
                 .into_iter()
-                .filter_map(|img| img.image_transformed().ok())
+                .filter_map(|img| ScreenshotImage::new(img).ok())
                 .collect();
             map.insert(name.clone(), frame);
         }
@@ -156,7 +174,7 @@ impl Screenshot {
         &self,
         outputs: &[Output],
         app_id: &str,
-    ) -> anyhow::Result<HashMap<String, RgbaImage>> {
+    ) -> anyhow::Result<HashMap<String, ScreenshotImage>> {
         // collect screenshots from each output
 
         let wayland_helper = self.wayland_helper.clone();
@@ -173,7 +191,7 @@ impl Screenshot {
                 .capture_source_shm(CaptureSource::Output(output.clone()), false)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
-            map.insert(name.clone(), frame.image_transformed()?);
+            map.insert(name.clone(), ScreenshotImage::new(frame)?);
         }
 
         Ok(map)
@@ -384,8 +402,8 @@ pub struct Args {
     pub app_id: String,
     pub parent_window: String,
     pub options: ScreenshotOptions,
-    pub output_images: HashMap<String, RgbaImage>,
-    pub toplevel_images: HashMap<String, Vec<RgbaImage>>,
+    pub output_images: HashMap<String, ScreenshotImage>,
+    pub toplevel_images: HashMap<String, Vec<ScreenshotImage>>,
     pub tx: Sender<PortalResponse<ScreenshotResult>>,
     pub choice: Choice,
     pub location: ImageSaveLocation,
@@ -550,14 +568,14 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         return horizontal_space().width(Length::Fixed(1.0)).into();
     };
 
-    let Some(img) = args.output_images.get(&output.name).cloned() else {
+    let Some(img) = args.output_images.get(&output.name) else {
         return horizontal_space().width(Length::Fixed(1.0)).into();
     };
     let theme = portal.core.system_theme().cosmic();
     KeyboardWrapper::new(
         crate::widget::screenshot::ScreenshotSelection::new(
             args.choice.clone(),
-            cosmic::widget::image::Handle::from_rgba(img.width(), img.height(), img.into_vec()),
+            img.handle.clone(),
             Msg::Capture,
             Msg::Cancel,
             output,
@@ -609,13 +627,14 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 Choice::Output(name) => {
                     if let Some(img) = images.remove(&name) {
                         if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
                                 log::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             };
                         } else {
                             let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
+                            {
                                 log::error!("Failed to save screenshot to buffer: {:?}", e);
                                 success = false;
                             } else {
@@ -649,7 +668,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                                 continue;
                             };
                             let mut translated_intersect = intersect.translate(-pos.0, -pos.1);
-                            let scale = raw_img.width() as f32 / output.logical_size.0 as f32;
+                            let scale = raw_img.rgba.width() as f32 / output.logical_size.0 as f32;
                             translated_intersect.left =
                                 (translated_intersect.left as f32 * scale).round() as i32;
                             translated_intersect.top =
@@ -659,7 +678,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                             translated_intersect.bottom =
                                 (translated_intersect.bottom as f32 * scale).round() as i32;
                             let overlay = image::imageops::crop_imm(
-                                &raw_img,
+                                &raw_img.rgba,
                                 u32::try_from(translated_intersect.left).unwrap_or_default(),
                                 u32::try_from(translated_intersect.top).unwrap_or_default(),
                                 (translated_intersect.right - translated_intersect.left)
@@ -715,13 +734,14 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         .and_then(|imgs| imgs.get(window_i))
                     {
                         if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
                                 log::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             }
                         } else {
                             let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
+                            {
                                 log::error!("Failed to save screenshot to buffer: {:?}", e);
                                 success = false;
                             } else {
