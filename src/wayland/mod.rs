@@ -1,3 +1,4 @@
+use cosmic::iced_winit::platform_specific::wayland::subsurface_widget::Shmbuf;
 use cosmic_client_toolkit::{
     cosmic_protocols::screencopy::v2::client::{
         zcosmic_screencopy_frame_v2, zcosmic_screencopy_manager_v2, zcosmic_screencopy_session_v2,
@@ -524,6 +525,20 @@ impl<T: AsFd> ShmImage<T> {
         match image {
             image::DynamicImage::ImageRgba8(image) => Ok(image),
             _ => unreachable!(),
+        }
+    }
+}
+
+impl<T: AsFd + Into<OwnedFd>> From<ShmImage<T>> for Shmbuf {
+    fn from(image: ShmImage<T>) -> Self {
+        Shmbuf {
+            fd: image.fd.into(),
+            height: image.height as i32,
+            width: image.width as i32,
+            offset: 0,
+            stride: image.width as i32 * 4,
+            // TODO: Change when support for other formats is added
+            format: wl_shm::Format::Abgr8888,
         }
     }
 }
