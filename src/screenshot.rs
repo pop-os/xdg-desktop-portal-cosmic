@@ -812,7 +812,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             } else {
                 log::error!("Failed to find screenshot Args for Choice message.");
             }
-            cosmic::command::message(crate::app::Msg::ConfigSetScreenshot(
+            cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
                 config::screenshot::Screenshot {
                     choice,
                     ..portal.config.screenshot
@@ -861,7 +861,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     _ => args.location,
                 };
                 args.location = loc;
-                cosmic::command::message(crate::app::Msg::ConfigSetScreenshot(
+                cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
                     config::screenshot::Screenshot {
                         save_location: loc,
                         choice: (&mut portal.config.screenshot.choice).into(),
