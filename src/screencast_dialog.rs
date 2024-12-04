@@ -104,7 +104,7 @@ async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry<'static>> 
     let mut entries = Vec::new();
     for p in fde::Iter::new(fde::default_paths()) {
         if let Ok(data) = tokio::fs::read_to_string(&p).await {
-            if let Ok(entry) = DesktopEntry::from_str(&p, &data, Some(&locales)) {
+            if let Ok(entry) = DesktopEntry::from_str(&p, &data, Some(locales)) {
                 entries.push(entry.to_owned());
             }
         }
@@ -116,7 +116,7 @@ fn get_desktop_entry<'a>(
     entries: &'a [DesktopEntry<'a>],
     id: &str,
 ) -> Option<&'a DesktopEntry<'a>> {
-    fde::matching::get_best_match(&[id], &entries, fde::matching::MatchAppIdOptions::default())
+    fde::matching::get_best_match(&[id], entries, fde::matching::MatchAppIdOptions::default())
 }
 
 fn create_dialog() -> cosmic::Task<crate::app::Msg> {
@@ -441,7 +441,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
     let unknown = fl!("unknown-application");
     let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
-    let control = widget::column::with_children(vec![tabs.into(), list.into()]).spacing(8);
+    let control = widget::column::with_children(vec![tabs.into(), list]).spacing(8);
     autosize::autosize(
         KeyboardWrapper::new(
             widget::dialog()

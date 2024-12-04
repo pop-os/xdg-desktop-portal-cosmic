@@ -299,8 +299,7 @@ impl cosmic::Application for CosmicPortal {
                 _ => None,
             }),
         ];
-        for (id, (_args, dialog)) in self.file_choosers.iter() {
-            let id = id.clone();
+        for (&id, (_args, dialog)) in self.file_choosers.iter() {
             subscriptions.push(dialog.subscription().map(move |x| Msg::FileChooser(id, x)));
         }
         Subscription::batch(subscriptions)
