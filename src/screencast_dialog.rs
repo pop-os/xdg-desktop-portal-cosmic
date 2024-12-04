@@ -431,10 +431,14 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
                     Msg::SelectToplevel(toplevel.clone()),
                 ));
             }
-            cosmic::widget::scrollable(list)
-                .height(iced::Length::Fill)
-                .width(iced::Length::Fill)
-                .into()
+            if args.toplevels.len() > 8 {
+                widget::container(cosmic::widget::scrollable(list))
+                    .max_height(380.)
+                    .width(iced::Length::Fill)
+                    .into()
+            } else {
+                list.into()
+            }
         }
     };
 
@@ -459,6 +463,8 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
         ),
         SCREENCAST_WIDGET_ID.clone(),
     )
+    .max_width(572.)
+    .max_height(884.)
     .min_width(1.)
     .min_height(1.)
     .into()
