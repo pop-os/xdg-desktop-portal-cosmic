@@ -170,9 +170,9 @@ impl FileChooser {
             return PortalResponse::Other;
         }
         if let Some(res) = rx.recv().await {
-            return res;
+            res
         } else {
-            return PortalResponse::Cancelled;
+            PortalResponse::Cancelled
         }
     }
 }
@@ -373,12 +373,10 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<app::M
                 } else {
                     DialogKind::OpenFolder
                 }
+            } else if options.multiple.unwrap_or(false) {
+                DialogKind::OpenMultipleFiles
             } else {
-                if options.multiple.unwrap_or(false) {
-                    DialogKind::OpenMultipleFiles
-                } else {
-                    DialogKind::OpenFile
-                }
+                DialogKind::OpenFile
             }
         }
         FileChooserOptions::SaveFile(options) => DialogKind::SaveFile {
@@ -391,12 +389,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<app::M
     };
     let path_opt = args.options.current_folder();
 
-    let (mut dialog, command) = Dialog::new(
-        kind,
-        path_opt,
-        |x| Msg::DialogMessage(x),
-        |x| Msg::DialogResult(x),
-    );
+    let (mut dialog, command) = Dialog::new(kind, path_opt, Msg::DialogMessage, Msg::DialogResult);
     cmds.push(command);
     cmds.push(dialog.set_title(args.title.clone()));
     if let Some(accept_label) = args.options.accept_label() {

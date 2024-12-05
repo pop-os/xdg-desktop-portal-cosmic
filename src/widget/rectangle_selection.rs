@@ -17,7 +17,7 @@ use cosmic::{
 
 use crate::screenshot::Rect;
 
-pub const MIME: &'static str = "X-COSMIC-PORTAL-MyData";
+pub const MIME: &str = "X-COSMIC-PORTAL-MyData";
 pub struct MyData;
 
 impl TryFrom<(Vec<u8>, String)> for MyData {

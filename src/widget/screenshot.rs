@@ -72,6 +72,7 @@ impl<'a, Msg> ScreenshotSelection<'a, Msg>
 where
     Msg: 'static + Clone,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         choice: Choice,
         image_handle: image::Handle,

@@ -125,11 +125,9 @@ impl AppData {
             .unwrap();
         *guard = toplevels
             .filter_map(|toplevel| {
-                let Some(info) = toplevel.1 else {
-                    return None;
-                };
+                let info = toplevel.1?;
 
-                let Some(o) = self
+                let o = self
                     .workspace_state
                     .workspace_groups()
                     .iter()
@@ -145,10 +143,7 @@ impl AppData {
                                 })
                                 .then(|| info.output.iter().cloned().collect::<Vec<_>>())
                         })
-                    })
-                else {
-                    return None;
-                };
+                    })?;
 
                 Some((o, toplevel.0))
             })

@@ -185,7 +185,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
             .active_choices
             .get(id)
             .and_then(|choice_id| choices.iter().position(|(x, _)| x == choice_id));
-        let dropdown = dropdown(&choice_labels, active_choice, move |j| Msg::Choice(i, j));
+        let dropdown = dropdown(choice_labels, active_choice, move |j| Msg::Choice(i, j));
         options.push(row![label, dropdown].into());
     }
 
