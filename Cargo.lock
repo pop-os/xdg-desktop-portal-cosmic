@@ -7645,6 +7645,7 @@ dependencies = [
  "rust-embed",
  "rustix 0.38.41",
  "serde",
+ "shlex",
  "tempfile",
  "time",
  "tokio",
