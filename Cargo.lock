@@ -7533,6 +7533,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ashpd 0.8.1",
+ "chrono",
  "clap",
  "cosmic-bg-config",
  "cosmic-client-toolkit",
@@ -7561,7 +7562,6 @@ dependencies = [
  "rustix 0.38.43",
  "serde",
  "tempfile",
- "time",
  "tokio",
  "url",
  "wayland-client",

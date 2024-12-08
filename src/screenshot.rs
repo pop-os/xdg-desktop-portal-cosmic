@@ -216,15 +216,11 @@ impl Screenshot {
             ImageSaveLocation::Clipboard => None,
             // ImageSaveLocation::Custom(path) => Some(path),
         }?;
-        let date_format =
-            time::macros::format_description!("[year]-[month]-[day]-[hour]-[minute]-[second]");
-
-        let name = format!(
-            "screenshot-{}.png",
-            time::OffsetDateTime::now_utc().format(&date_format).ok()?
-        );
-
+        let name = chrono::Local::now()
+            .format("Screenshot_%Y-%m-%d_%H-%M-%S.png")
+            .to_string();
         path.push(name);
+
         Some(path)
     }
 
