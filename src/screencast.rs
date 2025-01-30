@@ -185,7 +185,7 @@ impl ScreenCast {
             for toplevel in capture_sources.toplevels {
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
-                    CaptureSource::Toplevel(toplevel),
+                    CaptureSource::CosmicToplevel(toplevel),
                     overlay_cursor,
                 ));
             }

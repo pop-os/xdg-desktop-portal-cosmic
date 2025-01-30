@@ -1,10 +1,8 @@
 use cosmic_client_toolkit::{
-    cosmic_protocols::screencopy::v2::client::{
-        zcosmic_screencopy_frame_v2, zcosmic_screencopy_manager_v2, zcosmic_screencopy_session_v2,
-    },
     screencopy::{
-        capture, Formats, Frame, ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler,
-        ScreencopySessionData, ScreencopySessionDataExt, ScreencopyState,
+        CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
+        ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
+        ScreencopySessionDataExt, ScreencopyState,
     },
     sctk::{
         self,
@@ -17,10 +15,6 @@ use cosmic_client_toolkit::{
     workspace::WorkspaceState,
 };
 use cosmic_protocols::{
-    image_source::v1::client::{
-        zcosmic_output_image_source_manager_v1::ZcosmicOutputImageSourceManagerV1,
-        zcosmic_toplevel_image_source_manager_v1::ZcosmicToplevelImageSourceManagerV1,
-    },
     toplevel_info::v1::client::zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1,
     workspace::v1::client::zcosmic_workspace_handle_v1,
 };
@@ -40,13 +34,15 @@ use std::{
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
-    Connection, Dispatch, Proxy, QueueHandle, WEnum,
+    Connection, Dispatch, QueueHandle, WEnum,
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
     zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
     zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
 };
+
+pub use cosmic_client_toolkit::screencopy::CaptureSource;
 
 use crate::buffer;
 
@@ -88,9 +84,7 @@ struct WaylandHelperInner {
     output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ZcosmicToplevelHandleV1>>>,
     toplevels: Mutex<Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)>>,
     qh: QueueHandle<AppData>,
-    screencopy_manager: zcosmic_screencopy_manager_v2::ZcosmicScreencopyManagerV2,
-    output_source_manager: ZcosmicOutputImageSourceManagerV1,
-    toplevel_source_manager: ZcosmicToplevelImageSourceManagerV1,
+    capturer: Capturer,
     wl_shm: wl_shm::WlShm,
     dmabuf: Mutex<Option<DmabufHelper>>,
     zwp_dmabuf: ZwpLinuxDmabufV1,
@@ -177,23 +171,15 @@ struct SessionState {
 
 struct SessionInner {
     wayland_helper: WaylandHelper,
-    screencopy_session: zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
+    capture_session: CaptureSession,
     condvar: Condvar,
     state: Mutex<SessionState>,
-}
-
-impl Drop for SessionInner {
-    fn drop(&mut self) {
-        self.screencopy_session.destroy();
-    }
 }
 
 pub struct Session(Arc<SessionInner>);
 
 impl Session {
-    pub fn for_session(
-        session: &zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
-    ) -> Option<Self> {
+    pub fn for_session(session: &CaptureSession) -> Option<Self> {
         session.data::<SessionData>()?.session.upgrade().map(Self)
     }
 
@@ -215,11 +201,10 @@ impl Session {
     pub async fn capture_wl_buffer(
         &self,
         buffer: &wl_buffer::WlBuffer,
-    ) -> Result<Frame, WEnum<zcosmic_screencopy_frame_v2::FailureReason>> {
+    ) -> Result<Frame, WEnum<FailureReason>> {
         let (sender, receiver) = oneshot::channel();
         // TODO damage
-        capture(
-            &self.0.screencopy_session,
+        self.0.capture_session.capture(
             buffer,
             &[],
             &self.0.wayland_helper.inner.qh,
@@ -233,12 +218,6 @@ impl Session {
         // TODO: wait for server to release buffer?
         receiver.await.unwrap()
     }
-}
-
-#[derive(Clone, Debug)]
-pub enum CaptureSource {
-    Output(wl_output::WlOutput),
-    Toplevel(ZcosmicToplevelHandleV1),
 }
 
 impl WaylandHelper {
@@ -258,9 +237,7 @@ impl WaylandHelper {
                 output_toplevels: Mutex::new(HashMap::new()),
                 toplevels: Mutex::new(Vec::new()),
                 qh: qh.clone(),
-                screencopy_manager: screencopy_state.screencopy_manager.clone(),
-                output_source_manager: screencopy_state.output_source_manager.clone().unwrap(),
-                toplevel_source_manager: screencopy_state.toplevel_source_manager.clone().unwrap(),
+                capturer: screencopy_state.capturer().clone(),
                 wl_shm: shm_state.wl_shm().clone(),
                 dmabuf: Mutex::new(None),
                 zwp_dmabuf,
@@ -344,7 +321,7 @@ impl WaylandHelper {
         let mut images = Vec::new();
         for t in toplevels.into_iter() {
             if let Some(image) = self
-                .capture_source_shm(CaptureSource::Toplevel(t), overlay_cursor)
+                .capture_source_shm(CaptureSource::CosmicToplevel(t), overlay_cursor)
                 .await
             {
                 images.push(image);
@@ -355,39 +332,31 @@ impl WaylandHelper {
 
     pub fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
         Session(Arc::new_cyclic(|weak_session| {
-            let image_source = match source {
-                CaptureSource::Output(o) => {
-                    self.inner
-                        .output_source_manager
-                        .create_source(&o, &self.inner.qh, ())
-                }
-                CaptureSource::Toplevel(t) => {
-                    self.inner
-                        .toplevel_source_manager
-                        .create_source(&t, &self.inner.qh, ())
-                }
-            };
-
             let options = if overlay_cursor {
-                zcosmic_screencopy_manager_v2::Options::PaintCursors
+                CaptureOptions::PaintCursors
             } else {
-                zcosmic_screencopy_manager_v2::Options::empty()
+                CaptureOptions::empty()
             };
-            let screencopy_session = self.inner.screencopy_manager.create_session(
-                &image_source,
-                options,
-                &self.inner.qh,
-                SessionData {
-                    session: weak_session.clone(),
-                    session_data: Default::default(),
-                },
-            );
+            // Unwrap: cosmic-comp should always support this capture
+            let capture_session = self
+                .inner
+                .capturer
+                .create_session(
+                    &source,
+                    options,
+                    &self.inner.qh,
+                    SessionData {
+                        session: weak_session.clone(),
+                        session_data: Default::default(),
+                    },
+                )
+                .unwrap();
 
             self.inner.conn.flush().unwrap();
 
             SessionInner {
                 wayland_helper: self.clone(),
-                screencopy_session,
+                capture_session,
                 condvar: Condvar::new(),
                 state: Default::default(),
             }
@@ -602,7 +571,7 @@ impl ScreencopyHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        session: &zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
+        session: &CaptureSession,
         formats: &Formats,
     ) {
         if let Some(session) = Session::for_session(session) {
@@ -612,12 +581,7 @@ impl ScreencopyHandler for AppData {
         }
     }
 
-    fn stopped(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _session: &zcosmic_screencopy_session_v2::ZcosmicScreencopySessionV2,
-    ) {
+    fn stopped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _session: &CaptureSession) {
         // TODO
     }
 
@@ -625,7 +589,7 @@ impl ScreencopyHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        screencopy_frame: &zcosmic_screencopy_frame_v2::ZcosmicScreencopyFrameV2,
+        screencopy_frame: &CaptureFrame,
         frame: Frame,
     ) {
         if let Some(sender) = screencopy_frame
@@ -640,8 +604,8 @@ impl ScreencopyHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        screencopy_frame: &zcosmic_screencopy_frame_v2::ZcosmicScreencopyFrameV2,
-        reason: WEnum<zcosmic_screencopy_frame_v2::FailureReason>,
+        screencopy_frame: &CaptureFrame,
+        reason: WEnum<FailureReason>,
     ) {
         if let Some(sender) = screencopy_frame
             .data::<FrameData>()
@@ -802,9 +766,7 @@ impl ScreencopySessionDataExt for SessionData {
 struct FrameData {
     frame_data: ScreencopyFrameData,
     #[allow(clippy::type_complexity)]
-    sender: Mutex<
-        Option<oneshot::Sender<Result<Frame, WEnum<zcosmic_screencopy_frame_v2::FailureReason>>>>,
-    >,
+    sender: Mutex<Option<oneshot::Sender<Result<Frame, WEnum<FailureReason>>>>>,
 }
 
 impl ScreencopyFrameDataExt for FrameData {
