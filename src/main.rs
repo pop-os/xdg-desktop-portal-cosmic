@@ -19,6 +19,24 @@ mod subscription;
 mod wayland;
 mod widget;
 
+/// Access glibc malloc tunables.
+#[cfg(target_env = "gnu")]
+mod malloc {
+    use std::os::raw::c_int;
+    const M_MMAP_THRESHOLD: c_int = -3;
+
+    extern "C" {
+        fn mallopt(param: c_int, value: c_int) -> c_int;
+    }
+
+    /// Prevents glibc from hoarding memory via memory fragmentation.
+    pub fn limit_mmap_threshold() {
+        unsafe {
+            mallopt(M_MMAP_THRESHOLD, 65536);
+        }
+    }
+}
+
 static DBUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cosmic";
 static DBUS_PATH: &str = "/org/freedesktop/portal/desktop";
 
@@ -296,6 +314,9 @@ impl Settings {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> cosmic::iced::Result {
+    #[cfg(target_env = "gnu")]
+    malloc::limit_mmap_threshold();
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     localize::localize();
     app::run()
