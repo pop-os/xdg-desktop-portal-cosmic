@@ -110,7 +110,7 @@ impl Rect {
         }
     }
 
-    pub fn dimensions(self: Self) -> Option<RectDimension> {
+    pub fn dimensions(self) -> Option<RectDimension> {
         let width = NonZeroU32::new((self.right - self.left).unsigned_abs())?;
         let height = NonZeroU32::new((self.bottom - self.top).unsigned_abs())?;
         Some(RectDimension { width, height })
@@ -142,7 +142,7 @@ impl Screenshot {
         let mut map: HashMap<String, _> = HashMap::with_capacity(outputs.len());
         for Output { output, name, .. } in outputs {
             let frame = wayland_helper
-                .capture_output_toplevels_shm(&output, false)
+                .capture_output_toplevels_shm(output, false)
                 .await
                 .into_iter()
                 .filter_map(|img| img.image_transformed().ok())
@@ -249,8 +249,8 @@ impl Screenshot {
                 let rect = Rect {
                     left: output_x,
                     top: output_y,
-                    right: output_x.saturating_add(output_w.try_into().unwrap_or_default()),
-                    bottom: output_y.saturating_add(output_h.try_into().unwrap_or_default()),
+                    right: output_x.saturating_add(output_w),
+                    bottom: output_y.saturating_add(output_h),
                 };
                 bounds_opt = Some(match bounds_opt.take() {
                     Some(bounds) => Rect {
@@ -620,19 +620,17 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                                 log::error!("Failed to produce rgba image for screenshot");
                                 success = false;
                             }
-                        } else {
-                            if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
-                                let mut buffer = Vec::new();
-                                if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                    log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                    success = false;
-                                } else {
-                                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                                };
-                            } else {
-                                log::error!("Failed to produce rgba image for screenshot");
+                        } else if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
+                            let mut buffer = Vec::new();
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
+                                log::error!("Failed to save screenshot to buffer: {:?}", e);
                                 success = false;
-                            }
+                            } else {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                            };
+                        } else {
+                            log::error!("Failed to produce rgba image for screenshot");
+                            success = false;
                         }
                     } else {
                         log::error!("Failed to find output {}", name);
@@ -685,7 +683,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                                     .unsigned_abs(),
                             );
 
-                            if img.width() != output.logical_size.0 as u32 {
+                            if img.width() != output.logical_size.0 {
                                 let overlay = image::imageops::resize(
                                     &overlay.to_image(),
                                     (intersect.right - intersect.left) as u32,
@@ -770,7 +768,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 })
             } else if success && image_path.is_none() {
                 PortalResponse::Success(ScreenshotResult {
-                    uri: format!("clipboard:///"),
+                    uri: "clipboard:///".to_string(),
                 })
             } else {
                 PortalResponse::Other
