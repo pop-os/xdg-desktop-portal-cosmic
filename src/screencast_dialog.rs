@@ -18,13 +18,13 @@ use cosmic::widget::autosize;
 use cosmic::{theme, widget};
 use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
-use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1;
 use freedesktop_desktop_entry as fde;
 use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry};
 use once_cell::sync::Lazy;
 use std::mem;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 use zbus::zvariant;
 
 pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
@@ -56,10 +56,10 @@ pub async fn show_screencast_prompt(
     let toplevels = wayland_helper
         .toplevels()
         .into_iter()
-        .map(|(handle, info)| {
+        .map(|info| {
             let icon = get_desktop_entry(&desktop_entries, &app_id)
                 .and_then(|x| Some(x.name(&locales)?.into_owned()));
-            (handle, info, icon)
+            (info, icon)
         })
         .collect();
 
@@ -142,7 +142,7 @@ pub struct Args {
     multiple: bool,
     source_types: BitFlags<SourceType>,
     outputs: Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
-    toplevels: Vec<(ZcosmicToplevelHandleV1, ToplevelInfo, Option<String>)>,
+    toplevels: Vec<(ToplevelInfo, Option<String>)>,
     app_name: Option<String>,
     // Should be oneshot, but need `Clone` bound
     tx: mpsc::Sender<Option<CaptureSources>>,
@@ -163,7 +163,7 @@ impl Args {
 #[derive(Clone, Debug, Default)]
 pub struct CaptureSources {
     pub outputs: Vec<WlOutput>,
-    pub toplevels: Vec<ZcosmicToplevelHandleV1>,
+    pub toplevels: Vec<ExtForeignToplevelHandleV1>,
 }
 
 impl CaptureSources {
@@ -181,7 +181,7 @@ impl CaptureSources {
 pub enum Msg {
     ActivateTab(widget::segmented_button::Entity),
     SelectOutput(WlOutput),
-    SelectToplevel(ZcosmicToplevelHandleV1),
+    SelectToplevel(ExtForeignToplevelHandleV1),
     Share,
     Cancel,
 }
@@ -219,7 +219,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 .capture_sources
                 .toplevels
                 .iter()
-                .position(|x| x == &toplevel)
+                .position(|t| t == &toplevel)
             {
                 args.capture_sources.toplevels.remove(idx);
             } else {
@@ -420,15 +420,19 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
         }
         Tab::Windows => {
             let mut list = widget::ListColumn::new();
-            for (toplevel, toplevel_info, icon) in &args.toplevels {
+            for (toplevel_info, icon) in &args.toplevels {
                 let icon = IconSource::from_unknown(icon.as_deref().unwrap_or_default());
                 let label = &toplevel_info.title;
-                let is_selected = args.capture_sources.toplevels.contains(toplevel);
+                let is_selected = args
+                    .capture_sources
+                    .toplevels
+                    .iter()
+                    .any(|t| *t == toplevel_info.foreign_toplevel);
                 list = list.add(toplevel_button(
                     label,
                     is_selected,
                     icon,
-                    Msg::SelectToplevel(toplevel.clone()),
+                    Msg::SelectToplevel(toplevel_info.foreign_toplevel.clone()),
                 ));
             }
             if args.toplevels.len() > 8 {
