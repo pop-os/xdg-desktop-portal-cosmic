@@ -1,8 +1,8 @@
 use cosmic_client_toolkit::{
-    cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1,
     toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
     wayland_client::{Connection, QueueHandle},
 };
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 
 use super::AppData;
 
@@ -16,7 +16,7 @@ impl ToplevelInfoHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _toplevel: &zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1,
+        _toplevel: &ExtForeignToplevelHandleV1,
     ) {
         self.update_output_toplevels()
     }
@@ -25,7 +25,7 @@ impl ToplevelInfoHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _toplevel: &zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1,
+        _toplevel: &ExtForeignToplevelHandleV1,
     ) {
         self.update_output_toplevels()
     }
@@ -34,7 +34,7 @@ impl ToplevelInfoHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _toplevel: &zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1,
+        _toplevel: &ExtForeignToplevelHandleV1,
     ) {
         self.update_output_toplevels()
     }
