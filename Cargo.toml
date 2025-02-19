@@ -18,20 +18,10 @@ cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-feature
     "gvfs",
     "wayland",
 ] }
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "29ab323" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "29ab323" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "178eb0b" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "178eb0b" }
 futures = "0.3"
 image = "0.25"
-libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
-    "autosize",
-    "winit",
-    "multi-window",
-    "desktop",
-    "wayland",
-    "tokio",
-    "dbus-config",
-    "wgpu",
-] }
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
 cosmic-portal-config = { path = "./cosmic-portal-config" }
 memmap2 = "0.9.0"
@@ -62,12 +52,26 @@ i18n-embed = { version = "0.14.1", features = [
 ] }
 i18n-embed-fl = "0.8.0"
 rust-embed = "8.2.0"
-
 # Workspace
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
 freedesktop-desktop-entry = "=0.7.0"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+# TODO: a11y feature crashes file chooser dialog
+default-features = false
+features = [
+    "autosize",
+    "winit",
+    "multi-window",
+    "desktop",
+    "wayland",
+    "tokio",
+    "dbus-config",
+    "wgpu",
+]
 
 [workspace.dependencies]
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }

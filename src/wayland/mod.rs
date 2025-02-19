@@ -14,10 +14,7 @@ use cosmic_client_toolkit::{
     toplevel_info::{ToplevelInfo, ToplevelInfoState},
     workspace::WorkspaceState,
 };
-use cosmic_protocols::{
-    toplevel_info::v1::client::zcosmic_toplevel_handle_v1::ZcosmicToplevelHandleV1,
-    workspace::v1::client::zcosmic_workspace_handle_v1,
-};
+use cosmic_protocols::workspace::v1::client::zcosmic_workspace_handle_v1;
 use futures::channel::oneshot;
 use rustix::fd::{FromRawFd, RawFd};
 use std::{
@@ -36,10 +33,13 @@ use wayland_client::{
     protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
     Connection, Dispatch, QueueHandle, WEnum,
 };
-use wayland_protocols::wp::linux_dmabuf::zv1::client::{
-    zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
-    zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
-    zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+use wayland_protocols::{
+    ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    wp::linux_dmabuf::zv1::client::{
+        zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
+        zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+        zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+    },
 };
 
 pub use cosmic_client_toolkit::screencopy::CaptureSource;
@@ -81,8 +81,8 @@ struct WaylandHelperInner {
     conn: wayland_client::Connection,
     outputs: Mutex<Vec<wl_output::WlOutput>>,
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
-    output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ZcosmicToplevelHandleV1>>>,
-    toplevels: Mutex<Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)>>,
+    output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ExtForeignToplevelHandleV1>>>,
+    toplevels: Mutex<Vec<ToplevelInfo>>,
     qh: QueueHandle<AppData>,
     capturer: Capturer,
     wl_shm: wl_shm::WlShm,
@@ -118,11 +118,7 @@ impl AppData {
             .lock()
             .unwrap();
         *guard = toplevels
-            .filter_map(|toplevel| {
-                let Some(info) = toplevel.1 else {
-                    return None;
-                };
-
+            .filter_map(|info| {
                 let Some(o) = self
                     .workspace_state
                     .workspace_groups()
@@ -144,7 +140,7 @@ impl AppData {
                     return None;
                 };
 
-                Some((o, toplevel.0))
+                Some((o, info.foreign_toplevel.clone()))
             })
             .fold(
                 std::collections::HashMap::new(),
@@ -156,11 +152,8 @@ impl AppData {
                 },
             );
 
-        *self.wayland_helper.inner.toplevels.lock().unwrap() = self
-            .toplevel_info_state
-            .toplevels()
-            .filter_map(|(handle, info)| Some((handle.clone(), info?.clone())))
-            .collect();
+        *self.wayland_helper.inner.toplevels.lock().unwrap() =
+            self.toplevel_info_state.toplevels().cloned().collect();
     }
 }
 
@@ -277,7 +270,7 @@ impl WaylandHelper {
         self.inner.outputs.lock().unwrap().clone()
     }
 
-    pub fn toplevels(&self) -> Vec<(ZcosmicToplevelHandleV1, ToplevelInfo)> {
+    pub fn toplevels(&self) -> Vec<ToplevelInfo> {
         self.inner.toplevels.lock().unwrap().clone()
     }
 
@@ -295,6 +288,18 @@ impl WaylandHelper {
                 output_infos.remove(output);
             }
         }
+    }
+
+    pub fn capture_source_for_toplevel(
+        &self,
+        toplevel: &ExtForeignToplevelHandleV1,
+    ) -> Option<CaptureSource> {
+        let toplevels = self.inner.toplevels.lock().unwrap();
+        let info = toplevels
+            .iter()
+            .find(|info| info.foreign_toplevel == *toplevel)?;
+        // TODO Support ext capture source
+        Some(CaptureSource::CosmicToplevel(info.cosmic_toplevel.clone()?))
     }
 
     pub async fn capture_output_toplevels_shm(
@@ -319,12 +324,11 @@ impl WaylandHelper {
 
         // TODO is `FuturesOrdered` more optimal?
         let mut images = Vec::new();
-        for t in toplevels.into_iter() {
-            if let Some(image) = self
-                .capture_source_shm(CaptureSource::CosmicToplevel(t), overlay_cursor)
-                .await
-            {
-                images.push(image);
+        for foreign_toplevel in toplevels.into_iter() {
+            if let Some(source) = self.capture_source_for_toplevel(&foreign_toplevel) {
+                if let Some(image) = self.capture_source_shm(source, overlay_cursor).await {
+                    images.push(image);
+                }
             }
         }
         images
