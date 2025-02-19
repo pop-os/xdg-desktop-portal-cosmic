@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
+use ashpd::AppID;
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::{key::Named, Key};
@@ -17,6 +18,7 @@ use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
+use std::str::FromStr;
 use std::{collections::HashMap, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
@@ -317,13 +319,13 @@ impl Screenshot {
         let app_id = if app_id.is_empty() {
             None
         } else {
-            Some(app_id.try_into()?)
+            Some(AppID::from_str(app_id)?)
         };
         let (doc_ids, _) = documents
             .add_full(
                 &[&file.as_fd()],
                 Default::default(),
-                app_id,
+                app_id.as_ref(),
                 &[
                     Permission::Read,
                     Permission::Write,

@@ -100,7 +100,7 @@ pub async fn show_screencast_prompt(
     rx.recv().await.unwrap()
 }
 
-async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry<'static>> {
+async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry> {
     let mut entries = Vec::new();
     for p in fde::Iter::new(fde::default_paths()) {
         if let Ok(data) = tokio::fs::read_to_string(&p).await {
@@ -112,11 +112,8 @@ async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry<'static>> 
     entries
 }
 
-fn get_desktop_entry<'a>(
-    entries: &'a [DesktopEntry<'a>],
-    id: &str,
-) -> Option<&'a DesktopEntry<'a>> {
-    fde::matching::get_best_match(&[id], &entries, fde::matching::MatchAppIdOptions::default())
+fn get_desktop_entry<'a>(entries: &'a [DesktopEntry], id: &str) -> Option<&'a DesktopEntry> {
+    fde::matching::find_entry_from_appid(entries, id)
 }
 
 fn create_dialog() -> cosmic::Task<crate::app::Msg> {
