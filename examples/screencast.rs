@@ -2,8 +2,9 @@
 // Test modifiers, when added to pipewire gstreamersrc:
 // - https://gitlab.freedesktop.org/pipewire/pipewire/-/merge_requests/1881
 
+use ashpd::desktop::PersistMode;
 use ashpd::{
-    desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType},
+    desktop::screencast::{CursorMode, Screencast, SourceType},
     enumflags2::BitFlags,
 };
 use clap::Parser;
@@ -67,10 +68,7 @@ async fn main() -> anyhow::Result<()> {
             PersistMode::DoNot,
         )
         .await?;
-    let streams = screencast
-        .start(&session, &ashpd::WindowIdentifier::default())
-        .await?
-        .response()?;
+    let streams = screencast.start(&session, None).await?.response()?;
     println!("{} streams", streams.streams().len());
     let stream = &streams.streams()[0];
     let fd = screencast.open_pipe_wire_remote(&session).await?;
