@@ -183,16 +183,11 @@ impl ScreenCast {
                 ));
             }
             for foreign_toplevel in capture_sources.toplevels {
-                if let Some(source) = self
-                    .wayland_helper
-                    .capture_source_for_toplevel(&foreign_toplevel)
-                {
-                    res_futures.push_back(ScreencastThread::new(
-                        self.wayland_helper.clone(),
-                        source,
-                        overlay_cursor,
-                    ));
-                }
+                res_futures.push_back(ScreencastThread::new(
+                    self.wayland_helper.clone(),
+                    CaptureSource::Toplevel(foreign_toplevel.clone()),
+                    overlay_cursor,
+                ));
             }
 
             let mut failed = false;

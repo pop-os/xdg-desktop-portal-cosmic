@@ -14,7 +14,6 @@ use cosmic_client_toolkit::{
     toplevel_info::{ToplevelInfo, ToplevelInfoState},
     workspace::WorkspaceState,
 };
-use cosmic_protocols::workspace::v1::client::zcosmic_workspace_handle_v1;
 use futures::channel::oneshot;
 use rustix::fd::{FromRawFd, RawFd};
 use std::{
@@ -34,7 +33,10 @@ use wayland_client::{
     Connection, Dispatch, QueueHandle, WEnum,
 };
 use wayland_protocols::{
-    ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ext::{
+        foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+        workspace::v1::client::ext_workspace_handle_v1,
+    },
     wp::linux_dmabuf::zv1::client::{
         zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
         zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
@@ -119,24 +121,20 @@ impl AppData {
             .unwrap();
         *guard = toplevels
             .filter_map(|info| {
-                let Some(o) = self
-                    .workspace_state
-                    .workspace_groups()
-                    .iter()
-                    .find_map(|wg| {
-                        wg.workspaces.iter().find_map(|w| {
+                let Some(o) = self.workspace_state.workspace_groups().find_map(|wg| {
+                    wg.workspaces
+                        .iter()
+                        .filter_map(|handle| self.workspace_state.workspace_info(handle))
+                        .find_map(|w| {
                             info.workspace
                                 .iter()
                                 .any(|x| {
                                     x == &w.handle
-                                        && w.state.contains(&WEnum::Value(
-                                            zcosmic_workspace_handle_v1::State::Active,
-                                        ))
+                                        && w.state.contains(ext_workspace_handle_v1::State::Active)
                                 })
                                 .then(|| info.output.iter().cloned().collect::<Vec<_>>())
                         })
-                    })
-                else {
+                }) else {
                     return None;
                 };
 
@@ -290,18 +288,6 @@ impl WaylandHelper {
         }
     }
 
-    pub fn capture_source_for_toplevel(
-        &self,
-        toplevel: &ExtForeignToplevelHandleV1,
-    ) -> Option<CaptureSource> {
-        let toplevels = self.inner.toplevels.lock().unwrap();
-        let info = toplevels
-            .iter()
-            .find(|info| info.foreign_toplevel == *toplevel)?;
-        // TODO Support ext capture source
-        Some(CaptureSource::CosmicToplevel(info.cosmic_toplevel.clone()?))
-    }
-
     pub async fn capture_output_toplevels_shm(
         &self,
         output: &wl_output::WlOutput,
@@ -325,10 +311,9 @@ impl WaylandHelper {
         // TODO is `FuturesOrdered` more optimal?
         let mut images = Vec::new();
         for foreign_toplevel in toplevels.into_iter() {
-            if let Some(source) = self.capture_source_for_toplevel(&foreign_toplevel) {
-                if let Some(image) = self.capture_source_shm(source, overlay_cursor).await {
-                    images.push(image);
-                }
+            let source = CaptureSource::Toplevel(foreign_toplevel.clone());
+            if let Some(image) = self.capture_source_shm(source, overlay_cursor).await {
+                images.push(image);
             }
         }
         images
