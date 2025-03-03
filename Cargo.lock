@@ -1355,8 +1355,9 @@ dependencies = [
 [[package]]
 name = "cosmic-client-toolkit"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-protocols?rev=178eb0b#178eb0b14a0e5c192f64f6dee6c40341a8e5ee51"
+source = "git+https://github.com/pop-os/cosmic-protocols//?branch=main#6b05c2a157118979cb472a38455ba78ca9729196"
 dependencies = [
+ "bitflags 2.8.0",
  "cosmic-protocols",
  "libc",
  "smithay-client-toolkit",
@@ -1468,7 +1469,7 @@ dependencies = [
 [[package]]
 name = "cosmic-protocols"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-protocols?rev=178eb0b#178eb0b14a0e5c192f64f6dee6c40341a8e5ee51"
+source = "git+https://github.com/pop-os/cosmic-protocols//?branch=main#6b05c2a157118979cb472a38455ba78ca9729196"
 dependencies = [
  "bitflags 2.8.0",
  "wayland-backend",
@@ -7109,7 +7110,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

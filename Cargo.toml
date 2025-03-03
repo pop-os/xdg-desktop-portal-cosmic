@@ -92,3 +92,7 @@ clap = { version = "4.5.30", features = ["derive"] }
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+[patch."https://github.com/pop-os/cosmic-protocols"]
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
