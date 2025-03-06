@@ -56,11 +56,11 @@ pub fn create_dmabuf<T: AsFd>(
         modifier,
         width,
         height,
-        planes: (0..buffer.plane_count().unwrap() as i32)
+        planes: (0..buffer.plane_count() as i32)
             .map(|i| Plane {
                 fd: buffer.fd_for_plane(i).unwrap(), // XXX
-                offset: buffer.offset(i).unwrap(),
-                stride: buffer.stride_for_plane(i).unwrap(),
+                offset: buffer.offset(i),
+                stride: buffer.stride_for_plane(i),
             })
             .collect(),
     }

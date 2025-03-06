@@ -89,7 +89,7 @@ impl StreamData {
                 gbm::Format::Abgr8888,
                 gbm::BufferObjectFlags::empty(),
             ) {
-                Ok(bo) => Some((gbm::Modifier::Invalid, bo.plane_count().ok()?)),
+                Ok(bo) => Some((gbm::Modifier::Invalid, bo.plane_count())),
                 Err(err) => {
                     log::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
@@ -106,7 +106,7 @@ impl StreamData {
                 modifiers.iter().copied(),
                 gbm::BufferObjectFlags::empty(),
             ) {
-                Ok(bo) => Some((bo.modifier().ok()?, bo.plane_count().ok()?)),
+                Ok(bo) => Some((bo.modifier(), bo.plane_count())),
                 Err(err) => {
                     log::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
