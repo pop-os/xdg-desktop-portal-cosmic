@@ -4,6 +4,7 @@
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
+use cosmic_client_toolkit::screencopy::Rect;
 use futures::executor::block_on;
 use pipewire::{
     spa::{
@@ -14,7 +15,7 @@ use pipewire::{
     stream::{StreamRef, StreamState},
     sys::pw_buffer,
 };
-use std::{ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
+use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
 use tokio::sync::oneshot;
 use wayland_client::{
     protocol::{wl_buffer, wl_output, wl_shm},
@@ -76,6 +77,7 @@ struct StreamData {
     width: u32,
     height: u32,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
+    buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
 }
 
 impl StreamData {
@@ -264,6 +266,7 @@ impl StreamData {
 
         let wl_buffer: Box<wl_buffer::WlBuffer> =
             unsafe { Box::from_raw((*buffer).user_data as *mut _) };
+        self.buffer_damage.remove(&*wl_buffer);
         wl_buffer.destroy();
     }
 
@@ -271,11 +274,28 @@ impl StreamData {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
-            match block_on(
-                self.session
-                    .capture_wl_buffer(wl_buffer, self.width, self.height),
-            ) {
+            let full_damage = &[Rect {
+                x: 0,
+                y: 0,
+                width: self.width as i32,
+                height: self.height as i32,
+            }];
+            let damage = self
+                .buffer_damage
+                .get(wl_buffer)
+                .map(Vec::as_slice)
+                .unwrap_or(full_damage);
+            match block_on(self.session.capture_wl_buffer(wl_buffer, damage)) {
                 Ok(frame) => {
+                    self.buffer_damage
+                        .entry(wl_buffer.clone())
+                        .or_default()
+                        .clear();
+                    for (b, damage) in self.buffer_damage.iter_mut() {
+                        if b != wl_buffer {
+                            damage.extend_from_slice(&frame.damage);
+                        }
+                    }
                     if let Some(video_transform) = unsafe {
                         buffer_find_meta_data::<spa_sys::spa_meta_videotransform>(
                             buffer,
@@ -358,6 +378,7 @@ fn start_stream(
         width,
         height,
         node_id_tx: Some(node_id_tx),
+        buffer_damage: HashMap::new(),
     };
 
     let listener = stream

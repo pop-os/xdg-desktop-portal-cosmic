@@ -194,19 +194,13 @@ impl Session {
     pub async fn capture_wl_buffer(
         &self,
         buffer: &wl_buffer::WlBuffer,
-        width: u32,
-        height: u32,
+        buffer_damage: &[Rect],
     ) -> Result<Frame, WEnum<FailureReason>> {
         let (sender, receiver) = oneshot::channel();
         // TODO damage
         self.0.capture_session.capture(
             buffer,
-            &[Rect {
-                x: 0,
-                y: 0,
-                width: width as i32,
-                height: height as i32,
-            }],
+            buffer_damage,
             &self.0.wayland_helper.inner.qh,
             FrameData {
                 frame_data: Default::default(),
@@ -391,7 +385,13 @@ impl WaylandHelper {
         let buffer =
             self.create_shm_buffer(&fd, width, height, width * 4, wl_shm::Format::Abgr8888);
 
-        let res = session.capture_wl_buffer(&buffer, width, height).await;
+        let damage = &[Rect {
+            x: 0,
+            y: 0,
+            width: width as i32,
+            height: height as i32,
+        }];
+        let res = session.capture_wl_buffer(&buffer, damage).await;
         buffer.destroy();
 
         if let Ok(frame) = res {
