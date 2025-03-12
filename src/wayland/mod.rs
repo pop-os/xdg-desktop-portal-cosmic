@@ -44,7 +44,7 @@ use wayland_protocols::{
     },
 };
 
-pub use cosmic_client_toolkit::screencopy::CaptureSource;
+pub use cosmic_client_toolkit::screencopy::{CaptureSource, Rect};
 
 use crate::buffer;
 
@@ -192,12 +192,19 @@ impl Session {
     pub async fn capture_wl_buffer(
         &self,
         buffer: &wl_buffer::WlBuffer,
+        width: u32,
+        height: u32,
     ) -> Result<Frame, WEnum<FailureReason>> {
         let (sender, receiver) = oneshot::channel();
         // TODO damage
         self.0.capture_session.capture(
             buffer,
-            &[],
+            &[Rect {
+                x: 0,
+                y: 0,
+                width: width as i32,
+                height: height as i32,
+            }],
             &self.0.wayland_helper.inner.qh,
             FrameData {
                 frame_data: Default::default(),
@@ -369,7 +376,7 @@ impl WaylandHelper {
         let buffer =
             self.create_shm_buffer(&fd, width, height, width * 4, wl_shm::Format::Abgr8888);
 
-        let res = session.capture_wl_buffer(&buffer).await;
+        let res = session.capture_wl_buffer(&buffer, width, height).await;
         buffer.destroy();
 
         if let Ok(frame) = res {

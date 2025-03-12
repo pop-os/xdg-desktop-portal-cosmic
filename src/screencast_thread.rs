@@ -271,7 +271,10 @@ impl StreamData {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
-            match block_on(self.session.capture_wl_buffer(wl_buffer)) {
+            match block_on(
+                self.session
+                    .capture_wl_buffer(wl_buffer, self.width, self.height),
+            ) {
                 Ok(frame) => {
                     if let Some(video_transform) = unsafe {
                         buffer_find_meta_data::<spa_sys::spa_meta_videotransform>(
