@@ -1,4 +1,4 @@
-use cosmic::{app, iced::window, widget};
+use cosmic::{action, app, iced::window, widget};
 use cosmic_files::dialog::{
     DialogChoice, DialogChoiceOption, DialogFilter, DialogFilterPattern, DialogKind, DialogMessage,
     DialogResult,
@@ -250,11 +250,11 @@ pub(crate) struct Args {
     pub tx: Sender<PortalResponse<FileChooserResult>>,
 }
 
-fn map_msg(id: window::Id, message: app::Message<Msg>) -> app::Message<AppMsg> {
+fn map_msg(id: window::Id, message: cosmic::Action<Msg>) -> cosmic::Action<AppMsg> {
     match message {
-        app::Message::App(msg) => app::Message::App(AppMsg::FileChooser(id, msg)),
-        app::Message::Cosmic(cosmic_message) => app::Message::Cosmic(cosmic_message),
-        app::Message::None => app::Message::None,
+        cosmic::Action::App(msg) => cosmic::Action::App(AppMsg::FileChooser(id, msg)),
+        cosmic::Action::Cosmic(cosmic_message) => cosmic::Action::Cosmic(cosmic_message),
+        cosmic::Action::None => cosmic::Action::None,
     }
 }
 
@@ -269,7 +269,7 @@ pub fn update_msg(
     portal: &mut CosmicPortal,
     id: window::Id,
     msg: Msg,
-) -> cosmic::Task<app::Message<AppMsg>> {
+) -> cosmic::Task<cosmic::Action<AppMsg>> {
     match msg {
         Msg::DialogMessage(dialog_msg) => match portal.file_choosers.get_mut(&id) {
             Some((_args, dialog)) => dialog.update(dialog_msg).map(move |msg| map_msg(id, msg)),
@@ -349,7 +349,7 @@ pub fn update_msg(
                 cosmic::Task::perform(
                     async move {
                         let _ = args.tx.send(response).await;
-                        cosmic::app::message::none()
+                        action::none()
                     },
                     |x| x,
                 )
@@ -362,7 +362,7 @@ pub fn update_msg(
     }
 }
 
-pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<app::Message<AppMsg>> {
+pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic::Action<AppMsg>> {
     let mut cmds = Vec::with_capacity(2);
 
     let kind = match &args.options {

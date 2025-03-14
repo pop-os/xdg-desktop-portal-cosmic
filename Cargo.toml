@@ -17,7 +17,7 @@ ashpd = "0.11.0"
 cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
     "gvfs",
     "wayland",
-] }
+], branch = "update-libcosmic" }
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "178eb0b" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "178eb0b" }
 futures = "0.3"
@@ -51,7 +51,7 @@ rust-embed = "8.5.0"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-freedesktop-desktop-entry = "0.7.7"
+freedesktop-desktop-entry = "0.7.8"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.17.1"
