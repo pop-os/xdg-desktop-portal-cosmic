@@ -297,6 +297,16 @@ impl WaylandHelper {
         self.inner.output_infos.lock().unwrap().get(output).cloned()
     }
 
+    pub fn output_for_name(&self, name: &str) -> Option<wl_output::WlOutput> {
+        self.inner
+            .output_infos
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, v)| v.name.as_deref() == Some(name))
+            .map(|(output, _)| output.clone())
+    }
+
     fn set_output_info(&self, output: &wl_output::WlOutput, output_info_opt: Option<OutputInfo>) {
         let mut output_infos = self.inner.output_infos.lock().unwrap();
         match output_info_opt {
