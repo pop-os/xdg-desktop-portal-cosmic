@@ -51,7 +51,7 @@ rust-embed = "8.5.0"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-freedesktop-desktop-entry = "0.7.7"
+freedesktop-desktop-entry = "0.7.8"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.17.1"
@@ -96,3 +96,6 @@ lto = "thin"
 [patch."https://github.com/pop-os/cosmic-protocols"]
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
+
+[patch.crates-io]
+xdg-mime = { git = "https://github.com/ellieplayswow/xdg-mime-rs", branch = "feature/get-same-as" }
