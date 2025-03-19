@@ -292,11 +292,12 @@ where
                         }
                     ),
                     vertical::light().height(Length::Fixed(64.0)),
-                    dropdown(
+                    Element::from(dropdown(
                         save_locations.as_slice(),
                         Some(selected_save_location),
-                        dropdown_selected
-                    ),
+                        |i| i
+                    ))
+                    .map(dropdown_selected),
                     vertical::light().height(Length::Fixed(64.0)),
                     button::custom(
                         icon::Icon::from(icon::from_name("window-close-symbolic").size(63))

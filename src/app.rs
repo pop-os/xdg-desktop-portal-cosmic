@@ -99,7 +99,7 @@ impl cosmic::Application for CosmicPortal {
             config_handler,
             config,
         }: Self::Flags,
-    ) -> (Self, cosmic::iced::Task<app::Message<Self::Message>>) {
+    ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
         let mut model = cosmic::widget::dropdown::multi::model();
         model.insert(dropdown::multi::list(
             Some(fl!("save-to")),
@@ -161,23 +161,23 @@ impl cosmic::Application for CosmicPortal {
     fn update(
         &mut self,
         message: Self::Message,
-    ) -> cosmic::iced::Task<app::Message<Self::Message>> {
+    ) -> cosmic::iced::Task<cosmic::Action<Self::Message>> {
         match message {
-            Msg::Access(m) => access::update_msg(self, m).map(cosmic::app::Message::App),
+            Msg::Access(m) => access::update_msg(self, m).map(cosmic::Action::App),
             Msg::FileChooser(id, m) => file_chooser::update_msg(self, id, m),
             Msg::Portal(e) => match e {
                 subscription::Event::Access(args) => {
-                    access::update_args(self, args).map(cosmic::app::Message::App)
+                    access::update_args(self, args).map(cosmic::Action::App)
                 }
                 subscription::Event::FileChooser(args) => file_chooser::update_args(self, args),
                 subscription::Event::Screenshot(args) => {
-                    screenshot::update_args(self, args).map(cosmic::app::Message::App)
+                    screenshot::update_args(self, args).map(cosmic::Action::App)
                 }
                 subscription::Event::Screencast(args) => {
-                    screencast_dialog::update_args(self, args).map(cosmic::app::Message::App)
+                    screencast_dialog::update_args(self, args).map(cosmic::Action::App)
                 }
                 subscription::Event::CancelScreencast(handle) => {
-                    screencast_dialog::cancel(self, handle).map(cosmic::app::Message::App)
+                    screencast_dialog::cancel(self, handle).map(cosmic::Action::App)
                 }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
@@ -188,10 +188,8 @@ impl cosmic::Application for CosmicPortal {
                     Task::none()
                 }
             },
-            Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::app::Message::App),
-            Msg::Screencast(m) => {
-                screencast_dialog::update_msg(self, m).map(cosmic::app::Message::App)
-            }
+            Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::Action::App),
+            Msg::Screencast(m) => screencast_dialog::update_msg(self, m).map(cosmic::Action::App),
             Msg::Output(o_event, wl_output) => {
                 match o_event {
                     OutputEvent::Created(Some(info))
@@ -327,7 +325,7 @@ impl cosmic::Application for CosmicPortal {
         &mut self,
         _keys: &[&'static str],
         new_theme: &cosmic::cosmic_theme::Theme,
-    ) -> cosmic::iced::Task<app::Message<Self::Message>> {
+    ) -> cosmic::iced::Task<cosmic::Action<Self::Message>> {
         let old = self.core.system_theme().cosmic();
         let mut msgs = Vec::with_capacity(3);
 
