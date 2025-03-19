@@ -6,7 +6,7 @@ use std::{collections::HashMap, mem};
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
-use crate::screencast_dialog;
+use crate::screencast_dialog::{self, CaptureSources};
 use crate::screencast_thread::ScreencastThread;
 use crate::subscription;
 use crate::wayland::{CaptureSource, WaylandHelper};
@@ -26,6 +26,91 @@ struct CreateSessionResult {
     session_id: String,
 }
 
+#[derive(Clone)]
+struct PersistedCaptureSources {
+    pub outputs: Vec<String>,
+    pub toplevels: Vec<String>,
+}
+
+impl PersistedCaptureSources {
+    fn from_capture_sources(
+        wayland_helper: &WaylandHelper,
+        sources: &CaptureSources,
+    ) -> Option<Self> {
+        let mut outputs = Vec::new();
+        for handle in &sources.outputs {
+            let info = wayland_helper.output_info(handle)?;
+            outputs.push(info.name.clone()?);
+        }
+
+        let mut toplevels = Vec::new();
+        let toplevel_infos = wayland_helper.toplevels();
+        for handle in &sources.toplevels {
+            let info = toplevel_infos
+                .iter()
+                .find(|t| t.foreign_toplevel == *handle)?;
+            toplevels.push(info.identifier.clone());
+        }
+
+        Some(Self { outputs, toplevels })
+    }
+
+    fn to_capture_sources(&self, wayland_helper: &WaylandHelper) -> Option<CaptureSources> {
+        let mut outputs = Vec::new();
+        for name in &self.outputs {
+            outputs.push(wayland_helper.output_for_name(name)?);
+        }
+
+        let mut toplevels = Vec::new();
+        let toplevel_infos = wayland_helper.toplevels();
+        for identifier in &self.toplevels {
+            let info = toplevel_infos
+                .iter()
+                .find(|t| t.identifier == *identifier)?;
+            toplevels.push(info.foreign_toplevel.clone());
+        }
+
+        Some(CaptureSources { outputs, toplevels })
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, zvariant::Type)]
+#[zvariant(signature = "(suv)")]
+struct RestoreData {
+    vendor: String,
+    version: u32,
+    data: zvariant::OwnedValue,
+}
+
+impl From<PersistedCaptureSources> for RestoreData {
+    fn from(sources: PersistedCaptureSources) -> RestoreData {
+        RestoreData {
+            vendor: "COSMIC".to_string(),
+            version: 1,
+            data: zvariant::Value::from(zvariant::Structure::from((
+                sources.outputs,
+                sources.toplevels,
+            )))
+            .try_to_owned()
+            .unwrap(),
+        }
+    }
+}
+
+impl TryFrom<&RestoreData> for PersistedCaptureSources {
+    type Error = ();
+    fn try_from(restore_data: &RestoreData) -> Result<Self, ()> {
+        if (&*restore_data.vendor, restore_data.version) != ("COSMIC", 1) {
+            return Err(());
+        }
+        let structure = zvariant::Structure::try_from(&*restore_data.data).map_err(|_| ())?;
+        let (outputs, toplevels) = structure.try_into().map_err(|_| ())?;
+        Ok(PersistedCaptureSources { outputs, toplevels })
+    }
+}
+
+// TODO TryFrom
+
 #[derive(zvariant::DeserializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
 struct SelectSourcesOptions {
@@ -34,7 +119,7 @@ struct SelectSourcesOptions {
     // Default: false
     multiple: Option<bool>,
     cursor_mode: Option<u32>,
-    restore_data: Option<(String, u32, zvariant::OwnedValue)>,
+    restore_data: Option<RestoreData>,
     // Default: 0
     persist_mode: Option<u32>,
 }
@@ -44,7 +129,7 @@ struct SelectSourcesOptions {
 struct StartResult {
     streams: Vec<(u32, HashMap<String, zvariant::OwnedValue>)>,
     persist_mode: Option<u32>,
-    restore_data: Option<(String, u32, zvariant::OwnedValue)>,
+    restore_data: Option<RestoreData>,
 }
 
 #[derive(Default)]
@@ -53,6 +138,7 @@ struct SessionData {
     cursor_mode: Option<u32>,
     multiple: bool,
     source_types: BitFlags<SourceType>,
+    persisted_capture_sources: Option<PersistedCaptureSources>,
     closed: bool,
 }
 
@@ -120,6 +206,13 @@ impl ScreenCast {
                 if session_data.source_types.is_empty() {
                     session_data.source_types = SourceType::Monitor.into();
                 }
+                if let Some(restore_data) = &options.restore_data {
+                    if let Ok(persisted_capture_sources) = restore_data.try_into() {
+                        session_data.persisted_capture_sources = Some(persisted_capture_sources);
+                    } else {
+                        log::warn!("unrecognized screencopy restore data: {:?}", restore_data);
+                    }
+                }
                 PortalResponse::Success(HashMap::new())
             }
             None => PortalResponse::Other,
@@ -143,12 +236,18 @@ impl ScreenCast {
                 return PortalResponse::Other;
             };
 
-            let (cursor_mode, multiple, source_types) = {
+            let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
                 let session_data = interface.get_mut().await;
                 let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
                 let multiple = session_data.multiple;
                 let source_types = session_data.source_types;
-                (cursor_mode, multiple, source_types)
+                let persisted_capture_sources = session_data.persisted_capture_sources.clone();
+                (
+                    cursor_mode,
+                    multiple,
+                    source_types,
+                    persisted_capture_sources,
+                )
             };
 
             // XXX
@@ -158,31 +257,38 @@ impl ScreenCast {
                 return PortalResponse::Other;
             }
 
-            // Show dialog to prompt for what to capture
-            let resp = screencast_dialog::show_screencast_prompt(
-                &self.tx,
-                &session_handle,
-                app_id,
-                multiple,
-                source_types,
-                &self.wayland_helper,
-            )
-            .await;
-            let Some(capture_sources) = resp else {
-                return PortalResponse::Cancelled;
+            let capture_sources = if let Some(capture_sources) =
+                persisted_capture_sources.and_then(|x| x.to_capture_sources(&self.wayland_helper))
+            {
+                capture_sources
+            } else {
+                // Show dialog to prompt for what to capture
+                let resp = screencast_dialog::show_screencast_prompt(
+                    &self.tx,
+                    &session_handle,
+                    app_id,
+                    multiple,
+                    source_types,
+                    &self.wayland_helper,
+                )
+                .await;
+                let Some(capture_sources) = resp else {
+                    return PortalResponse::Cancelled;
+                };
+                capture_sources
             };
 
             let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
             // Use `FuturesOrdered` so streams are in consistent order
             let mut res_futures = FuturesOrdered::new();
-            for output in capture_sources.outputs {
+            for output in &capture_sources.outputs {
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
-                    CaptureSource::Output(output),
+                    CaptureSource::Output(output.clone()),
                     overlay_cursor,
                 ));
             }
-            for foreign_toplevel in capture_sources.toplevels {
+            for foreign_toplevel in &capture_sources.toplevels {
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
                     CaptureSource::Toplevel(foreign_toplevel.clone()),
@@ -224,11 +330,15 @@ impl ScreenCast {
                 .collect();
             interface.get_mut().await.screencast_threads = screencast_threads;
 
+            let persisted_capture_sources = PersistedCaptureSources::from_capture_sources(
+                &self.wayland_helper,
+                &capture_sources,
+            );
+
             PortalResponse::Success(StartResult {
-                // XXX
                 streams,
                 persist_mode: None,
-                restore_data: None,
+                restore_data: persisted_capture_sources.map(|x| x.into()),
             })
         })
         .await
