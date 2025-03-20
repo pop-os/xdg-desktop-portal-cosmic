@@ -382,7 +382,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                             return cosmic::iced_core::event::Status::Ignored;
                         }
 
-                        self.handle_drag_pos(x as i32, y as i32, shell);
+                        self.handle_drag_pos(x.round() as i32, y.round() as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
                     OfferEvent::Motion { x, y } => {
@@ -391,7 +391,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                         if !cursor.is_over(layout.bounds()) {
                             return cosmic::iced_core::event::Status::Ignored;
                         }
-                        self.handle_drag_pos(x as i32, y as i32, shell);
+                        self.handle_drag_pos(x.round() as i32, y.round() as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
                     OfferEvent::Drop => {
