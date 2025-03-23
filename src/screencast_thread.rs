@@ -17,6 +17,10 @@ use pipewire::{
 };
 use spa_sys::{spa_format_video_raw_parse, spa_video_info_raw};
 
+use crate::{
+    buffer,
+    wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
+};
 use std::{
     collections::HashMap,
     ffi::c_void,
@@ -30,15 +34,9 @@ use wayland_client::{
     protocol::{wl_buffer, wl_output, wl_shm},
     WEnum,
 };
-use wayland_protocols::wp::input_timestamps::zv1::client::zwp_input_timestamps_v1;
-
-use crate::{
-    buffer,
-    wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
-};
 
 const TIMESPEC_NSEC_PER_SEC: u32 = 1_000_000_000;
-const FPS_MEASURE_PERIOD_SEC: u64 = 5;
+const FPS_MEASURE_PERIOD_SEC: f64 = 5.;
 
 pub struct ScreencastThread {
     node_id: u32,
@@ -87,6 +85,7 @@ struct FPSLimit {
     frame_last_time: Instant,
     fps_last_time: Instant,
     fps_frame_count: u64,
+    delay_til_next_frame_ns: u64,
 }
 
 impl FPSLimit {
@@ -95,40 +94,46 @@ impl FPSLimit {
             frame_last_time: Instant::now(),
             fps_last_time: Instant::now(),
             fps_frame_count: 0,
+            delay_til_next_frame_ns: 0,
         }
     }
 
-    fn fps_limit_measure_start(&mut self) {
+    fn fps_limit_measure_start(&mut self, max_fps: u32) {
+        if max_fps <= 0 {
+            return;
+        }
+
         self.frame_last_time = Instant::now();
     }
 
     fn measure_fps(&mut self) {
         let now = Instant::now();
         self.fps_frame_count += 1;
-        let elapsed_sec = (now - self.fps_last_time).as_secs();
+        let elapsed_sec = (now - self.fps_last_time).as_secs_f64();
         if elapsed_sec < FPS_MEASURE_PERIOD_SEC {
             return;
         }
 
-        let avg_frames_per_sec = self.fps_frame_count / elapsed_sec;
-        println!(
-            "fps_limit: average FPS in the last {} seconds: {}",
-            avg_frames_per_sec, elapsed_sec
+        let avg_frames_per_sec = self.fps_frame_count as f64 / elapsed_sec;
+        log::info!(
+            "fps_limit: average FPS in the last {:.2} seconds: {:.2}",
+            avg_frames_per_sec,
+            elapsed_sec
         );
         self.fps_frame_count = 0;
         self.fps_last_time = now;
     }
 
-    fn wait_for_next_frame(&mut self, max_fps: u32) {
+    fn fps_limit_measure_end(&mut self, max_fps: u32) {
+        if max_fps <= 0 {
+            self.delay_til_next_frame_ns = 0;
+            return;
+        }
         self.measure_fps();
 
         let elapsed_ns = self.frame_last_time.elapsed().as_nanos();
         let target_ns = (TIMESPEC_NSEC_PER_SEC / max_fps) as u128;
-        if target_ns > elapsed_ns {
-            let delay_ns = (target_ns - elapsed_ns) as u64;
-            // println!("Time til next: {}ns", delay_ns);
-            std::thread::sleep(Duration::from_nanos(delay_ns));
-        }
+        self.delay_til_next_frame_ns = target_ns.saturating_sub(elapsed_ns) as u64;
     }
 }
 
@@ -359,12 +364,14 @@ impl StreamData {
     fn process(&mut self, stream: &StreamRef) {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
-            // Only wait if it not the first frame
-            if self.seq > 0 {
-                // Maybe there's a better way, e.g., using an event loop to wait and get a new frame
-                self.fps_limit.wait_for_next_frame(self.framerate);
+            if self.fps_limit.delay_til_next_frame_ns != 0 {
+                // log::info!(
+                //     "fps_limit: wait {}ns til next frame",
+                //     self.fps_limit.delay_til_next_frame_ns
+                // );
+                std::thread::sleep(Duration::from_nanos(self.fps_limit.delay_til_next_frame_ns));
             }
-
+            self.fps_limit.fps_limit_measure_start(self.framerate);
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
             let full_damage = &[Rect {
                 x: 0,
@@ -403,7 +410,7 @@ impl StreamData {
                 }
             }
             unsafe { stream.queue_raw_buffer(buffer) };
-            self.fps_limit.fps_limit_measure_start();
+            self.fps_limit.fps_limit_measure_end(self.framerate);
             self.seq += 1;
         }
     }
@@ -429,13 +436,24 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
+    // Gets framerate from screen's frame rate, and default to 0 if not available
+    let framerate = match &capture_source {
+        CaptureSource::Output(output) => wayland_helper
+            .output_info(output)
+            .and_then(|info| info.modes.into_iter().find(|mode| mode.current))
+            .map_or(0, |mode| mode.refresh_rate as u32 / 1000),
+        CaptureSource::Toplevel(foreign_toplevel) => wayland_helper
+            .output_info_toplevel(foreign_toplevel)
+            .and_then(|info| info.modes.into_iter().find(|mode| mode.current))
+            .map_or(0, |mode| mode.refresh_rate as u32 / 1000),
+        _ => 0,
+    };
+
     let (width, height) =
         match block_on(wayland_helper.capture_source_shm(capture_source.clone(), overlay_cursor)) {
             Some(frame) => (frame.width, frame.height),
             None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
         };
-
-    let framerate = 60; // Default framerate. XXX is there a better way?
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
