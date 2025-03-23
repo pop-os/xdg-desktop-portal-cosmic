@@ -273,6 +273,20 @@ impl WaylandHelper {
         self.inner.toplevels.lock().unwrap().clone()
     }
 
+    pub fn output_info_toplevel(
+        &self,
+        foreign_toplevel: &ExtForeignToplevelHandleV1,
+    ) -> Option<OutputInfo> {
+        let output_toplevels = self.inner.output_toplevels.lock().unwrap();
+        output_toplevels.iter().find_map(|(output, toplevel_list)| {
+            if toplevel_list.contains(foreign_toplevel) {
+                self.output_info(output)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn output_info(&self, output: &wl_output::WlOutput) -> Option<OutputInfo> {
         self.inner.output_infos.lock().unwrap().get(output).cloned()
     }
