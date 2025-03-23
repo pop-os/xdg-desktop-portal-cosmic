@@ -148,7 +148,6 @@ struct StreamData {
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
     // fps limit
     framerate: u32,
-    seq: u32,
     fps_limit: FPSLimit,
     fps_max: u32,
 }
@@ -411,7 +410,6 @@ impl StreamData {
             }
             unsafe { stream.queue_raw_buffer(buffer) };
             self.fps_limit.fps_limit_measure_end(self.framerate);
-            self.seq += 1;
         }
     }
 }
@@ -495,8 +493,7 @@ fn start_stream(
         buffer_damage: HashMap::new(),
         framerate,
         fps_limit: FPSLimit::new(),
-        fps_max: 120, // XXX
-        seq: 0,
+        fps_max: 120, // XXX can read from config?
     };
 
     let listener = stream
