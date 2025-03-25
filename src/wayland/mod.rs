@@ -22,7 +22,7 @@ use futures::{
 use rustix::fd::{FromRawFd, RawFd};
 use std::{
     collections::HashMap,
-    env,
+    env, io,
     os::{
         fd::{AsFd, OwnedFd},
         unix::net::UnixStream,
@@ -494,6 +494,7 @@ impl WaylandHelper {
     }
 }
 
+#[derive(Debug)]
 pub struct ShmImage<T: AsFd> {
     fd: T,
     pub width: u32,
@@ -525,6 +526,17 @@ impl<T: AsFd> ShmImage<T> {
             image::DynamicImage::ImageRgba8(image) => Ok(image),
             _ => unreachable!(),
         }
+    }
+}
+
+impl ShmImage<OwnedFd> {
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            fd: self.fd.try_clone()?,
+            width: self.width,
+            height: self.height,
+            transform: self.transform,
+        })
     }
 }
 
