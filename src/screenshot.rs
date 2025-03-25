@@ -581,7 +581,7 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
     KeyboardWrapper::new(
         crate::widget::screenshot::ScreenshotSelection::new(
             args.choice.clone(),
-            img.handle.clone(),
+            &img,
             Msg::Capture,
             Msg::Cancel,
             output,

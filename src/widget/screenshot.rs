@@ -65,7 +65,7 @@ where
 {
     pub fn new(
         choice: Choice,
-        image_handle: image::Handle,
+        image: &ScreenshotImage,
         on_capture: Msg,
         on_cancel: Msg,
         output: &OutputState,
@@ -146,7 +146,7 @@ where
         };
 
         let bg_element = match choice {
-            Choice::Output(_) | Choice::Rectangle(..) => image::Image::new(image_handle)
+            Choice::Output(_) | Choice::Rectangle(..) => image::Image::new(image.handle.clone())
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),
