@@ -9,18 +9,23 @@ use cosmic::iced_runtime::clipboard;
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced_winit::{
+    commands::layer_surface::{destroy_layer_surface, get_layer_surface},
+    platform_specific::wayland::subsurface_widget::{Shmbuf, SubsurfaceBuffer},
+};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use futures::stream::{FuturesUnordered, StreamExt};
 use image::RgbaImage;
-use rustix::fd::AsFd;
+use rustix::fd::{AsFd, OwnedFd};
 use std::borrow::Cow;
 use std::num::NonZeroU32;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::{collections::HashMap, io, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
-use wayland_client::protocol::wl_output::WlOutput;
+use wayland_client::protocol::wl_output::{self, WlOutput};
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
@@ -32,18 +37,20 @@ use crate::{PortalResponse, fl, subscription};
 #[derive(Clone, Debug)]
 pub struct ScreenshotImage {
     pub rgba: RgbaImage,
-    pub handle: cosmic::widget::image::Handle,
+    pub transform: wl_output::Transform,
+    pub subsurface_buffer: SubsurfaceBuffer,
 }
 
 impl ScreenshotImage {
-    fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
+    fn new<T: AsFd + Into<OwnedFd>>(img: ShmImage<T>) -> anyhow::Result<Self> {
         let rgba = img.image_transformed()?;
-        let handle = cosmic::widget::image::Handle::from_rgba(
-            rgba.width(),
-            rgba.height(),
-            rgba.clone().into_vec(),
-        );
-        Ok(Self { rgba, handle })
+        let transform = img.transform;
+        let (subsurface_buffer, _) = SubsurfaceBuffer::new(Arc::new(Shmbuf::from(img).into()));
+        Ok(Self {
+            rgba,
+            transform,
+            subsurface_buffer,
+        })
     }
 
     pub fn width(&self) -> u32 {
