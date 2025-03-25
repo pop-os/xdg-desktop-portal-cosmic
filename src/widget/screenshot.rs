@@ -1,6 +1,6 @@
-use std::{borrow::Cow, collections::HashMap, rc::Rc, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, rc::Rc};
 
-use ::image::{EncodableLayout, RgbaImage};
+use ::image::RgbaImage;
 use cosmic::{
     cosmic_theme::Spacing,
     iced::{self, window},
@@ -59,14 +59,6 @@ pub struct ScreenshotSelection<'a, Msg> {
 //  - menu
 
 // for now lets just support selecting the output
-
-pub struct MyImage(pub Arc<RgbaImage>);
-
-impl AsRef<[u8]> for MyImage {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
 
 impl<'a, Msg> ScreenshotSelection<'a, Msg>
 where
