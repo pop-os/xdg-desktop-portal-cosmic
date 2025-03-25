@@ -1,6 +1,5 @@
 use std::{borrow::Cow, collections::HashMap, rc::Rc};
 
-use ::image::RgbaImage;
 use cosmic::{
     cosmic_theme::Spacing,
     iced::{self, window},
@@ -21,7 +20,7 @@ use wayland_client::protocol::wl_output::WlOutput;
 use crate::{
     app::OutputState,
     fl,
-    screenshot::{Choice, Rect},
+    screenshot::{Choice, Rect, ScreenshotImage},
 };
 
 use super::{
@@ -73,7 +72,7 @@ where
         window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
         on_choice_change: impl Fn(Choice) -> Msg + 'static + Clone,
-        toplevel_images: &HashMap<String, Vec<RgbaImage>>,
+        toplevel_images: &HashMap<String, Vec<ScreenshotImage>>,
         toplevel_chosen: impl Fn(String, usize) -> Msg,
         save_locations: &'a Vec<String>,
         selected_save_location: usize,
@@ -120,12 +119,8 @@ where
                         (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
                     layer_container(
                         button::custom(
-                            image::Image::new(image::Handle::from_rgba(
-                                img.width(),
-                                img.height(),
-                                img.as_raw().clone(),
-                            ))
-                            .content_fit(ContentFit::ScaleDown),
+                            image::Image::new(img.handle.clone())
+                                .content_fit(ContentFit::ScaleDown),
                         )
                         .on_press(toplevel_chosen(output.name.clone(), i))
                         .class(cosmic::theme::Button::Image),
