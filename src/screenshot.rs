@@ -230,11 +230,7 @@ impl Screenshot {
         Some(path)
     }
 
-    async fn screenshot_inner(
-        &self,
-        outputs: Vec<Output>,
-        app_id: &str,
-    ) -> anyhow::Result<PathBuf> {
+    async fn screenshot_inner(&self, outputs: &[Output], app_id: &str) -> anyhow::Result<PathBuf> {
         use ashpd::documents::Permission;
 
         let wayland_helper = self.wayland_helper.clone();
@@ -249,14 +245,14 @@ impl Screenshot {
             } in outputs
             {
                 let frame = wayland_helper
-                    .capture_source_shm(CaptureSource::Output(output), false)
+                    .capture_source_shm(CaptureSource::Output(output.clone()), false)
                     .await
                     .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
                 let rect = Rect {
-                    left: output_x,
-                    top: output_y,
-                    right: output_x.saturating_add(output_w.try_into().unwrap_or_default()),
-                    bottom: output_y.saturating_add(output_h.try_into().unwrap_or_default()),
+                    left: *output_x,
+                    top: *output_y,
+                    right: output_x.saturating_add(i32::try_from(*output_w).unwrap_or_default()),
+                    bottom: output_y.saturating_add(i32::try_from(*output_h).unwrap_or_default()),
                 };
                 bounds_opt = Some(match bounds_opt.take() {
                     Some(bounds) => Rect {
@@ -515,7 +511,7 @@ impl Screenshot {
             }
         }
 
-        let doc_path = match self.screenshot_inner(outputs, app_id).await {
+        let doc_path = match self.screenshot_inner(&outputs, app_id).await {
             Ok(res) => res,
             Err(err) => {
                 log::error!("Failed to capture screenshot: {}", err);
