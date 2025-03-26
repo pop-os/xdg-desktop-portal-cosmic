@@ -36,7 +36,7 @@ use wayland_client::{
 };
 
 const TIMESPEC_NSEC_PER_SEC: u32 = 1_000_000_000;
-const FPS_MEASURE_PERIOD_SEC: u64 = 5;
+const FPS_MEASURE_PERIOD_SEC: f64 = 5.;
 
 pub struct ScreencastThread {
     node_id: u32,
@@ -85,7 +85,9 @@ struct FPSLimit {
     frame_last_time: Instant,
     fps_last_time: Instant,
     fps_frame_count: u32,
+    delay_before_capture_frame_ns: u64,
     delay_til_next_frame_ns: u64,
+    accumulated_frame_debt_ns: u64,
 }
 
 impl FPSLimit {
@@ -94,7 +96,9 @@ impl FPSLimit {
             frame_last_time: Instant::now(),
             fps_last_time: Instant::now(),
             fps_frame_count: 0,
+            delay_before_capture_frame_ns: 0,
             delay_til_next_frame_ns: 0,
+            accumulated_frame_debt_ns: 0,
         }
     }
 
@@ -110,35 +114,60 @@ impl FPSLimit {
         let now = Instant::now();
         self.fps_frame_count += 1;
         let elapsed_sec = (now - self.fps_last_time).as_secs_f64();
-        if elapsed_sec < 1. {
+
+        if elapsed_sec < FPS_MEASURE_PERIOD_SEC {
             return;
         }
-        // log::info!(
-        //     "fps_limit: average FPS in the last {:.2} seconds: {:.2}",
-        //     elapsed_sec,
-        //     self.fps_frame_count
-        // );
+        let avg_frames_per_sec = self.fps_frame_count as f64 / elapsed_sec;
+
+        log::info!(
+            "fps_limit: average FPS in the last {:.2} seconds: {:.2}",
+            elapsed_sec,
+            avg_frames_per_sec
+        );
         self.fps_frame_count = 0;
         self.fps_last_time = now;
     }
 
     fn fps_limit_measure_end(&mut self, max_fps: u32) {
         if max_fps <= 0 {
+            self.delay_before_capture_frame_ns = 0;
             self.delay_til_next_frame_ns = 0;
+            self.accumulated_frame_debt_ns = 0;
             return;
         }
         self.measure_fps();
 
-        // Throttling will not be applied if the current FPS is unlikely to exceed the target frame rate.
-        if self.fps_frame_count < max_fps - 1 {
-            self.delay_til_next_frame_ns = 0;
-            return;
-        }
-
         let elapsed_ns = self.frame_last_time.elapsed().as_nanos();
         let target_ns = (TIMESPEC_NSEC_PER_SEC / max_fps) as u128;
-        self.delay_til_next_frame_ns =
-            target_ns.saturating_sub(elapsed_ns + 3_000_000 /* safety margin */) as u64;
+
+        // Wait for half of the target frame rate duration before requesting a frame capture.
+        self.delay_before_capture_frame_ns = (target_ns / 2) as u64;
+
+        // Throttle after the current frame has been captured:
+        let total_elapsed_ns = elapsed_ns + self.accumulated_frame_debt_ns as u128;
+        if target_ns > total_elapsed_ns {
+            // If it is before the next frame capture time -> wait for the right time.
+            self.delay_til_next_frame_ns = (target_ns - total_elapsed_ns) as u64;
+        } else {
+            // If it is after the next frame capture time, Set value of `delay_til_next_frame_ns` to 0 and increase value of `accumulated_frame_debt_ns` by the amount of time it has been delayed.
+            self.delay_til_next_frame_ns = 0;
+            self.accumulated_frame_debt_ns = target_ns.abs_diff(total_elapsed_ns) as u64;
+        }
+
+        // Set `delay_before_capture_frame_ns` to its current value minus the overrun time, if any.
+        if self.accumulated_frame_debt_ns > self.delay_before_capture_frame_ns {
+            self.accumulated_frame_debt_ns -= self.delay_before_capture_frame_ns;
+            self.delay_before_capture_frame_ns = 0;
+        } else {
+            self.delay_before_capture_frame_ns -= self.accumulated_frame_debt_ns;
+            self.accumulated_frame_debt_ns = 0;
+        }
+
+        // Reset at the end of each capture cycle, this helps prevent `accumulated_frame_debt_ns` from increasing indefinitely.
+        if self.fps_frame_count % max_fps == 0 {
+            self.accumulated_frame_debt_ns = 0;
+        }
     }
 }
 
@@ -368,15 +397,16 @@ impl StreamData {
     fn process(&mut self, stream: &StreamRef) {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
-            if self.fps_limit.delay_til_next_frame_ns != 0 {
-                // log::info!(
-                //     "fps_limit: wait {}ns til next frame",
-                //     self.fps_limit.delay_til_next_frame_ns
-                // );
-                std::thread::sleep(Duration::from_nanos(self.fps_limit.delay_til_next_frame_ns));
-            }
-
             self.fps_limit.fps_limit_measure_start(self.framerate);
+            if self.fps_limit.delay_before_capture_frame_ns != 0 {
+                // log::info!(
+                //     "fps_limit: wait {}ns before capture frame",
+                //     self.fps_limit.delay_before_capture_frame_ns
+                // );
+                std::thread::sleep(Duration::from_nanos(
+                    self.fps_limit.delay_before_capture_frame_ns,
+                ));
+            }
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
             let full_damage = &[Rect {
                 x: 0,
@@ -417,6 +447,14 @@ impl StreamData {
             }
             unsafe { stream.queue_raw_buffer(buffer) };
             self.fps_limit.fps_limit_measure_end(self.framerate);
+
+            if self.fps_limit.delay_til_next_frame_ns != 0 {
+                // log::info!(
+                //     "fps_limit: wait {}ns til next frame",
+                //     self.fps_limit.delay_til_next_frame_ns
+                // );
+                std::thread::sleep(Duration::from_nanos(self.fps_limit.delay_til_next_frame_ns));
+            }
         }
     }
 }
