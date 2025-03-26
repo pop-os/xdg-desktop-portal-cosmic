@@ -36,7 +36,7 @@ use wayland_client::{
 };
 
 const TIMESPEC_NSEC_PER_SEC: u32 = 1_000_000_000;
-const FPS_MEASURE_PERIOD_SEC: f64 = 5.;
+const FPS_MEASURE_PERIOD_SEC: u64 = 5;
 
 pub struct ScreencastThread {
     node_id: u32,
@@ -84,7 +84,7 @@ impl ScreencastThread {
 struct FPSLimit {
     frame_last_time: Instant,
     fps_last_time: Instant,
-    fps_frame_count: u64,
+    fps_frame_count: u32,
     delay_til_next_frame_ns: u64,
 }
 
@@ -110,16 +110,14 @@ impl FPSLimit {
         let now = Instant::now();
         self.fps_frame_count += 1;
         let elapsed_sec = (now - self.fps_last_time).as_secs_f64();
-        if elapsed_sec < FPS_MEASURE_PERIOD_SEC {
+        if elapsed_sec < 1. {
             return;
         }
-
-        let avg_frames_per_sec = self.fps_frame_count as f64 / elapsed_sec;
-        log::info!(
-            "fps_limit: average FPS in the last {:.2} seconds: {:.2}",
-            avg_frames_per_sec,
-            elapsed_sec
-        );
+        // log::info!(
+        //     "fps_limit: average FPS in the last {:.2} seconds: {:.2}",
+        //     elapsed_sec,
+        //     self.fps_frame_count
+        // );
         self.fps_frame_count = 0;
         self.fps_last_time = now;
     }
@@ -131,9 +129,16 @@ impl FPSLimit {
         }
         self.measure_fps();
 
+        // Throttling will not be applied if the current FPS is unlikely to exceed the target frame rate.
+        if self.fps_frame_count < max_fps - 1 {
+            self.delay_til_next_frame_ns = 0;
+            return;
+        }
+
         let elapsed_ns = self.frame_last_time.elapsed().as_nanos();
         let target_ns = (TIMESPEC_NSEC_PER_SEC / max_fps) as u128;
-        self.delay_til_next_frame_ns = target_ns.saturating_sub(elapsed_ns) as u64;
+        self.delay_til_next_frame_ns =
+            target_ns.saturating_sub(elapsed_ns + 3_000_000 /* safety margin */) as u64;
     }
 }
 
@@ -226,7 +231,7 @@ impl StreamData {
                     );
                     pwr_format.assume_init()
                 };
-                if pwr_format.max_framerate.num != 0 && pwr_format.max_framerate.denom != 0 {
+                if pwr_format.max_framerate.denom != 0 {
                     let framerate = pwr_format.max_framerate.num / pwr_format.max_framerate.denom;
                     self.framerate = if framerate > self.fps_max {
                         self.fps_max
@@ -370,6 +375,7 @@ impl StreamData {
                 // );
                 std::thread::sleep(Duration::from_nanos(self.fps_limit.delay_til_next_frame_ns));
             }
+
             self.fps_limit.fps_limit_measure_start(self.framerate);
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
             let full_damage = &[Rect {
@@ -383,6 +389,7 @@ impl StreamData {
                 .get(wl_buffer)
                 .map(Vec::as_slice)
                 .unwrap_or(full_damage);
+
             match block_on(self.session.capture_wl_buffer(wl_buffer, damage)) {
                 Ok(frame) => {
                     self.buffer_damage
@@ -434,18 +441,7 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    // Gets framerate from screen's frame rate, and default to 0 if not available
-    let framerate = match &capture_source {
-        CaptureSource::Output(output) => wayland_helper
-            .output_info(output)
-            .and_then(|info| info.modes.into_iter().find(|mode| mode.current))
-            .map_or(0, |mode| mode.refresh_rate as u32 / 1000),
-        CaptureSource::Toplevel(foreign_toplevel) => wayland_helper
-            .output_info_toplevel(foreign_toplevel)
-            .and_then(|info| info.modes.into_iter().find(|mode| mode.current))
-            .map_or(0, |mode| mode.refresh_rate as u32 / 1000),
-        _ => 0,
-    };
+    let framerate = 0; // default not limit the frame rate.
 
     let (width, height) =
         match block_on(wayland_helper.capture_source_shm(capture_source.clone(), overlay_cursor)) {
@@ -669,7 +665,10 @@ fn format(
             flags: pod::PropertyFlags::empty(),
             value: pod::Value::Fraction(spa::utils::Fraction { num: 0, denom: 1 }),
         },
-        pod::Property {
+        // TODO max framerate
+    ];
+    if framerate > 0 {
+        properties.push(pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_maxFramerate,
             flags: pod::PropertyFlags::empty(),
             value: pod::Value::Choice(pod::ChoiceValue::Fraction(spa::utils::Choice(
@@ -686,9 +685,8 @@ fn format(
                     },
                 },
             ))),
-        },
-        // TODO max framerate
-    ];
+        });
+    }
     if let Some(modifier) = fixated_modifier {
         properties.push(pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_modifier,
