@@ -1,6 +1,6 @@
-use crate::{access, config, file_chooser, fl, screencast_dialog, screenshot, subscription};
+use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
 use cosmic::iced_core::event::wayland::OutputEvent;
-use cosmic::widget::{self, dropdown};
+use cosmic::widget;
 use cosmic::Task;
 use cosmic::{
     app, cosmic_config,
@@ -100,25 +100,6 @@ impl cosmic::Application for CosmicPortal {
             config,
         }: Self::Flags,
     ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
-        let mut model = cosmic::widget::dropdown::multi::model();
-        model.insert(dropdown::multi::list(
-            Some(fl!("save-to")),
-            vec![
-                (
-                    fl!("save-to", "clipboard"),
-                    config::screenshot::ImageSaveLocation::Clipboard,
-                ),
-                (
-                    fl!("save-to", "pictures"),
-                    config::screenshot::ImageSaveLocation::Pictures,
-                ),
-                (
-                    fl!("save-to", "documents"),
-                    config::screenshot::ImageSaveLocation::Documents,
-                ),
-            ],
-        ));
-        model.selected = Some(config.screenshot.save_location);
         let wayland_conn = crate::wayland::connect_to_wayland();
         let wayland_helper = crate::wayland::WaylandHelper::new(wayland_conn);
         (
