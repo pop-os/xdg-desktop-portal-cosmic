@@ -14,6 +14,7 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
+use futures::stream::StreamExt;
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
@@ -145,11 +146,10 @@ impl Screenshot {
         for Output { output, name, .. } in outputs {
             let frame = wayland_helper
                 .capture_output_toplevels_shm(&output, false)
-                .await
-                .into_iter()
-                .filter_map(|img| img.image_transformed().ok())
+                .filter_map(|img| async move { img.image_transformed().ok() })
                 .map(|img| (img.width(), img.height(), img.into_vec().into()))
-                .collect();
+                .collect()
+                .await;
             map.insert(name.clone(), frame);
         }
 

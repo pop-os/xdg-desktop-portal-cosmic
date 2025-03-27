@@ -14,7 +14,10 @@ use cosmic_client_toolkit::{
     toplevel_info::{ToplevelInfo, ToplevelInfoState},
     workspace::WorkspaceState,
 };
-use futures::channel::oneshot;
+use futures::{
+    channel::oneshot,
+    stream::{FuturesOrdered, Stream, StreamExt},
+};
 use rustix::fd::{FromRawFd, RawFd};
 use std::{
     collections::HashMap,
@@ -306,35 +309,32 @@ impl WaylandHelper {
         }
     }
 
-    pub async fn capture_output_toplevels_shm(
-        &self,
+    pub fn capture_output_toplevels_shm<'a>(
+        &'a self,
         output: &wl_output::WlOutput,
         overlay_cursor: bool,
-    ) -> Vec<ShmImage<OwnedFd>> {
+    ) -> impl Stream<Item = ShmImage<OwnedFd>> + 'a {
         // get the active workspace for this output
         // get the toplevels for that workspace
         // capture each toplevel
 
-        let Some(toplevels) = self
+        let toplevels = self
             .inner
             .output_toplevels
             .lock()
             .unwrap()
             .get(output)
             .cloned()
-        else {
-            return Vec::new();
-        };
+            .unwrap_or_default();
 
-        // TODO is `FuturesOrdered` more optimal?
-        let mut images = Vec::new();
-        for foreign_toplevel in toplevels.into_iter() {
-            let source = CaptureSource::Toplevel(foreign_toplevel.clone());
-            if let Some(image) = self.capture_source_shm(source, overlay_cursor).await {
-                images.push(image);
-            }
-        }
-        images
+        toplevels
+            .into_iter()
+            .map(|foreign_toplevel| {
+                let source = CaptureSource::Toplevel(foreign_toplevel.clone());
+                self.capture_source_shm(source, overlay_cursor)
+            })
+            .collect::<FuturesOrdered<_>>()
+            .filter_map(|x| async { x })
     }
 
     pub fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
