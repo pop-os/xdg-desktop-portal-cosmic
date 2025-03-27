@@ -158,6 +158,7 @@ impl AppData {
 #[derive(Default)]
 struct SessionState {
     formats: Option<Formats>,
+    wakers: Vec<std::task::Waker>,
 }
 
 struct SessionInner {
@@ -175,17 +176,25 @@ impl Session {
     }
 
     fn update<F: FnOnce(&mut SessionState)>(&self, f: F) {
-        f(&mut self.0.state.lock().unwrap());
+        let mut state = self.0.state.lock().unwrap();
+        f(&mut state);
+        for waker in std::mem::take(&mut state.wakers) {
+            waker.wake();
+        }
         self.0.condvar.notify_all();
     }
 
-    fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> T {
-        let data = self
-            .0
-            .condvar
-            .wait_while(self.0.state.lock().unwrap(), |data| data.formats.is_none())
-            .unwrap();
-        cb(data.formats.as_ref().unwrap())
+    async fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> T {
+        std::future::poll_fn(|context| {
+            let mut state = self.0.state.lock().unwrap();
+            if let Some(formats) = &state.formats {
+                std::task::Poll::Ready(cb(formats))
+            } else {
+                state.wakers.push(context.waker().clone());
+                std::task::Poll::Pending
+            }
+        })
+        .await
     }
 
     /// Capture to `wl_buffer`, blocking until capture either succeeds or fails
@@ -364,7 +373,9 @@ impl WaylandHelper {
         let session = self.capture_source_session(source, overlay_cursor);
 
         // TODO: Check that format has been advertised in `Formats`
-        let (width, height) = session.wait_for_formats(|formats| formats.buffer_size);
+        let (width, height) = session
+            .wait_for_formats(|formats| formats.buffer_size)
+            .await;
 
         let fd = buffer::create_memfd(width, height);
         let buffer =
