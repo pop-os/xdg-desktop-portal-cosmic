@@ -190,7 +190,7 @@ impl Session {
     ///
     /// If formats has not been sent, this will wait until it is received. It returns
     /// `None` if the server has sent `stopped`.
-    async fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> Option<T> {
+    pub async fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> Option<T> {
         std::future::poll_fn(|context| {
             let mut state = self.0.state.lock().unwrap();
             if state.stopped {

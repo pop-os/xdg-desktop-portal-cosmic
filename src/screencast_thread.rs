@@ -335,11 +335,14 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    let (width, height) =
-        match block_on(wayland_helper.capture_source_shm(capture_source.clone(), overlay_cursor)) {
-            Some(frame) => (frame.width, frame.height),
-            None => return Err(anyhow::anyhow!("failed to use shm capture to get size")),
-        };
+    let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
+
+    let Some((width, height)) = block_on(session.wait_for_formats(|formats| formats.buffer_size))
+    else {
+        return Err(anyhow::anyhow!(
+            "failed to get formats for image copy; session stopped"
+        ));
+    };
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
@@ -366,8 +369,6 @@ fn start_stream(
         flags,
         &mut initial_params,
     )?;
-
-    let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
 
     let data = StreamData {
         wayland_helper,
