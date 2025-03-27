@@ -14,7 +14,7 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-use futures::stream::StreamExt;
+use futures::stream::{FuturesUnordered, StreamExt};
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
@@ -141,19 +141,23 @@ impl Screenshot {
         outputs: &[Output],
     ) -> anyhow::Result<HashMap<String, Vec<(u32, u32, Bytes)>>> {
         let wayland_helper = self.wayland_helper.clone();
-
-        let mut map: HashMap<String, _> = HashMap::with_capacity(outputs.len());
-        for Output { output, name, .. } in outputs {
-            let frame = wayland_helper
-                .capture_output_toplevels_shm(&output, false)
-                .filter_map(|img| async move { img.image_transformed().ok() })
-                .map(|img| (img.width(), img.height(), img.into_vec().into()))
-                .collect()
-                .await;
-            map.insert(name.clone(), frame);
-        }
-
-        Ok(map)
+        Ok(outputs
+            .iter()
+            .map(move |Output { output, name, .. }| {
+                let wayland_helper = wayland_helper.clone();
+                async move {
+                    let frame = wayland_helper
+                        .capture_output_toplevels_shm(&output, false)
+                        .filter_map(|img| async move { img.image_transformed().ok() })
+                        .map(|img| (img.width(), img.height(), img.into_vec().into()))
+                        .collect()
+                        .await;
+                    (name.clone(), frame)
+                }
+            })
+            .collect::<FuturesUnordered<_>>()
+            .collect::<HashMap<String, _>>()
+            .await)
     }
 
     async fn interactive_output_images(
