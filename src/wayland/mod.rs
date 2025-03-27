@@ -158,6 +158,7 @@ impl AppData {
 #[derive(Default)]
 struct SessionState {
     formats: Option<Formats>,
+    stopped: bool,
     wakers: Vec<std::task::Waker>,
 }
 
@@ -184,11 +185,18 @@ impl Session {
         self.0.condvar.notify_all();
     }
 
-    async fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> T {
+    /// Wait for the `Formats` to be sent from the compositor for the stream, and run
+    /// a callback with the state mutex locked.
+    ///
+    /// If formats has not been sent, this will wait until it is received. It returns
+    /// `None` if the server has sent `stopped`.
+    async fn wait_for_formats<T, F: FnMut(&Formats) -> T>(&self, mut cb: F) -> Option<T> {
         std::future::poll_fn(|context| {
             let mut state = self.0.state.lock().unwrap();
-            if let Some(formats) = &state.formats {
-                std::task::Poll::Ready(cb(formats))
+            if state.stopped {
+                std::task::Poll::Ready(None)
+            } else if let Some(formats) = &state.formats {
+                std::task::Poll::Ready(Some(cb(formats)))
             } else {
                 state.wakers.push(context.waker().clone());
                 std::task::Poll::Pending
@@ -375,7 +383,7 @@ impl WaylandHelper {
         // TODO: Check that format has been advertised in `Formats`
         let (width, height) = session
             .wait_for_formats(|formats| formats.buffer_size)
-            .await;
+            .await?;
 
         let fd = buffer::create_memfd(width, height);
         let buffer =
@@ -588,8 +596,13 @@ impl ScreencopyHandler for AppData {
         }
     }
 
-    fn stopped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _session: &CaptureSession) {
-        // TODO
+    fn stopped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, session: &CaptureSession) {
+        if let Some(session) = Session::for_session(session) {
+            session.update(|data| {
+                data.stopped = true;
+            });
+        }
+        // TODO signal users of session in some way?
     }
 
     fn ready(
