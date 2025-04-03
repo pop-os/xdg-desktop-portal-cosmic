@@ -17,7 +17,7 @@ use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, io, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
@@ -208,22 +208,12 @@ impl Screenshot {
     }
 
     pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
-        let mut encoder: png::Encoder<'_, std::fs::File> =
-            png::Encoder::new(std::fs::File::create(path)?, img.width(), img.height());
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(img.as_raw())?;
-        Ok(())
+        let mut file = std::fs::File::create(path)?;
+        Ok(write_png(&mut file, img)?)
     }
 
     pub fn save_rgba_to_buffer(img: &RgbaImage, buffer: &mut Vec<u8>) -> anyhow::Result<()> {
-        let mut encoder = png::Encoder::new(buffer, img.width(), img.height());
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(img.as_raw())?;
-        Ok(())
+        Ok(write_png(buffer, img)?)
     }
 
     pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
@@ -315,11 +305,7 @@ impl Screenshot {
                     .suffix(".png")
                     .tempfile()?;
                 {
-                    let mut encoder = png::Encoder::new(&mut file, image.width(), image.height());
-                    encoder.set_color(png::ColorType::Rgba);
-                    encoder.set_depth(png::BitDepth::Eight);
-                    let mut writer = encoder.write_header()?;
-                    writer.write_image_data(image.as_raw())?;
+                    write_png(&mut file, &image)?;
                 }
                 Ok(file.keep()?)
             })
@@ -329,6 +315,14 @@ impl Screenshot {
 
         Ok(path)
     }
+}
+
+fn write_png<W: io::Write>(w: W, image: &RgbaImage) -> Result<(), png::EncodingError> {
+    let mut encoder = png::Encoder::new(w, image.width(), image.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(image.as_raw())
 }
 
 #[derive(Debug, Clone)]
