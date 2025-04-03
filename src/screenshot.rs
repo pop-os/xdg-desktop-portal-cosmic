@@ -237,84 +237,83 @@ impl Screenshot {
 
     async fn screenshot_inner(&self, outputs: &[Output], app_id: &str) -> anyhow::Result<PathBuf> {
         let wayland_helper = self.wayland_helper.clone();
-        let (_file, path) = async {
-            let mut bounds_opt: Option<Rect> = None;
-            let mut frames = Vec::with_capacity(outputs.len());
-            for Output {
-                output,
-                logical_position: (output_x, output_y),
-                logical_size: (output_w, output_h),
-                ..
-            } in outputs
-            {
-                let frame = wayland_helper
-                    .capture_source_shm(CaptureSource::Output(output.clone()), false)
-                    .await
-                    .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
-                let rect = Rect {
-                    left: *output_x,
-                    top: *output_y,
-                    right: output_x.saturating_add(i32::try_from(*output_w).unwrap_or_default()),
-                    bottom: output_y.saturating_add(i32::try_from(*output_h).unwrap_or_default()),
-                };
-                bounds_opt = Some(match bounds_opt.take() {
-                    Some(bounds) => Rect {
-                        left: bounds.left.min(rect.left),
-                        top: bounds.top.min(rect.top),
-                        right: bounds.right.max(rect.right),
-                        bottom: bounds.bottom.max(rect.bottom),
-                    },
-                    None => rect,
-                });
-                frames.push((frame, rect));
-            }
 
-            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                let bounds = bounds_opt.unwrap_or_default();
-                let width = bounds
-                    .right
-                    .saturating_sub(bounds.left)
-                    .try_into()
-                    .unwrap_or_default();
-                let height = bounds
-                    .bottom
-                    .saturating_sub(bounds.top)
-                    .try_into()
-                    .unwrap_or_default();
-                let mut image = image::RgbaImage::new(width, height);
-                for (frame, rect) in frames {
-                    let width = (rect.right - rect.left) as u32;
-                    let height = (rect.bottom - rect.top) as u32;
-                    let frame_image = frame.image_transformed()?;
-                    let frame_image = image::imageops::resize(
-                        &frame_image,
-                        width,
-                        height,
-                        image::imageops::FilterType::Lanczos3,
-                    );
-                    image::imageops::overlay(
-                        &mut image,
-                        &frame_image,
-                        rect.left.into(),
-                        rect.top.into(),
-                    );
-                }
-
-                let mut file = tempfile::Builder::new()
-                    .prefix("screenshot-")
-                    .suffix(".png")
-                    .tempfile()?;
-                {
-                    write_png(&mut file, &image)?;
-                }
-                Ok(file.keep()?)
-            })
-            .await?
+        let mut bounds_opt: Option<Rect> = None;
+        let mut frames = Vec::with_capacity(outputs.len());
+        for Output {
+            output,
+            logical_position: (output_x, output_y),
+            logical_size: (output_w, output_h),
+            ..
+        } in outputs
+        {
+            let frame = wayland_helper
+                .capture_source_shm(CaptureSource::Output(output.clone()), false)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
+            let frame_image = frame.image_transformed()?;
+            let rect = Rect {
+                left: *output_x,
+                top: *output_y,
+                right: output_x.saturating_add(i32::try_from(*output_w).unwrap_or_default()),
+                bottom: output_y.saturating_add(i32::try_from(*output_h).unwrap_or_default()),
+            };
+            bounds_opt = Some(match bounds_opt.take() {
+                Some(bounds) => Rect {
+                    left: bounds.left.min(rect.left),
+                    top: bounds.top.min(rect.top),
+                    right: bounds.right.max(rect.right),
+                    bottom: bounds.bottom.max(rect.bottom),
+                },
+                None => rect,
+            });
+            frames.push((frame_image, rect));
         }
-        .await?;
+
+        let (file, path) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let image = combined_image(bounds_opt.unwrap_or_default(), frames.into_iter());
+
+            let mut file = tempfile::Builder::new()
+                .prefix("screenshot-")
+                .suffix(".png")
+                .tempfile()?;
+            {
+                write_png(&mut file, &image)?;
+            }
+            Ok(file.keep()?)
+        })
+        .await??;
 
         Ok(path)
     }
+}
+
+fn combined_image(bounds: Rect, frames: impl Iterator<Item = (RgbaImage, Rect)>) -> RgbaImage {
+    let width = bounds
+        .right
+        .saturating_sub(bounds.left)
+        .try_into()
+        .unwrap_or_default();
+    let height = bounds
+        .bottom
+        .saturating_sub(bounds.top)
+        .try_into()
+        .unwrap_or_default();
+    let mut image = image::RgbaImage::new(width, height);
+    for (frame_image, rect) in frames {
+        let width = (rect.right - rect.left) as u32;
+        let height = (rect.bottom - rect.top) as u32;
+        let frame_image = image::imageops::resize(
+            &frame_image,
+            width,
+            height,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let x = i64::from(rect.left) - i64::from(bounds.left);
+        let y = i64::from(rect.top) - i64::from(bounds.top);
+        image::imageops::overlay(&mut image, &frame_image, x, y);
+    }
+    image
 }
 
 fn write_png<W: io::Write>(w: W, image: &RgbaImage) -> Result<(), png::EncodingError> {
@@ -617,11 +616,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     if let Some(RectDimension { width, height }) = r.dimensions() {
                         // Construct Rgba image with size of rect
                         // then overlay the part of each image that intersects with the rect
-                        let mut img = RgbaImage::new(width.get(), height.get());
+                        //let mut img = RgbaImage::new(width.get(), height.get());
 
-                        for (name, raw_img) in images {
+                        let frames = images.into_iter().filter_map(|(name, raw_img)| {
                             let Some(output) = outputs.iter().find(|o| o.name == name) else {
-                                continue;
+                                return None;
                             };
                             let pos = output.logical_pos;
                             let output_rect = Rect {
@@ -632,50 +631,12 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                             };
 
                             let Some(intersect) = r.intersect(output_rect) else {
-                                continue;
+                                return None;
                             };
-                            let mut translated_intersect = intersect.translate(-pos.0, -pos.1);
-                            let scale = raw_img.width() as f32 / output.logical_size.0 as f32;
-                            translated_intersect.left =
-                                (translated_intersect.left as f32 * scale).round() as i32;
-                            translated_intersect.top =
-                                (translated_intersect.top as f32 * scale).round() as i32;
-                            translated_intersect.right =
-                                (translated_intersect.right as f32 * scale).round() as i32;
-                            translated_intersect.bottom =
-                                (translated_intersect.bottom as f32 * scale).round() as i32;
-                            let overlay = image::imageops::crop_imm(
-                                &raw_img.rgba,
-                                u32::try_from(translated_intersect.left).unwrap_or_default(),
-                                u32::try_from(translated_intersect.top).unwrap_or_default(),
-                                (translated_intersect.right - translated_intersect.left)
-                                    .unsigned_abs(),
-                                (translated_intersect.bottom - translated_intersect.top)
-                                    .unsigned_abs(),
-                            );
 
-                            if img.width() != output.logical_size.0 as u32 {
-                                let overlay = image::imageops::resize(
-                                    &overlay.to_image(),
-                                    (intersect.right - intersect.left) as u32,
-                                    (intersect.bottom - intersect.top) as u32,
-                                    image::imageops::FilterType::Lanczos3,
-                                );
-                                image::imageops::overlay(
-                                    &mut img,
-                                    &overlay,
-                                    (intersect.left - r.left).into(),
-                                    (intersect.top - r.top).into(),
-                                );
-                            } else {
-                                image::imageops::overlay(
-                                    &mut img,
-                                    &*overlay,
-                                    (intersect.left - r.left).into(),
-                                    (intersect.top - r.top).into(),
-                                );
-                            }
-                        }
+                            Some((raw_img.rgba, output_rect))
+                        });
+                        let img = combined_image(r, frames);
 
                         if let Some(ref image_path) = image_path {
                             if let Err(err) = Screenshot::save_rgba(&img, image_path) {
