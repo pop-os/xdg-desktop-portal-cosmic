@@ -121,6 +121,8 @@ where
                     layer_container(
                         button::custom(
                             Subsurface::new(img.subsurface_buffer.clone())
+                                //.z(1)
+                                .z(-1)
                                 .transform(img.transform.clone())
                                 .content_fit(ContentFit::ScaleDown),
                         )
@@ -147,6 +149,26 @@ where
             }
         };
 
+        let fd = crate::buffer::create_memfd(1, 1);
+        rustix::io::write(&fd, &[255, 0, 0, 255]).unwrap();
+        let shmbuf = cosmic::iced_winit::platform_specific::wayland::subsurface_widget::Shmbuf {
+            fd,
+            height: 1,
+            width: 1,
+            offset: 0,
+            stride: 4,
+            format: wayland_client::protocol::wl_shm::Format::Abgr8888,
+        };
+        let (subsurface_buffer, _) =
+            cosmic::iced_winit::platform_specific::wayland::subsurface_widget::SubsurfaceBuffer::new(std::sync::Arc::new(shmbuf.into()));
+        let bg_element = Subsurface::new(subsurface_buffer)
+            //.z(2)
+            .z(-2)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+
+        /*
         let bg_element = match choice {
             Choice::Output(_) | Choice::Rectangle(..) => {
                 Subsurface::new(image.subsurface_buffer.clone())
@@ -207,6 +229,7 @@ where
                 .into(),
             },
         };
+        */
         let active_icon =
             cosmic::theme::Svg::Custom(Rc::new(|t| cosmic::iced_widget::svg::Style {
                 color: Some(t.cosmic().accent_color().into()),
