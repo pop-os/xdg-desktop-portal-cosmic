@@ -300,15 +300,17 @@ fn combined_image(bounds: Rect, frames: impl Iterator<Item = (RgbaImage, Rect)>)
         .try_into()
         .unwrap_or_default();
     let mut image = image::RgbaImage::new(width, height);
-    for (frame_image, rect) in frames {
+    for (mut frame_image, rect) in frames {
         let width = (rect.right - rect.left) as u32;
         let height = (rect.bottom - rect.top) as u32;
-        let frame_image = image::imageops::resize(
-            &frame_image,
-            width,
-            height,
-            image::imageops::FilterType::Lanczos3,
-        );
+        if frame_image.dimensions() != (width, height) {
+            frame_image = image::imageops::resize(
+                &frame_image,
+                width,
+                height,
+                image::imageops::FilterType::Lanczos3,
+            );
+        };
         let x = i64::from(rect.left) - i64::from(bounds.left);
         let y = i64::from(rect.top) - i64::from(bounds.top);
         image::imageops::overlay(&mut image, &frame_image, x, y);
