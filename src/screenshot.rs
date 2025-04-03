@@ -1,6 +1,5 @@
 #![allow(dead_code, unused_variables)]
 
-use ashpd::AppID;
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::{key::Named, Key};
@@ -18,7 +17,6 @@ use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::str::FromStr;
 use std::{collections::HashMap, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
@@ -30,8 +28,6 @@ use crate::config::{self, screenshot::ImageSaveLocation};
 use crate::wayland::{CaptureSource, ShmImage, WaylandHelper};
 use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::DragState};
 use crate::{fl, subscription, PortalResponse};
-
-// TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
 
 #[derive(Clone, Debug)]
 pub struct ScreenshotImage {
@@ -250,10 +246,8 @@ impl Screenshot {
     }
 
     async fn screenshot_inner(&self, outputs: &[Output], app_id: &str) -> anyhow::Result<PathBuf> {
-        use ashpd::documents::Permission;
-
         let wayland_helper = self.wayland_helper.clone();
-        let (file, path) = async {
+        let (_file, path) = async {
             let mut bounds_opt: Option<Rect> = None;
             let mut frames = Vec::with_capacity(outputs.len());
             for Output {
@@ -333,33 +327,7 @@ impl Screenshot {
         }
         .await?;
 
-        let documents = ashpd::documents::Documents::new().await?;
-        let mount_point = documents.mount_point().await?;
-        let app_id = if app_id.is_empty() {
-            None
-        } else {
-            Some(AppID::from_str(app_id)?)
-        };
-        let (doc_ids, _) = documents
-            .add_full(
-                &[&file.as_fd()],
-                Default::default(),
-                app_id.as_ref(),
-                &[
-                    Permission::Read,
-                    Permission::Write,
-                    Permission::GrantPermissions,
-                    Permission::Delete,
-                ],
-            )
-            .await?;
-        let doc_id = doc_ids.first().unwrap();
-
-        let mut doc_path = mount_point.as_ref().to_path_buf();
-        doc_path.push(&**doc_id);
-        doc_path.push(path.file_name().unwrap());
-
-        Ok(doc_path)
+        Ok(path)
     }
 }
 
