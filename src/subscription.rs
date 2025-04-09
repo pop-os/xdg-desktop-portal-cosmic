@@ -8,9 +8,9 @@ use tokio::sync::mpsc::Receiver;
 use zbus::{zvariant, Connection};
 
 use crate::{
-    access::Access, config, file_chooser::FileChooser, screencast::ScreenCast,
-    screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings, ACCENT_COLOR_KEY,
-    APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
+    access::Access, config, file_chooser::FileChooser, remote_desktop::RemoteDesktop,
+    screencast::ScreenCast, screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings,
+    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
 };
 
 #[derive(Clone, Debug)]
@@ -78,6 +78,7 @@ pub(crate) async fn process_changes(
                 .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
+                .serve_at(DBUS_PATH, RemoteDesktop)?
                 .serve_at(
                     DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
