@@ -51,16 +51,21 @@ pub use cosmic_client_toolkit::screencopy::{CaptureSource, Rect};
 
 use crate::buffer;
 
+mod gbm_devices;
 mod toplevel;
 mod workspaces;
 
 #[derive(Clone)]
 pub struct DmabufHelper {
     feedback: Arc<DmabufFeedback>,
-    gbm: Arc<Mutex<gbm::Device<fs::File>>>,
+    gbm_devices: Arc<Mutex<gbm_devices::GbmDevices>>,
 }
 
 impl DmabufHelper {
+    pub fn feedback(&self) -> &DmabufFeedback {
+        &self.feedback
+    }
+
     // TODO: consider scanout flag?
     // Consider tranches in some way?
     fn feedback_formats(&self) -> impl Iterator<Item = &DmabufFormat> {
@@ -77,8 +82,8 @@ impl DmabufHelper {
             .map(|x| x.modifier)
     }
 
-    pub fn gbm(&self) -> &Mutex<gbm::Device<fs::File>> {
-        &self.gbm
+    pub fn gbm_devices(&self) -> &Mutex<gbm_devices::GbmDevices> {
+        &self.gbm_devices
     }
 }
 
@@ -661,27 +666,9 @@ impl DmabufHandler for AppData {
         // We only create default feedback, so we assume that's what compositor is sending
 
         let mut dmabuf = self.wayland_helper.inner.dmabuf.lock().unwrap();
-        let gbm = match dmabuf.take() {
-            // Change to main device is not likely to happen
-            Some(dmabuf) if dmabuf.feedback.main_device() == feedback.main_device() => dmabuf.gbm,
-            _ => match gbm_device(feedback.main_device()) {
-                Ok(Some(gbm)) => Arc::new(Mutex::new(gbm)),
-                Ok(None) => {
-                    log::error!(
-                        "GBM device not found for main device '{}'",
-                        feedback.main_device()
-                    );
-                    return;
-                }
-                Err(err) => {
-                    log::error!("Failed to open GBM device: {}", err);
-                    return;
-                }
-            },
-        };
         *dmabuf = Some(DmabufHelper {
             feedback: Arc::new(feedback),
-            gbm,
+            gbm_devices: Default::default(),
         });
     }
 

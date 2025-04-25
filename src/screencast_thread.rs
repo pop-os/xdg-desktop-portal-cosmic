@@ -84,7 +84,23 @@ struct StreamData {
 impl StreamData {
     // Get driver preferred modifier, and plane count
     fn choose_modifier(&self, modifiers: &[gbm::Modifier]) -> Option<(gbm::Modifier, u32)> {
-        let gbm = self.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
+        let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
+        let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
+        let dev = self
+            .formats
+            .dmabuf_device
+            .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+        let gbm = match gbm_devices.gbm_device(dev) {
+            Ok(Some((_, gbm))) => gbm,
+            Ok(None) => {
+                log::error!("Failed to find gbm device for '{dev}'");
+                return None;
+            }
+            Err(err) => {
+                log::error!("Failed to open gbm device for '{dev}': {err}");
+                return None;
+            }
+        };
         if modifiers.iter().all(|x| *x == gbm::Modifier::Invalid) {
             match gbm.create_buffer_object::<()>(
                 self.width,
@@ -206,7 +222,14 @@ impl StreamData {
         let wl_buffer;
         if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
             log::info!("Allocate dmabuf buffer");
-            let gbm = self.dmabuf_helper.as_ref().unwrap().gbm().lock().unwrap();
+            let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
+            let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
+            let dev = self
+                .formats
+                .dmabuf_device
+                .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+            // Unwrap: assumes `choose_buffer` successfully opened gbm device
+            let (_, gbm) = gbm_devices.gbm_device(dev).unwrap().unwrap();
             let dmabuf = buffer::create_dmabuf(&gbm, self.modifier, self.width, self.height);
 
             wl_buffer = self.wayland_helper.create_dmabuf_buffer(&dmabuf);
