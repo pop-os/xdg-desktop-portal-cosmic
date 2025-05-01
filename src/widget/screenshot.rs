@@ -1,12 +1,11 @@
-use std::{borrow::Cow, collections::HashMap, rc::Rc, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, rc::Rc};
 
-use ::image::{EncodableLayout, RgbaImage};
 use cosmic::{
     cosmic_theme::Spacing,
     iced::{self, window},
     iced_core::{
-        alignment, gradient::Linear, image::Bytes, layout, overlay, widget::Tree, Background,
-        Border, ContentFit, Degrees, Layout, Length, Point, Size,
+        alignment, gradient::Linear, layout, overlay, widget::Tree, Background, Border, ContentFit,
+        Degrees, Layout, Length, Point, Size,
     },
     iced_widget::row,
     widget::{
@@ -21,7 +20,7 @@ use wayland_client::protocol::wl_output::WlOutput;
 use crate::{
     app::OutputState,
     fl,
-    screenshot::{Choice, Rect},
+    screenshot::{Choice, Rect, ScreenshotImage},
 };
 
 use super::{
@@ -60,28 +59,20 @@ pub struct ScreenshotSelection<'a, Msg> {
 
 // for now lets just support selecting the output
 
-pub struct MyImage(pub Arc<RgbaImage>);
-
-impl AsRef<[u8]> for MyImage {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
 impl<'a, Msg> ScreenshotSelection<'a, Msg>
 where
     Msg: 'static + Clone,
 {
     pub fn new(
         choice: Choice,
-        image_handle: image::Handle,
+        image: &ScreenshotImage,
         on_capture: Msg,
         on_cancel: Msg,
         output: &OutputState,
         window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
         on_choice_change: impl Fn(Choice) -> Msg + 'static + Clone,
-        toplevel_images: &HashMap<String, Vec<(u32, u32, Bytes)>>,
+        toplevel_images: &HashMap<String, Vec<ScreenshotImage>>,
         toplevel_chosen: impl Fn(String, usize) -> Msg,
         save_locations: &'a Vec<String>,
         selected_save_location: usize,
@@ -119,15 +110,16 @@ where
             Choice::Window(..) => {
                 let imgs = toplevel_images
                     .get(&output.name)
-                    .cloned()
+                    .map(|x| x.as_slice())
                     .unwrap_or_default();
-                let total_img_width = imgs.iter().map(|img| img.0).sum::<u32>();
+                let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
 
                 let img_buttons = imgs.into_iter().enumerate().map(|(i, img)| {
-                    let portion = (img.0 as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
+                    let portion =
+                        (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
                     layer_container(
                         button::custom(
-                            image::Image::new(image::Handle::from_rgba(img.0, img.1, img.2))
+                            image::Image::new(img.handle.clone())
                                 .content_fit(ContentFit::ScaleDown),
                         )
                         .on_press(toplevel_chosen(output.name.clone(), i))
@@ -154,7 +146,7 @@ where
         };
 
         let bg_element = match choice {
-            Choice::Output(_) | Choice::Rectangle(..) => image::Image::new(image_handle)
+            Choice::Output(_) | Choice::Rectangle(..) => image::Image::new(image.handle.clone())
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),

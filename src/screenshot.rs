@@ -1,11 +1,9 @@
 #![allow(dead_code, unused_variables)]
 
-use ashpd::AppID;
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::{key::Named, Key};
 use cosmic::iced::{window, Limits};
-use cosmic::iced_core::image::Bytes;
 use cosmic::iced_core::Length;
 use cosmic::iced_runtime::clipboard;
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
@@ -19,8 +17,7 @@ use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::str::FromStr;
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, io, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
@@ -28,11 +25,35 @@ use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
 use crate::config::{self, screenshot::ImageSaveLocation};
-use crate::wayland::{CaptureSource, WaylandHelper};
+use crate::wayland::{CaptureSource, ShmImage, WaylandHelper};
 use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::DragState};
 use crate::{fl, subscription, PortalResponse};
 
-// TODO save to /run/user/$UID/doc/ with document portal fuse filesystem?
+#[derive(Clone, Debug)]
+pub struct ScreenshotImage {
+    pub rgba: RgbaImage,
+    pub handle: cosmic::widget::image::Handle,
+}
+
+impl ScreenshotImage {
+    fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
+        let rgba = img.image_transformed()?;
+        let handle = cosmic::widget::image::Handle::from_rgba(
+            rgba.width(),
+            rgba.height(),
+            rgba.clone().into_vec(),
+        );
+        Ok(Self { rgba, handle })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.rgba.width()
+    }
+
+    pub fn height(&self) -> u32 {
+        self.rgba.height()
+    }
+}
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
 #[zvariant(signature = "a{sv}")]
@@ -139,7 +160,7 @@ impl Screenshot {
     async fn interactive_toplevel_images(
         &self,
         outputs: &[Output],
-    ) -> anyhow::Result<HashMap<String, Vec<(u32, u32, Bytes)>>> {
+    ) -> anyhow::Result<HashMap<String, Vec<ScreenshotImage>>> {
         let wayland_helper = self.wayland_helper.clone();
         Ok(outputs
             .iter()
@@ -148,8 +169,7 @@ impl Screenshot {
                 async move {
                     let frame = wayland_helper
                         .capture_output_toplevels_shm(&output, false)
-                        .filter_map(|img| async move { img.image_transformed().ok() })
-                        .map(|img| (img.width(), img.height(), img.into_vec().into()))
+                        .filter_map(|img| async { ScreenshotImage::new(img).ok() })
                         .collect()
                         .await;
                     (name.clone(), frame)
@@ -164,7 +184,7 @@ impl Screenshot {
         &self,
         outputs: &[Output],
         app_id: &str,
-    ) -> anyhow::Result<HashMap<String, (u32, u32, Bytes)>> {
+    ) -> anyhow::Result<HashMap<String, ScreenshotImage>> {
         // collect screenshots from each output
 
         let wayland_helper = self.wayland_helper.clone();
@@ -181,34 +201,19 @@ impl Screenshot {
                 .capture_source_shm(CaptureSource::Output(output.clone()), false)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
-            map.insert(
-                name.clone(),
-                frame
-                    .image_transformed()
-                    .map(|img| (img.width(), img.height(), img.into_vec().into()))?,
-            );
+            map.insert(name.clone(), ScreenshotImage::new(frame)?);
         }
 
         Ok(map)
     }
 
     pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
-        let mut encoder: png::Encoder<'_, std::fs::File> =
-            png::Encoder::new(std::fs::File::create(path)?, img.width(), img.height());
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(img.as_raw())?;
-        Ok(())
+        let mut file = std::fs::File::create(path)?;
+        Ok(write_png(&mut file, img)?)
     }
 
     pub fn save_rgba_to_buffer(img: &RgbaImage, buffer: &mut Vec<u8>) -> anyhow::Result<()> {
-        let mut encoder = png::Encoder::new(buffer, img.width(), img.height());
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(img.as_raw())?;
-        Ok(())
+        Ok(write_png(buffer, img)?)
     }
 
     pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
@@ -230,122 +235,95 @@ impl Screenshot {
         Some(path)
     }
 
-    async fn screenshot_inner(
-        &self,
-        outputs: Vec<Output>,
-        app_id: &str,
-    ) -> anyhow::Result<PathBuf> {
-        use ashpd::documents::Permission;
-
+    async fn screenshot_inner(&self, outputs: &[Output], app_id: &str) -> anyhow::Result<PathBuf> {
         let wayland_helper = self.wayland_helper.clone();
-        let (file, path) = async {
-            let mut bounds_opt: Option<Rect> = None;
-            let mut frames = Vec::with_capacity(outputs.len());
-            for Output {
-                output,
-                logical_position: (output_x, output_y),
-                logical_size: (output_w, output_h),
-                ..
-            } in outputs
-            {
-                let frame = wayland_helper
-                    .capture_source_shm(CaptureSource::Output(output), false)
-                    .await
-                    .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
-                let rect = Rect {
-                    left: output_x,
-                    top: output_y,
-                    right: output_x.saturating_add(output_w.try_into().unwrap_or_default()),
-                    bottom: output_y.saturating_add(output_h.try_into().unwrap_or_default()),
-                };
-                bounds_opt = Some(match bounds_opt.take() {
-                    Some(bounds) => Rect {
-                        left: bounds.left.min(rect.left),
-                        top: bounds.top.min(rect.top),
-                        right: bounds.right.max(rect.right),
-                        bottom: bounds.bottom.max(rect.bottom),
-                    },
-                    None => rect,
-                });
-                frames.push((frame, rect));
-            }
 
-            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                let bounds = bounds_opt.unwrap_or_default();
-                let width = bounds
-                    .right
-                    .saturating_sub(bounds.left)
-                    .try_into()
-                    .unwrap_or_default();
-                let height = bounds
-                    .bottom
-                    .saturating_sub(bounds.top)
-                    .try_into()
-                    .unwrap_or_default();
-                let mut image = image::RgbaImage::new(width, height);
-                for (frame, rect) in frames {
-                    let width = (rect.right - rect.left) as u32;
-                    let height = (rect.bottom - rect.top) as u32;
-                    let frame_image = frame.image_transformed()?;
-                    let frame_image = image::imageops::resize(
-                        &frame_image,
-                        width,
-                        height,
-                        image::imageops::FilterType::Lanczos3,
-                    );
-                    image::imageops::overlay(
-                        &mut image,
-                        &frame_image,
-                        rect.left.into(),
-                        rect.top.into(),
-                    );
-                }
-
-                let mut file = tempfile::Builder::new()
-                    .prefix("screenshot-")
-                    .suffix(".png")
-                    .tempfile()?;
-                {
-                    let mut encoder = png::Encoder::new(&mut file, image.width(), image.height());
-                    encoder.set_color(png::ColorType::Rgba);
-                    encoder.set_depth(png::BitDepth::Eight);
-                    let mut writer = encoder.write_header()?;
-                    writer.write_image_data(image.as_raw())?;
-                }
-                Ok(file.keep()?)
-            })
-            .await?
+        let mut bounds_opt: Option<Rect> = None;
+        let mut frames = Vec::with_capacity(outputs.len());
+        for Output {
+            output,
+            logical_position: (output_x, output_y),
+            logical_size: (output_w, output_h),
+            ..
+        } in outputs
+        {
+            let frame = wayland_helper
+                .capture_source_shm(CaptureSource::Output(output.clone()), false)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
+            let frame_image = frame.image_transformed()?;
+            let rect = Rect {
+                left: *output_x,
+                top: *output_y,
+                right: output_x.saturating_add(i32::try_from(*output_w).unwrap_or_default()),
+                bottom: output_y.saturating_add(i32::try_from(*output_h).unwrap_or_default()),
+            };
+            bounds_opt = Some(match bounds_opt.take() {
+                Some(bounds) => Rect {
+                    left: bounds.left.min(rect.left),
+                    top: bounds.top.min(rect.top),
+                    right: bounds.right.max(rect.right),
+                    bottom: bounds.bottom.max(rect.bottom),
+                },
+                None => rect,
+            });
+            frames.push((frame_image, rect));
         }
-        .await?;
 
-        let documents = ashpd::documents::Documents::new().await?;
-        let mount_point = documents.mount_point().await?;
-        let app_id = if app_id.is_empty() {
-            None
-        } else {
-            Some(AppID::from_str(app_id)?)
-        };
-        let (doc_ids, _) = documents
-            .add_full(
-                &[&file.as_fd()],
-                Default::default(),
-                app_id.as_ref(),
-                &[
-                    Permission::Read,
-                    Permission::Write,
-                    Permission::GrantPermissions,
-                    Permission::Delete,
-                ],
-            )
-            .await?;
-        let doc_id = doc_ids.first().unwrap();
+        let (file, path) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let image = combined_image(bounds_opt.unwrap_or_default(), frames.into_iter());
 
-        let mut doc_path = mount_point.as_ref().to_path_buf();
-        doc_path.push(&**doc_id);
-        doc_path.push(path.file_name().unwrap());
+            let mut file = tempfile::Builder::new()
+                .prefix("screenshot-")
+                .suffix(".png")
+                .tempfile()?;
+            {
+                write_png(&mut file, &image)?;
+            }
+            Ok(file.keep()?)
+        })
+        .await??;
 
-        Ok(doc_path)
+        Ok(path)
     }
+}
+
+fn combined_image(bounds: Rect, frames: impl Iterator<Item = (RgbaImage, Rect)>) -> RgbaImage {
+    let width = bounds
+        .right
+        .saturating_sub(bounds.left)
+        .try_into()
+        .unwrap_or_default();
+    let height = bounds
+        .bottom
+        .saturating_sub(bounds.top)
+        .try_into()
+        .unwrap_or_default();
+    let mut image = image::RgbaImage::new(width, height);
+    for (mut frame_image, rect) in frames {
+        let width = (rect.right - rect.left) as u32;
+        let height = (rect.bottom - rect.top) as u32;
+        if frame_image.dimensions() != (width, height) {
+            frame_image = image::imageops::resize(
+                &frame_image,
+                width,
+                height,
+                image::imageops::FilterType::Lanczos3,
+            );
+        };
+        let x = i64::from(rect.left) - i64::from(bounds.left);
+        let y = i64::from(rect.top) - i64::from(bounds.top);
+        image::imageops::overlay(&mut image, &frame_image, x, y);
+    }
+    image
+}
+
+fn write_png<W: io::Write>(w: W, image: &RgbaImage) -> Result<(), png::EncodingError> {
+    let mut encoder = png::Encoder::new(w, image.width(), image.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(image.as_raw())
 }
 
 #[derive(Debug, Clone)]
@@ -393,8 +371,8 @@ pub struct Args {
     pub app_id: String,
     pub parent_window: String,
     pub options: ScreenshotOptions,
-    pub output_images: HashMap<String, (u32, u32, Bytes)>,
-    pub toplevel_images: HashMap<String, Vec<(u32, u32, Bytes)>>,
+    pub output_images: HashMap<String, ScreenshotImage>,
+    pub toplevel_images: HashMap<String, Vec<ScreenshotImage>>,
     pub tx: Sender<PortalResponse<ScreenshotResult>>,
     pub choice: Choice,
     pub location: ImageSaveLocation,
@@ -515,7 +493,7 @@ impl Screenshot {
             }
         }
 
-        let doc_path = match self.screenshot_inner(outputs, app_id).await {
+        let doc_path = match self.screenshot_inner(&outputs, app_id).await {
             Ok(res) => res,
             Err(err) => {
                 log::error!("Failed to capture screenshot: {}", err);
@@ -559,14 +537,14 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         return horizontal_space().width(Length::Fixed(1.0)).into();
     };
 
-    let Some((width, height, pixels)) = args.output_images.get(&output.name).cloned() else {
+    let Some(img) = args.output_images.get(&output.name) else {
         return horizontal_space().width(Length::Fixed(1.0)).into();
     };
     let theme = portal.core.system_theme().cosmic();
     KeyboardWrapper::new(
         crate::widget::screenshot::ScreenshotSelection::new(
             args.choice.clone(),
-            cosmic::widget::image::Handle::from_rgba(width, height, pixels),
+            &img,
             Msg::Capture,
             Msg::Cancel,
             output,
@@ -616,29 +594,20 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
 
             match choice {
                 Choice::Output(name) => {
-                    if let Some((width, height, buf)) = images.remove(&name) {
+                    if let Some(img) = images.remove(&name) {
                         if let Some(ref image_path) = image_path {
-                            if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
-                                if let Err(err) = Screenshot::save_rgba(&img, image_path) {
-                                    log::error!("Failed to capture screenshot: {:?}", err);
-                                };
-                            } else {
-                                log::error!("Failed to produce rgba image for screenshot");
-                                success = false;
-                            }
+                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
+                                log::error!("Failed to capture screenshot: {:?}", err);
+                            };
                         } else {
-                            if let Some(img) = RgbaImage::from_raw(width, height, buf.into()) {
-                                let mut buffer = Vec::new();
-                                if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                    log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                    success = false;
-                                } else {
-                                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                                };
-                            } else {
-                                log::error!("Failed to produce rgba image for screenshot");
+                            let mut buffer = Vec::new();
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
+                            {
+                                log::error!("Failed to save screenshot to buffer: {:?}", e);
                                 success = false;
-                            }
+                            } else {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                            };
                         }
                     } else {
                         log::error!("Failed to find output {}", name);
@@ -649,11 +618,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     if let Some(RectDimension { width, height }) = r.dimensions() {
                         // Construct Rgba image with size of rect
                         // then overlay the part of each image that intersects with the rect
-                        let mut img = RgbaImage::new(width.get(), height.get());
+                        //let mut img = RgbaImage::new(width.get(), height.get());
 
-                        for (name, raw_img) in images {
+                        let frames = images.into_iter().filter_map(|(name, raw_img)| {
                             let Some(output) = outputs.iter().find(|o| o.name == name) else {
-                                continue;
+                                return None;
                             };
                             let pos = output.logical_pos;
                             let output_rect = Rect {
@@ -664,55 +633,12 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                             };
 
                             let Some(intersect) = r.intersect(output_rect) else {
-                                continue;
+                                return None;
                             };
-                            let mut translated_intersect = intersect.translate(-pos.0, -pos.1);
-                            let scale = raw_img.0 as f32 / output.logical_size.0 as f32;
-                            translated_intersect.left =
-                                (translated_intersect.left as f32 * scale).round() as i32;
-                            translated_intersect.top =
-                                (translated_intersect.top as f32 * scale).round() as i32;
-                            translated_intersect.right =
-                                (translated_intersect.right as f32 * scale).round() as i32;
-                            translated_intersect.bottom =
-                                (translated_intersect.bottom as f32 * scale).round() as i32;
-                            let Some(raw_img) =
-                                RgbaImage::from_raw(raw_img.0, raw_img.1, raw_img.2.to_vec())
-                            else {
-                                continue;
-                            };
-                            let overlay = image::imageops::crop_imm(
-                                &raw_img,
-                                u32::try_from(translated_intersect.left).unwrap_or_default(),
-                                u32::try_from(translated_intersect.top).unwrap_or_default(),
-                                (translated_intersect.right - translated_intersect.left)
-                                    .unsigned_abs(),
-                                (translated_intersect.bottom - translated_intersect.top)
-                                    .unsigned_abs(),
-                            );
 
-                            if img.width() != output.logical_size.0 as u32 {
-                                let overlay = image::imageops::resize(
-                                    &overlay.to_image(),
-                                    (intersect.right - intersect.left) as u32,
-                                    (intersect.bottom - intersect.top) as u32,
-                                    image::imageops::FilterType::Lanczos3,
-                                );
-                                image::imageops::overlay(
-                                    &mut img,
-                                    &overlay,
-                                    (intersect.left - r.left).into(),
-                                    (intersect.top - r.top).into(),
-                                );
-                            } else {
-                                image::imageops::overlay(
-                                    &mut img,
-                                    &*overlay,
-                                    (intersect.left - r.left).into(),
-                                    (intersect.top - r.top).into(),
-                                );
-                            }
-                        }
+                            Some((raw_img.rgba, output_rect))
+                        });
+                        let img = combined_image(r, frames);
 
                         if let Some(ref image_path) = image_path {
                             if let Err(err) = Screenshot::save_rgba(&img, image_path) {
@@ -732,34 +658,25 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     }
                 }
                 Choice::Window(output, Some(window_i)) => {
-                    if let Some((width, height, buf)) = args
+                    if let Some(img) = args
                         .toplevel_images
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
                         if let Some(ref image_path) = image_path {
-                            if let Some(img) = RgbaImage::from_raw(*width, *height, buf.to_vec()) {
-                                if let Err(err) = Screenshot::save_rgba(&img, image_path) {
-                                    log::error!("Failed to capture screenshot: {:?}", err);
-                                    success = false;
-                                }
-                            } else {
-                                log::error!("Failed to produce rgba image for screenshot");
+                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
+                                log::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             }
                         } else {
                             let mut buffer = Vec::new();
-                            if let Some(img) = RgbaImage::from_raw(*width, *height, buf.to_vec()) {
-                                if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                    log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                    success = false;
-                                } else {
-                                    cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                                };
-                            } else {
-                                log::error!("Failed to produce rgba image for screenshot");
+                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
+                            {
+                                log::error!("Failed to save screenshot to buffer: {:?}", e);
                                 success = false;
-                            }
+                            } else {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
+                            };
                         }
                     } else {
                         success = false;

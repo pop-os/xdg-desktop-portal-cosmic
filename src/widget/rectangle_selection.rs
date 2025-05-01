@@ -80,11 +80,11 @@ const EDGE_GRAB_THICKNESS: f32 = 8.0;
 const CORNER_DIAMETER: f32 = 16.0;
 
 pub struct RectangleSelection<Msg> {
-    pub output_rect: Rect,
-    pub rectangle_selection: Rect,
-    pub window_id: iced_core::window::Id,
-    pub on_rectangle: Box<dyn Fn(DragState, Rect) -> Msg>,
-    pub drag_state: DragState,
+    output_rect: Rect,
+    rectangle_selection: Rect,
+    window_id: iced_core::window::Id,
+    on_rectangle: Box<dyn Fn(DragState, Rect) -> Msg>,
+    drag_state: DragState,
     widget_id: widget::Id,
     drag_id: u128,
 }
@@ -382,7 +382,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                             return cosmic::iced_core::event::Status::Ignored;
                         }
 
-                        self.handle_drag_pos(x as i32, y as i32, shell);
+                        self.handle_drag_pos(x.round() as i32, y.round() as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
                     OfferEvent::Motion { x, y } => {
@@ -391,7 +391,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                         if !cursor.is_over(layout.bounds()) {
                             return cosmic::iced_core::event::Status::Ignored;
                         }
-                        self.handle_drag_pos(x as i32, y as i32, shell);
+                        self.handle_drag_pos(x.round() as i32, y.round() as i32, shell);
                         cosmic::iced_core::event::Status::Captured
                     }
                     OfferEvent::Drop => {
