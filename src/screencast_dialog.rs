@@ -3,12 +3,13 @@ use crate::fl;
 use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
 use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
-use cosmic::desktop::IconSource;
+use cosmic::desktop::IconSourceExt;
 use cosmic::iced::{
     self,
     keyboard::{key::Named, Key},
     window,
 };
+use fde::IconSource;
 
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::iced_winit::commands::layer_surface::{
@@ -19,6 +20,7 @@ use cosmic::{theme, widget};
 use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
 use freedesktop_desktop_entry as fde;
+use freedesktop_desktop_entry::unicase::Ascii;
 use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry};
 use once_cell::sync::Lazy;
 use std::mem;
@@ -113,7 +115,7 @@ async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry> {
 }
 
 fn get_desktop_entry<'a>(entries: &'a [DesktopEntry], id: &str) -> Option<&'a DesktopEntry> {
-    fde::matching::find_entry_from_appid(entries, id)
+    fde::find_app_by_id(entries, Ascii::new(id))
 }
 
 fn create_dialog() -> cosmic::Task<crate::app::Msg> {
