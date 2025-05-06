@@ -754,21 +754,6 @@ pub fn connect_to_wayland() -> wayland_client::Connection {
     }
 }
 
-fn gbm_device(rdev: u64) -> io::Result<Option<gbm::Device<fs::File>>> {
-    for i in fs::read_dir("/dev/dri")? {
-        let i = i?;
-        if i.metadata()?.rdev() == rdev {
-            let file = fs::File::options()
-                .read(true)
-                .write(true)
-                .open(i.path())
-                .unwrap();
-            return Ok(Some(gbm::Device::new(file)?));
-        }
-    }
-    Ok(None)
-}
-
 struct SessionData {
     session: Weak<SessionInner>,
     session_data: ScreencopySessionData,
