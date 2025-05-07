@@ -59,8 +59,8 @@ pub async fn show_screencast_prompt(
         .toplevels()
         .into_iter()
         .map(|info| {
-            let icon = get_desktop_entry(&desktop_entries, &app_id)
-                .and_then(|x| Some(x.name(&locales)?.into_owned()));
+            let icon = get_desktop_entry(&desktop_entries, &info.app_id)
+                .and_then(|x| Some(x.icon()?.to_string()));
             (info, icon)
         })
         .collect();
