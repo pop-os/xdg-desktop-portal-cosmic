@@ -592,17 +592,12 @@ fn format(
     } else if let Some(dmabuf) = dmabuf {
         // TODO: Support other formats
         let format = gbm::Format::Abgr8888 as u32;
-        let screencopy_modifiers = formats
+        let mut modifiers = formats
             .dmabuf_formats
             .iter()
             .find(|(x, _)| *x == format)
-            .map(|(_, modifiers)| modifiers.as_slice())
+            .map(|(_, modifiers)| modifiers.iter().map(|x| *x as i64).collect::<Vec<_>>())
             .unwrap_or_default();
-        let mut modifiers: Vec<_> = dmabuf
-            .modifiers_for_format(format)
-            .filter(|x| screencopy_modifiers.contains(x))
-            .map(|x| x as i64)
-            .collect();
         if modifiers.is_empty() {
             // TODO
             modifiers.push(u64::from(gbm::Modifier::Invalid) as _);
