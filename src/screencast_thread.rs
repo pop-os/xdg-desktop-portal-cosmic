@@ -207,6 +207,8 @@ impl StreamData {
                                 log::error!("failed to update pipewire params: {}", err);
                             }
                         } else {
+                            // XXX?
+                            /*
                             let params = params(
                                 self.width,
                                 self.height,
@@ -222,16 +224,15 @@ impl StreamData {
                             if let Err(err) = stream.update_params(&mut params) {
                                 log::error!("failed to update pipewire params: {}", err);
                             }
+                            */
                         }
                     }
                 } else {
-                    let params = shm_params(
+                    let params = other_params(
                         self.width,
                         self.height,
-                        //1,
-                        //self.dmabuf_helper.as_ref(),
-                        //None,
-                        &self.formats,
+                        1,
+                        false,
                     );
                     let mut params: Vec<_> = params
                         .iter()
@@ -412,8 +413,8 @@ fn start_stream(
         },
     )?;
 
-    let params = initial_params(width, height, dmabuf_helper.as_ref(), &formats);
-    let mut params: Vec<_> = params
+    let initial_params = format_params(width, height, dmabuf_helper.as_ref(), None, &formats);
+    let mut initial_params: Vec<_> = initial_params
         .iter()
         .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
         .collect();
@@ -424,7 +425,7 @@ fn start_stream(
         spa::utils::Direction::Output,
         None,
         flags,
-        &mut params,
+        &mut initial_params,
     )?;
 
     let data = StreamData {
@@ -500,16 +501,28 @@ fn meta() -> Vec<u8> {
 }
 
 // Initial params have no buffers until format/modifier negotation
-fn initial_params(
+fn format_params(
     width: u32,
     height: u32,
     dmabuf: Option<&DmabufHelper>,
+    fixated_modifier: Option<gbm::Modifier>,
     formats: &Formats,
 ) -> Vec<Vec<u8>> {
     [
+        fixated_modifier.map(|x| format(width, height, None, Some(x), formats)),
         // Favor dmabuf over shm by listing it first
         dmabuf.map(|x| format(width, height, Some(x), None, formats)),
         Some(format(width, height, None, None, formats)),
+        Some(meta()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<Vec<u8>> {
+    [
+        Some(buffers(width, height, blocks, allow_dmabuf)),
         Some(meta()),
     ]
     .into_iter()
@@ -538,11 +551,7 @@ fn params(
     .collect()
 }
 
-fn shm_params(
-    width: u32,
-    height: u32,
-    formats: &Formats,
-) -> Vec<Vec<u8>> {
+fn shm_params(width: u32, height: u32, formats: &Formats) -> Vec<Vec<u8>> {
     [
         Some(buffers(width, height, 1, false)),
         Some(format(width, height, None, None, formats)),
@@ -573,14 +582,17 @@ fn buffers(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<u8> 
                     if allow_dmabuf {
                         spa::utils::ChoiceEnum::Flags {
                             default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
-                            flags: vec![1 << spa_sys::SPA_DATA_MemFd, 1 << spa_sys::SPA_DATA_DmaBuf],
+                            flags: vec![
+                                1 << spa_sys::SPA_DATA_MemFd,
+                                1 << spa_sys::SPA_DATA_DmaBuf,
+                            ],
                         }
                     } else {
                         spa::utils::ChoiceEnum::Flags {
                             default: 1 << spa_sys::SPA_DATA_MemFd,
                             flags: vec![1 << spa_sys::SPA_DATA_MemFd],
                         }
-                    }
+                    },
                 ))),
             },
             pod::Property {
