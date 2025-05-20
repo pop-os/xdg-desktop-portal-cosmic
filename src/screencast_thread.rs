@@ -208,6 +208,22 @@ impl StreamData {
                             }
                         }
                     }
+                } else {
+                    let params = params(
+                        self.width,
+                        self.height,
+                        1,
+                        self.dmabuf_helper.as_ref(),
+                        None,
+                        &self.formats,
+                    );
+                    let mut params: Vec<_> = params
+                        .iter()
+                        .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
+                        .collect();
+                    if let Err(err) = stream.update_params(&mut params) {
+                        log::error!("failed to update pipewire params: {}", err);
+                    }
                 }
             }
             //println!("param-changed: {} {:?}", id, value);
@@ -380,20 +396,15 @@ fn start_stream(
         },
     )?;
 
-    let initial_params = params(width, height, 1, dmabuf_helper.as_ref(), None, &formats);
-    let mut initial_params: Vec<_> = initial_params
+    let params = initial_params(width, height, dmabuf_helper.as_ref(), &formats);
+    let mut params: Vec<_> = params
         .iter()
         .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
         .collect();
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
     let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
-    stream.connect(
-        spa::utils::Direction::Output,
-        None,
-        flags,
-        &mut initial_params,
-    )?;
+    stream.connect(spa::utils::Direction::Output, None, flags, &mut params)?;
 
     let data = StreamData {
         wayland_helper,
@@ -467,6 +478,24 @@ fn meta() -> Vec<u8> {
     // TODO: header, video damage
 }
 
+// Initial params have no buffers until format/modifier negotation
+fn initial_params(
+    width: u32,
+    height: u32,
+    dmabuf: Option<&DmabufHelper>,
+    formats: &Formats,
+) -> Vec<Vec<u8>> {
+    [
+        // Favor dmabuf over shm by listing it first
+        dmabuf.map(|x| format(width, height, Some(x), None, formats)),
+        Some(format(width, height, None, None, formats)),
+        Some(meta()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 fn params(
     width: u32,
     height: u32,
@@ -476,7 +505,7 @@ fn params(
     formats: &Formats,
 ) -> Vec<Vec<u8>> {
     [
-        Some(buffers(width, height, blocks)),
+        Some(buffers(width, height, blocks, fixated_modifier.is_some())),
         fixated_modifier.map(|x| format(width, height, None, Some(x), formats)),
         // Favor dmabuf over shm by listing it first
         dmabuf.map(|x| format(width, height, Some(x), None, formats)),
@@ -495,7 +524,7 @@ fn value_to_bytes(value: pod::Value) -> Vec<u8> {
     bytes
 }
 
-fn buffers(width: u32, height: u32, blocks: u32) -> Vec<u8> {
+fn buffers(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<u8> {
     value_to_bytes(pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
@@ -505,9 +534,19 @@ fn buffers(width: u32, height: u32, blocks: u32) -> Vec<u8> {
                 flags: pod::PropertyFlags::empty(),
                 value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
                     spa::utils::ChoiceFlags::empty(),
-                    spa::utils::ChoiceEnum::Flags {
-                        default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
-                        flags: vec![1 << spa_sys::SPA_DATA_MemFd, 1 << spa_sys::SPA_DATA_DmaBuf],
+                    if allow_dmabuf {
+                        spa::utils::ChoiceEnum::Flags {
+                            default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
+                            flags: vec![
+                                1 << spa_sys::SPA_DATA_MemFd,
+                                1 << spa_sys::SPA_DATA_DmaBuf,
+                            ],
+                        }
+                    } else {
+                        spa::utils::ChoiceEnum::Flags {
+                            default: 1 << spa_sys::SPA_DATA_MemFd,
+                            flags: vec![1 << spa_sys::SPA_DATA_MemFd],
+                        }
                     },
                 ))),
             },
