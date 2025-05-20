@@ -206,15 +206,31 @@ impl StreamData {
                             if let Err(err) = stream.update_params(&mut params) {
                                 log::error!("failed to update pipewire params: {}", err);
                             }
+                        } else {
+                            let params = params(
+                                self.width,
+                                self.height,
+                                1,
+                                self.dmabuf_helper.as_ref(),
+                                None,
+                                &self.formats,
+                            );
+                            let mut params: Vec<_> = params
+                                .iter()
+                                .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
+                                .collect();
+                            if let Err(err) = stream.update_params(&mut params) {
+                                log::error!("failed to update pipewire params: {}", err);
+                            }
                         }
                     }
                 } else {
-                    let params = params(
+                    let params = shm_params(
                         self.width,
                         self.height,
-                        1,
-                        self.dmabuf_helper.as_ref(),
-                        None,
+                        //1,
+                        //self.dmabuf_helper.as_ref(),
+                        //None,
                         &self.formats,
                     );
                     let mut params: Vec<_> = params
@@ -404,7 +420,12 @@ fn start_stream(
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
     let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
-    stream.connect(spa::utils::Direction::Output, None, flags, &mut params)?;
+    stream.connect(
+        spa::utils::Direction::Output,
+        None,
+        flags,
+        &mut params,
+    )?;
 
     let data = StreamData {
         wayland_helper,
@@ -517,6 +538,21 @@ fn params(
     .collect()
 }
 
+fn shm_params(
+    width: u32,
+    height: u32,
+    formats: &Formats,
+) -> Vec<Vec<u8>> {
+    [
+        Some(buffers(width, height, 1, false)),
+        Some(format(width, height, None, None, formats)),
+        Some(meta()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 fn value_to_bytes(value: pod::Value) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut cursor = io::Cursor::new(&mut bytes);
@@ -537,17 +573,14 @@ fn buffers(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<u8> 
                     if allow_dmabuf {
                         spa::utils::ChoiceEnum::Flags {
                             default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
-                            flags: vec![
-                                1 << spa_sys::SPA_DATA_MemFd,
-                                1 << spa_sys::SPA_DATA_DmaBuf,
-                            ],
+                            flags: vec![1 << spa_sys::SPA_DATA_MemFd, 1 << spa_sys::SPA_DATA_DmaBuf],
                         }
                     } else {
                         spa::utils::ChoiceEnum::Flags {
                             default: 1 << spa_sys::SPA_DATA_MemFd,
                             flags: vec![1 << spa_sys::SPA_DATA_MemFd],
                         }
-                    },
+                    }
                 ))),
             },
             pod::Property {
@@ -631,17 +664,23 @@ fn format(
     } else if let Some(dmabuf) = dmabuf {
         // TODO: Support other formats
         let format = gbm::Format::Abgr8888 as u32;
-        let mut modifiers = formats
+        let modifiers = formats
             .dmabuf_formats
             .iter()
             .find(|(x, _)| *x == format)
-            .map(|(_, modifiers)| modifiers.iter().map(|x| *x as i64).collect::<Vec<_>>())
+            .map(|(_, modifiers)| modifiers.as_slice())
             .unwrap_or_default();
-        if modifiers.is_empty() {
-            // TODO
-            modifiers.push(u64::from(gbm::Modifier::Invalid) as _);
-        }
-        let default = *modifiers.first().unwrap();
+        let modifiers = modifiers
+            .iter()
+            // Don't allow implict modifiers, which don't work well with multi-GPU
+            // TODO: If needed for anything, allow this but only on single-GPU system
+            .filter(|m| **m != u64::from(gbm::Modifier::Invalid))
+            .map(|x| *x as i64)
+            .collect::<Vec<_>>();
+
+        let Some(default) = modifiers.first().copied() else {
+            return Vec::new();
+        };
 
         properties.push(pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_modifier,
