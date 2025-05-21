@@ -56,6 +56,51 @@ fn shm_format_to_gbm(format: wl_shm::Format) -> Option<gbm::Format> {
     }
 }
 
+#[repr(C)]
+struct MetadataCursor {
+    meta_cursor: spa_sys::spa_meta_cursor,
+    meta_bitmap: spa_sys::spa_meta_bitmap,
+    bytes: [u8],
+}
+
+impl MetadataCursor {
+    pub fn size_of(width: u32, height: u32) -> usize {
+        std::mem::offset_of!(Self, meta_bitmap)
+            + std::mem::size_of::<spa_sys::spa_meta_bitmap>()
+            + width as usize * height as usize * 4
+    }
+
+    // , image: &crate::wayland::ShmImage<std::os::fd::OwnedFd>
+    fn update(&mut self, update_image: bool) {
+        self.meta_cursor = spa_sys::spa_meta_cursor {
+            id: 1,
+            flags: 0,
+            position: spa_sys::spa_point { x: 50, y: 50 },
+            hotspot: spa_sys::spa_point { x: 0, y: 0 },
+            //bitmap_offset: 0,
+            bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
+        };
+        if !update_image {
+            self.meta_cursor.bitmap_offset = 0;
+            return;
+        }
+        self.meta_bitmap = spa_sys::spa_meta_bitmap {
+            format: spa_sys::SPA_VIDEO_FORMAT_RGBA,
+            size: spa_sys::spa_rectangle {
+                // XXX
+                width: 64,
+                height: 64,
+            },
+            stride: 64 * 4,
+            offset: std::mem::size_of::<spa_sys::spa_meta_bitmap>() as u32,
+        };
+        for pixel in self.bytes.chunks_mut(4) {
+            pixel.copy_from_slice(&[255, 0, 0, 255]);
+        }
+        dbg!(self.bytes.len());
+    }
+}
+
 pub struct ScreencastThread {
     node_id: u32,
     thread_stop_tx: pipewire::channel::Sender<()>,
@@ -109,6 +154,7 @@ struct StreamData {
     height: u32,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
+    update_cursor: bool,
 }
 
 impl StreamData {
@@ -437,6 +483,16 @@ impl StreamData {
                     } {
                         video_transform.transform = convert_transform(frame.transform);
                     }
+                    if let Some(cursor) = unsafe {
+                        buffer_cursor_find_meta_data(
+                            buffer,
+                            spa_sys::SPA_META_Cursor,
+                            MetadataCursor::size_of(64, 64),
+                        )
+                    } {
+                        cursor.update(self.update_cursor);
+                        self.update_cursor = false;
+                    }
                 }
                 Err(err) => {
                     log::error!("screencopy failed: {:?}", err);
@@ -518,6 +574,7 @@ fn start_stream(
         height,
         node_id_tx: Some(node_id_tx),
         buffer_damage: HashMap::new(),
+        update_cursor: true,
     };
 
     let listener = stream
@@ -548,6 +605,28 @@ fn convert_transform(transform: WEnum<wl_output::Transform>) -> u32 {
         }
         WEnum::Value(_) | WEnum::Unknown(_) => unreachable!(),
     }
+}
+
+// SAFETY: buffer must be non-null, valid as long as return value is used
+//unsafe fn buffer_find_meta_data_with_size<'a, T: ?Sized>(
+/*
+unsafe fn buffer_find_meta_data_with_size<'a, T: ?Sized>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+    size: usize,
+) -> Option<&'a mut T> {
+    let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size);
+    (std::ptr::slice_from_raw_parts(ptr, size) as *mut T).as_mut()
+}
+*/
+
+unsafe fn buffer_cursor_find_meta_data<'a>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+    size: usize,
+) -> Option<&'a mut MetadataCursor> {
+    let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size);
+    (std::ptr::slice_from_raw_parts(ptr, size) as *mut MetadataCursor).as_mut()
 }
 
 // SAFETY: buffer must be non-null, and valid as long as return value is used
@@ -604,6 +683,26 @@ fn meta() -> OwnedPod {
     // TODO: header, video damage
 }
 
+fn meta_cursor() -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
+        type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa_sys::SPA_PARAM_Meta,
+        properties: vec![
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_type,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_Cursor)),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_size,
+                flags: pod::PropertyFlags::empty(),
+                // XXX
+                value: pod::Value::Int(MetadataCursor::size_of(64, 64) as _),
+            },
+        ],
+    }))
+}
+
 fn format_params(
     width: u32,
     height: u32,
@@ -650,6 +749,7 @@ fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec
     [
         Some(buffers(width, height, blocks, allow_dmabuf)),
         Some(meta()),
+        Some(meta_cursor()),
     ]
     .into_iter()
     .flatten()
