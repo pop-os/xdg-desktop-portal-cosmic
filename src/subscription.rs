@@ -74,7 +74,7 @@ pub(crate) async fn process_changes(
         State::Init => {
             let (tx, rx) = tokio::sync::mpsc::channel(10);
 
-            let connection = zbus::ConnectionBuilder::session()?
+            let connection = zbus::connection::Builder::session()?
                 .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
@@ -127,7 +127,7 @@ pub(crate) async fn process_changes(
                         iface.accent = a.into_format();
                         iface
                             .setting_changed(
-                                iface_ref.signal_context(),
+                                iface_ref.signal_emitter(),
                                 APPEARANCE_NAMESPACE,
                                 ACCENT_COLOR_KEY,
                                 zvariant::Array::from(
@@ -149,7 +149,7 @@ pub(crate) async fn process_changes(
                         };
                         iface
                             .setting_changed(
-                                iface_ref.signal_context(),
+                                iface_ref.signal_emitter(),
                                 APPEARANCE_NAMESPACE,
                                 COLOR_SCHEME_KEY,
                                 zvariant::Value::from(iface.color_scheme as u32),
@@ -168,7 +168,7 @@ pub(crate) async fn process_changes(
 
                         iface
                             .setting_changed(
-                                iface_ref.signal_context(),
+                                iface_ref.signal_emitter(),
                                 APPEARANCE_NAMESPACE,
                                 CONTRAST_KEY,
                                 zvariant::Value::from(iface.contrast as u32),
