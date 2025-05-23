@@ -1,7 +1,10 @@
 use cosmic::cosmic_theme::palette::Srgba;
 use futures::future::{abortable, AbortHandle};
 use std::{collections::HashMap, future::Future};
-use zbus::zvariant::{self, OwnedValue};
+use zbus::{
+    object_server::{InterfaceRef, SignalEmitter},
+    zvariant::{self, OwnedValue},
+};
 
 pub use cosmic_portal_config as config;
 
@@ -110,7 +113,7 @@ impl<T: Send + Sync + 'static> Session<T> {
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Session")]
 impl<T: Send + Sync + 'static> Session<T> {
-    async fn close(&mut self, #[zbus(signal_context)] signal_ctxt: zbus::SignalContext<'_>) {
+    async fn close(&mut self, #[zbus(signal_context)] signal_ctxt: SignalEmitter<'_>) {
         // XXX error?
         let _ = self.closed(&signal_ctxt).await;
         let _ = signal_ctxt
@@ -124,7 +127,7 @@ impl<T: Send + Sync + 'static> Session<T> {
     }
 
     #[zbus(signal)]
-    async fn closed(&self, signal_ctxt: &zbus::SignalContext<'_>) -> zbus::Result<()>;
+    async fn closed(&self, _signal_ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
@@ -149,7 +152,7 @@ impl<Data: Send + Sync + 'static> std::ops::DerefMut for Session<Data> {
 async fn session_interface<Data: Send + Sync + 'static>(
     connection: &zbus::Connection,
     session_handle: &zvariant::ObjectPath<'_>,
-) -> Option<zbus::InterfaceRef<Session<Data>>> {
+) -> Option<InterfaceRef<Session<Data>>> {
     connection
         .object_server()
         .interface(session_handle)
@@ -281,7 +284,7 @@ impl Settings {
     #[zbus(signal)]
     async fn setting_changed(
         &self,
-        signal_ctxt: &zbus::SignalContext<'_>,
+        _signal_ctxt: &SignalEmitter<'_>,
         namespace: &str,
         key: &str,
         value: zvariant::Value<'_>,

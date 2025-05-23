@@ -33,7 +33,7 @@ pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", featur
 png = "0.17.16"
 rustix = { version = "0.38.44", features = ["fs"] }
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
-zbus = { version = "4.0", default-features = false, features = ["tokio"] }
+zbus = { version = "5.7.1", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"
 wayland-protocols = "0.32.6"
 env_logger = "0.11.6"
