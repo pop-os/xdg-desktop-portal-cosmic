@@ -2,7 +2,7 @@
 
 use std::{
     borrow::Cow,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     io,
     path::Path,
@@ -106,41 +106,36 @@ impl Background {
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> fdo::Result<AppStates> {
-        let apps: HashSet<_> = self
-            .wayland_helper
-            .toplevels()
+        let apps: HashMap<_, _> = systemd::Systemd1Proxy::new(connection)
+            .await?
+            .list_units()
+            .await?
             .into_iter()
-            // Evaluate apps with open top levels first as our initial state
-            .map(|info| {
-                let status = if info
-                    .state
-                    .contains(&zcosmic_toplevel_handle_v1::State::Activated)
-                {
-                    // Focused top levels
-                    AppStatus::Active
-                } else {
-                    // Unfocused top levels
-                    AppStatus::Running
-                };
-
-                AppState {
-                    app_id: info.app_id,
-                    status,
-                }
+            // Apps launched by COSMIC/Flatpak are considered to be running in the
+            // background by default as they don't have open top levels.
+            .filter_map(|unit| {
+                unit.cosmic_flatpak_name()
+                    .map(|app_id| (app_id.to_owned(), AppStatus::Background))
             })
             .chain(
-                systemd::Systemd1Proxy::new(connection)
-                    .await?
-                    .list_units()
-                    .await?
+                self.wayland_helper
+                    .toplevels()
                     .into_iter()
-                    // Apps launched by COSMIC/Flatpak are considered to be running in the
-                    // background by default as they don't have open top levels
-                    .filter_map(|unit| {
-                        unit.cosmic_flatpak_name().map(|app_id| AppState {
-                            app_id: app_id.to_owned(),
-                            status: AppStatus::Background,
-                        })
+                    // Evaluate apps with open top levels next; overwrite any background app
+                    // statuses if an app has open top levels.
+                    .map(|info| {
+                        let status = if info
+                            .state
+                            .contains(&zcosmic_toplevel_handle_v1::State::Activated)
+                        {
+                            // Focused top levels
+                            AppStatus::Active
+                        } else {
+                            // Unfocused top levels
+                            AppStatus::Running
+                        };
+
+                        (info.app_id, status)
                     }),
             )
             .collect();
@@ -334,27 +329,27 @@ enum AppStatus {
 #[derive(Clone, Debug, zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
 struct AppStates {
-    apps: Vec<AppState>,
+    apps: HashMap<String, AppStatus>,
 }
 
-#[derive(Clone, Debug, Eq, zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "{sv}")]
-struct AppState {
-    app_id: String,
-    status: AppStatus,
-}
-
-impl Hash for AppState {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(self.app_id.as_bytes());
-    }
-}
-
-impl PartialEq for AppState {
-    fn eq(&self, other: &Self) -> bool {
-        self.app_id == other.app_id
-    }
-}
+// #[derive(Clone, Debug, Eq, zvariant::SerializeDict, zvariant::Type)]
+// #[zvariant(signature = "{sv}")]
+// struct AppState {
+//     app_id: String,
+//     status: AppStatus,
+// }
+//
+// impl Hash for AppState {
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         state.write(self.app_id.as_bytes());
+//     }
+// }
+//
+// impl PartialEq for AppState {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.app_id == other.app_id
+//     }
+// }
 
 /// Result vardict for [`Background::notify_background`]
 #[derive(Clone, Debug, zvariant::SerializeDict, zvariant::Type)]
