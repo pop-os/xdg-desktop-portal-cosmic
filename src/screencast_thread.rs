@@ -94,7 +94,7 @@ impl StreamData {
     }
 
     // Get driver preferred modifier, and plane count
-    fn choose_modifier(&self, modifiers: &[gbm::Modifier]) -> Option<(gbm::Modifier, u32)> {
+    fn choose_modifier(&self, modifiers: &[gbm::Modifier]) -> Option<gbm::Modifier> {
         let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
         let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
         let dev = self
@@ -119,7 +119,7 @@ impl StreamData {
                 gbm::Format::Abgr8888,
                 gbm::BufferObjectFlags::empty(),
             ) {
-                Ok(bo) => Some((gbm::Modifier::Invalid, bo.plane_count())),
+                Ok(bo) => Some(gbm::Modifier::Invalid),
                 Err(err) => {
                     log::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
@@ -136,7 +136,7 @@ impl StreamData {
                 modifiers.iter().copied(),
                 gbm::BufferObjectFlags::empty(),
             ) {
-                Ok(bo) => Some((bo.modifier(), bo.plane_count())),
+                Ok(bo) => Some(bo.modifier()),
                 Err(err) => {
                     log::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
@@ -212,7 +212,7 @@ impl StreamData {
                             .chain(alternatives)
                             .map(|x| gbm::Modifier::from(*x as u64))
                             .collect::<Vec<_>>();
-                        if let Some((modifier, plane_count)) = self.choose_modifier(&modifiers) {
+                        if let Some(modifier) = self.choose_modifier(&modifiers) {
                             self.modifier = modifier;
 
                             let params = format_params(
