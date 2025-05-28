@@ -199,10 +199,7 @@ impl StreamData {
                                 Some(modifier),
                                 &self.formats,
                             );
-                            let mut params: Vec<_> = params
-                                .iter()
-                                .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
-                                .collect();
+                            let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                             if let Err(err) = stream.update_params(&mut params) {
                                 log::error!("failed to update pipewire params: {}", err);
                             }
@@ -381,10 +378,7 @@ fn start_stream(
     )?;
 
     let initial_params = params(width, height, 1, dmabuf_helper.as_ref(), None, &formats);
-    let mut initial_params: Vec<_> = initial_params
-        .iter()
-        .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
-        .collect();
+    let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
     let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
@@ -447,8 +441,33 @@ unsafe fn buffer_find_meta_data<'a, T>(
     (ptr as *mut T).as_mut()
 }
 
-fn meta() -> Vec<u8> {
-    value_to_bytes(pod::Value::Object(pod::Object {
+struct OwnedPod(Vec<u8>);
+
+impl OwnedPod {
+    fn new(content: Vec<u8>) -> Self {
+        assert!(Pod::from_bytes(&content).is_some());
+        Self(content)
+    }
+
+    fn serialize(value: &pod::Value) -> Self {
+        let mut bytes = Vec::new();
+        let mut cursor = io::Cursor::new(&mut bytes);
+        PodSerializer::serialize(&mut cursor, value).unwrap();
+        Self::new(bytes)
+    }
+}
+
+impl std::ops::Deref for OwnedPod {
+    type Target = Pod;
+
+    fn deref(&self) -> &Pod {
+        // Unchecked version of `Pod::from_bytes`
+        unsafe { Pod::from_raw(self.0.as_ptr().cast()) }
+    }
+}
+
+fn meta() -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
         id: spa_sys::SPA_PARAM_Meta,
         properties: vec![
@@ -474,7 +493,7 @@ fn params(
     dmabuf: Option<&DmabufHelper>,
     fixated_modifier: Option<gbm::Modifier>,
     formats: &Formats,
-) -> Vec<Vec<u8>> {
+) -> Vec<OwnedPod> {
     [
         Some(buffers(width, height, blocks)),
         fixated_modifier.map(|x| format(width, height, None, Some(x), formats)),
@@ -488,15 +507,8 @@ fn params(
     .collect()
 }
 
-fn value_to_bytes(value: pod::Value) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    let mut cursor = io::Cursor::new(&mut bytes);
-    PodSerializer::serialize(&mut cursor, &value).unwrap();
-    bytes
-}
-
-fn buffers(width: u32, height: u32, blocks: u32) -> Vec<u8> {
-    value_to_bytes(pod::Value::Object(pod::Object {
+fn buffers(width: u32, height: u32, blocks: u32) -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
         properties: vec![
@@ -554,7 +566,7 @@ fn format(
     dmabuf: Option<&DmabufHelper>,
     fixated_modifier: Option<gbm::Modifier>,
     formats: &Formats,
-) -> Vec<u8> {
+) -> OwnedPod {
     let mut properties = vec![
         pod::Property {
             key: spa_sys::SPA_FORMAT_mediaType,
@@ -616,7 +628,7 @@ fn format(
             ))),
         });
     }
-    value_to_bytes(pod::Value::Object(pod::Object {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_Format,
         id: spa_sys::SPA_PARAM_EnumFormat,
         properties,
