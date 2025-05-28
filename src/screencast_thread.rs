@@ -72,7 +72,7 @@ impl ScreencastThread {
 struct StreamData {
     dmabuf_helper: Option<DmabufHelper>,
     wayland_helper: WaylandHelper,
-    modifier: gbm::Modifier,
+    modifier: Option<gbm::Modifier>,
     session: Session,
     formats: Formats,
     width: u32,
@@ -213,7 +213,7 @@ impl StreamData {
                             .map(|x| gbm::Modifier::from(*x as u64))
                             .collect::<Vec<_>>();
                         if let Some(modifier) = self.choose_modifier(&modifiers) {
-                            self.modifier = modifier;
+                            self.modifier = Some(modifier);
 
                             let params = format_params(
                                 self.width,
@@ -232,8 +232,10 @@ impl StreamData {
                 }
 
                 log::info!("modifier fixated. Setting other params.");
+
                 let blocks = self
-                    .plane_count(gbm::Format::Abgr8888, self.modifier)
+                    .modifier
+                    .and_then(|m| self.plane_count(gbm::Format::Abgr8888, m))
                     .unwrap_or(1);
                 let params = other_params(self.width, self.height, blocks);
                 let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
@@ -260,7 +262,7 @@ impl StreamData {
                 .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
             // Unwrap: assumes `choose_buffer` successfully opened gbm device
             let (_, gbm) = gbm_devices.gbm_device(dev).unwrap().unwrap();
-            let dmabuf = buffer::create_dmabuf(&gbm, self.modifier, self.width, self.height);
+            let dmabuf = buffer::create_dmabuf(&gbm, self.modifier.unwrap(), self.width, self.height);
 
             wl_buffer = self.wayland_helper.create_dmabuf_buffer(&dmabuf);
 
@@ -427,8 +429,7 @@ fn start_stream(
         dmabuf_helper,
         session,
         formats,
-        // XXX Should use implicit modifier if none set?
-        modifier: gbm::Modifier::Linear,
+        modifier: None,
         width,
         height,
         node_id_tx: Some(node_id_tx),
