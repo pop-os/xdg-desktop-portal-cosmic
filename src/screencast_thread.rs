@@ -82,6 +82,17 @@ struct StreamData {
 }
 
 impl StreamData {
+    fn plane_count(&self, format: gbm::Format, modifier: gbm::Modifier) -> Option<u32> {
+        let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
+        let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
+        let dev = self
+            .formats
+            .dmabuf_device
+            .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+        let (_, gbm) = gbm_devices.gbm_device(dev).ok()??;
+        gbm.format_modifier_plane_count(format, modifier)
+    }
+
     // Get driver preferred modifier, and plane count
     fn choose_modifier(&self, modifiers: &[gbm::Modifier]) -> Option<(gbm::Modifier, u32)> {
         let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
@@ -168,14 +179,27 @@ impl StreamData {
                     .iter()
                     .find(|p| p.key == spa_sys::SPA_FORMAT_VIDEO_modifier)
                 {
-                    if let pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(
-                        _,
-                        spa::utils::ChoiceEnum::Enum {
+                    let pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(_, choice))) =
+                        &modifier_prop.value
+                    else {
+                        log::error!("invalid modifier prop: {:?}", modifier_prop.value);
+                        return;
+                    };
+
+                    if modifier_prop
+                        .flags
+                        .contains(pod::PropertyFlags::DONT_FIXATE)
+                    {
+                        let spa::utils::ChoiceEnum::Enum {
                             default,
                             alternatives,
-                        },
-                    ))) = &modifier_prop.value
-                    {
+                        } = choice
+                        else {
+                            // TODO How does C code deal with variants of choice?
+                            log::error!("invalid modifier prop choice: {:?}", choice);
+                            return;
+                        };
+
                         log::info!(
                             "modifier param-changed: (default: {}, alternatives: {:?})",
                             default,
@@ -191,10 +215,9 @@ impl StreamData {
                         if let Some((modifier, plane_count)) = self.choose_modifier(&modifiers) {
                             self.modifier = modifier;
 
-                            let params = params(
+                            let params = format_params(
                                 self.width,
                                 self.height,
-                                plane_count,
                                 self.dmabuf_helper.as_ref(),
                                 Some(modifier),
                                 &self.formats,
@@ -203,11 +226,21 @@ impl StreamData {
                             if let Err(err) = stream.update_params(&mut params) {
                                 log::error!("failed to update pipewire params: {}", err);
                             }
+                            return;
                         }
                     }
                 }
+
+                log::info!("modifier fixated. Setting other params.");
+                let blocks = self
+                    .plane_count(gbm::Format::Abgr8888, self.modifier)
+                    .unwrap_or(1);
+                let params = other_params(self.width, self.height, blocks);
+                let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+                if let Err(err) = stream.update_params(&mut params) {
+                    log::error!("failed to update pipewire params: {}", err);
+                }
             }
-            //println!("param-changed: {} {:?}", id, value);
         }
     }
 
@@ -377,7 +410,7 @@ fn start_stream(
         },
     )?;
 
-    let initial_params = params(width, height, 1, dmabuf_helper.as_ref(), None, &formats);
+    let initial_params = format_params(width, height, dmabuf_helper.as_ref(), None, &formats);
     let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
@@ -486,25 +519,29 @@ fn meta() -> OwnedPod {
     // TODO: header, video damage
 }
 
-fn params(
+fn format_params(
     width: u32,
     height: u32,
-    blocks: u32,
     dmabuf: Option<&DmabufHelper>,
     fixated_modifier: Option<gbm::Modifier>,
     formats: &Formats,
 ) -> Vec<OwnedPod> {
     [
-        Some(buffers(width, height, blocks)),
         fixated_modifier.map(|x| format(width, height, None, Some(x), formats)),
         // Favor dmabuf over shm by listing it first
         dmabuf.map(|x| format(width, height, Some(x), None, formats)),
         Some(format(width, height, None, None, formats)),
-        Some(meta()),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+fn other_params(width: u32, height: u32, blocks: u32) -> Vec<OwnedPod> {
+    [Some(buffers(width, height, blocks)), Some(meta())]
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 fn buffers(width: u32, height: u32, blocks: u32) -> OwnedPod {
