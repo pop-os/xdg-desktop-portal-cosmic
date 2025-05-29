@@ -227,6 +227,15 @@ impl StreamData {
                                 log::error!("failed to update pipewire params: {}", err);
                             }
                             return;
+                        } else {
+                            log::error!("failed to choose modifier from {:?}", modifiers);
+                            let params =
+                                format_params(self.width, self.height, None, None, &self.formats);
+                            let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+                            if let Err(err) = stream.update_params(&mut params) {
+                                log::error!("failed to update pipewire params: {}", err);
+                            }
+                            return;
                         }
                     }
                 }
