@@ -528,10 +528,10 @@ fn format_params(
     formats: &Formats,
 ) -> Vec<OwnedPod> {
     [
-        fixated_modifier.map(|x| format(width, height, None, Some(x), formats)),
+        fixated_modifier.and_then(|x| format(width, height, None, Some(x), formats)),
         // Favor dmabuf over shm by listing it first
-        dmabuf.map(|x| format(width, height, Some(x), None, formats)),
-        Some(format(width, height, None, None, formats)),
+        dmabuf.and_then(|x| format(width, height, Some(x), None, formats)),
+        format(width, height, None, None, formats),
     ]
     .into_iter()
     .flatten()
@@ -604,7 +604,7 @@ fn format(
     dmabuf: Option<&DmabufHelper>,
     fixated_modifier: Option<gbm::Modifier>,
     formats: &Formats,
-) -> OwnedPod {
+) -> Option<OwnedPod> {
     let mut properties = vec![
         pod::Property {
             key: spa_sys::SPA_FORMAT_mediaType,
@@ -642,17 +642,21 @@ fn format(
     } else if let Some(dmabuf) = dmabuf {
         // TODO: Support other formats
         let format = gbm::Format::Abgr8888 as u32;
-        let mut modifiers = formats
+        let modifiers = formats
             .dmabuf_formats
             .iter()
             .find(|(x, _)| *x == format)
-            .map(|(_, modifiers)| modifiers.iter().map(|x| *x as i64).collect::<Vec<_>>())
+            .map(|(_, modifiers)| modifiers.as_slice())
             .unwrap_or_default();
-        if modifiers.is_empty() {
-            // TODO
-            modifiers.push(u64::from(gbm::Modifier::Invalid) as _);
-        }
-        let default = *modifiers.first().unwrap();
+        let modifiers = modifiers
+            .iter()
+            // Don't allow implict modifiers, which don't work well with multi-GPU
+            // TODO: If needed for anything, allow this but only on single-GPU system
+            .filter(|m| **m != u64::from(gbm::Modifier::Invalid))
+            .map(|x| *x as i64)
+            .collect::<Vec<_>>();
+
+        let default = modifiers.first().copied()?;
 
         properties.push(pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_modifier,
@@ -666,9 +670,9 @@ fn format(
             ))),
         });
     }
-    OwnedPod::serialize(&pod::Value::Object(pod::Object {
+    Some(OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_Format,
         id: spa_sys::SPA_PARAM_EnumFormat,
         properties,
-    }))
+    })))
 }
