@@ -237,7 +237,7 @@ impl StreamData {
                     .modifier
                     .and_then(|m| self.plane_count(gbm::Format::Abgr8888, m))
                     .unwrap_or(1);
-                let params = other_params(self.width, self.height, blocks);
+                let params = other_params(self.width, self.height, blocks, self.modifier.is_some());
                 let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                 if let Err(err) = stream.update_params(&mut params) {
                     log::error!("failed to update pipewire params: {}", err);
@@ -262,7 +262,8 @@ impl StreamData {
                 .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
             // Unwrap: assumes `choose_buffer` successfully opened gbm device
             let (_, gbm) = gbm_devices.gbm_device(dev).unwrap().unwrap();
-            let dmabuf = buffer::create_dmabuf(&gbm, self.modifier.unwrap(), self.width, self.height);
+            let dmabuf =
+                buffer::create_dmabuf(&gbm, self.modifier.unwrap(), self.width, self.height);
 
             wl_buffer = self.wayland_helper.create_dmabuf_buffer(&dmabuf);
 
@@ -538,14 +539,17 @@ fn format_params(
     .collect()
 }
 
-fn other_params(width: u32, height: u32, blocks: u32) -> Vec<OwnedPod> {
-    [Some(buffers(width, height, blocks)), Some(meta())]
-        .into_iter()
-        .flatten()
-        .collect()
+fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<OwnedPod> {
+    [
+        Some(buffers(width, height, blocks, allow_dmabuf)),
+        Some(meta()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
-fn buffers(width: u32, height: u32, blocks: u32) -> OwnedPod {
+fn buffers(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> OwnedPod {
     OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
@@ -555,9 +559,19 @@ fn buffers(width: u32, height: u32, blocks: u32) -> OwnedPod {
                 flags: pod::PropertyFlags::empty(),
                 value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
                     spa::utils::ChoiceFlags::empty(),
-                    spa::utils::ChoiceEnum::Flags {
-                        default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
-                        flags: vec![1 << spa_sys::SPA_DATA_MemFd, 1 << spa_sys::SPA_DATA_DmaBuf],
+                    if allow_dmabuf {
+                        spa::utils::ChoiceEnum::Flags {
+                            default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
+                            flags: vec![
+                                1 << spa_sys::SPA_DATA_MemFd,
+                                1 << spa_sys::SPA_DATA_DmaBuf,
+                            ],
+                        }
+                    } else {
+                        spa::utils::ChoiceEnum::Flags {
+                            default: 1 << spa_sys::SPA_DATA_MemFd,
+                            flags: vec![1 << spa_sys::SPA_DATA_MemFd],
+                        }
                     },
                 ))),
             },
