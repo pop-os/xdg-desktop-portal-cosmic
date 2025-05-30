@@ -10,6 +10,7 @@ pub use cosmic_portal_config as config;
 
 mod access;
 mod app;
+mod background;
 mod buffer;
 mod documents;
 mod file_chooser;
@@ -19,6 +20,7 @@ mod screencast_dialog;
 mod screencast_thread;
 mod screenshot;
 mod subscription;
+mod systemd;
 mod wayland;
 mod widget;
 
