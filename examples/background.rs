@@ -2,10 +2,10 @@
 
 use ashpd::desktop::background::Background;
 use cosmic::{
-    app::{self, message, Core},
+    app::{self, Core},
     executor,
     iced::{Length, Size},
-    widget, Command,
+    widget, Task,
 };
 
 #[derive(Clone, Debug)]
@@ -50,14 +50,14 @@ impl cosmic::Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, _: Self::Flags) -> (Self, app::Command<Self::Message>) {
+    fn init(core: Core, _: Self::Flags) -> (Self, app::Task<Self::Message>) {
         (
             Self {
                 core,
                 executable: std::env::args().next().unwrap(),
                 background_allowed: false,
             },
-            Command::none(),
+            Task::none(),
         )
     }
 
@@ -81,16 +81,16 @@ impl cosmic::Application for App {
         .into()
     }
 
-    fn update(&mut self, message: Self::Message) -> app::Command<Self::Message> {
+    fn update(&mut self, message: Self::Message) -> app::Task<Self::Message> {
         match message {
             Message::BackgroundResponse(background_allowed) => {
                 log::info!("Permission to run in the background: {background_allowed}");
                 self.background_allowed = background_allowed;
-                Command::none()
+                Task::none()
             }
             Message::RequestBackground => {
                 let executable = self.executable.clone();
-                Command::perform(Self::request_background(executable), |result| {
+                Task::perform(Self::request_background(executable), |result| {
                     let background_allowed = match result {
                         Ok(response) => {
                             assert!(
@@ -105,7 +105,7 @@ impl cosmic::Application for App {
                         }
                     };
 
-                    message::app(Message::BackgroundResponse(background_allowed))
+                    cosmic::Action::App(Message::BackgroundResponse(background_allowed))
                 })
             }
         }
