@@ -326,8 +326,9 @@ async fn get_app_state_impl(
 }
 
 /// Status of running apps for [`Background::get_app_state`]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, zvariant::Type)]
-#[zvariant(signature = "u")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, zvariant::Type)]
+#[zvariant(signature = "v")]
+#[repr(u32)]
 enum AppStatus {
     /// No open windows
     Background = 0,
@@ -335,6 +336,15 @@ enum AppStatus {
     Running,
     /// In the foreground
     Active,
+}
+
+impl serde::Serialize for AppStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        zvariant::Value::U32(*self as u32).serialize(serializer)
+    }
 }
 
 /// Result vardict for [`Background::notify_background`]
