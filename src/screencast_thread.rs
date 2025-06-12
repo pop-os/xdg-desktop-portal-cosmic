@@ -424,7 +424,6 @@ impl StreamData {
                             MetadataCursor::size_of(64, 64),
                         )
                     } {
-                        eprintln!("CURSOR DATA");
                         cursor.update(self.update_cursor);
                         self.update_cursor = false;
                     }

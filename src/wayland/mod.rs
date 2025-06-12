@@ -1,14 +1,15 @@
 use cosmic_client_toolkit::{
     screencopy::{
-        CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
-        ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
-        ScreencopySessionDataExt, ScreencopyState,
+        CaptureCursorSession, CaptureFrame, CaptureOptions, CaptureSession, Capturer,
+        FailureReason, Formats, Frame, ScreencopyFrameData, ScreencopyFrameDataExt,
+        ScreencopyHandler, ScreencopySessionData, ScreencopySessionDataExt, ScreencopyState,
     },
     sctk::{
         self,
         dmabuf::{DmabufFeedback, DmabufFormat, DmabufHandler, DmabufState},
         output::{OutputHandler, OutputInfo, OutputState},
         registry::{ProvidesRegistryState, RegistryState},
+        seat::{self, SeatHandler, SeatState},
         shm::{Shm, ShmHandler},
     },
     toplevel_info::{ToplevelInfo, ToplevelInfoState},
@@ -32,7 +33,7 @@ use std::{
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
+    protocol::{wl_buffer, wl_output, wl_pointer, wl_seat, wl_shm, wl_shm_pool},
     Connection, Dispatch, QueueHandle, WEnum,
 };
 use wayland_protocols::{
@@ -98,6 +99,8 @@ struct WaylandHelperInner {
     wl_shm: wl_shm::WlShm,
     dmabuf: Mutex<Option<DmabufHelper>>,
     zwp_dmabuf: ZwpLinuxDmabufV1,
+    // TODO: Multiple; remove on seat or cap removal
+    pointer: Mutex<Option<wl_pointer::WlPointer>>,
 }
 
 // TODO seperate state object from what is passed to threads
@@ -115,6 +118,7 @@ struct AppData {
     dmabuf_state: DmabufState,
     toplevel_info_state: ToplevelInfoState,
     workspace_state: WorkspaceState,
+    seat_state: SeatState,
 }
 
 impl AppData {
@@ -173,6 +177,7 @@ struct SessionState {
 struct SessionInner {
     wayland_helper: WaylandHelper,
     capture_session: CaptureSession,
+    capture_cursor_session: Option<CaptureCursorSession>,
     condvar: Condvar,
     state: Mutex<SessionState>,
 }
@@ -258,6 +263,7 @@ impl WaylandHelper {
                 wl_shm: shm_state.wl_shm().clone(),
                 dmabuf: Mutex::new(None),
                 zwp_dmabuf,
+                pointer: Mutex::new(None),
             }),
         };
         let dmabuf_state = DmabufState::new(&globals, &qh);
@@ -273,6 +279,7 @@ impl WaylandHelper {
             workspace_state: WorkspaceState::new(&registry_state, &qh),
             toplevel_info_state: ToplevelInfoState::new(&registry_state, &qh),
             registry_state,
+            seat_state: SeatState::new(&globals, &qh),
         };
         event_queue.flush().unwrap();
 
@@ -373,12 +380,29 @@ impl WaylandHelper {
                     },
                 )
                 .unwrap();
+            // TODO add only when needed
+            // TODO one per seat?
+            // XXX user data
+            let capture_cursor_session =
+                self.inner.pointer.lock().unwrap().as_ref().map(|pointer| {
+                    self.inner
+                        .capturer
+                        .create_cursor_session(
+                            &source,
+                            pointer,
+                            &self.inner.qh,
+                            cosmic::cctk::GlobalData,
+                        )
+                        .unwrap()
+                });
+            dbg!(&capture_cursor_session);
 
             self.inner.conn.flush().unwrap();
 
             SessionInner {
                 wayland_helper: self.clone(),
                 capture_session,
+                capture_cursor_session,
                 condvar: Condvar::new(),
                 state: Default::default(),
             }
@@ -649,6 +673,10 @@ impl ScreencopyHandler for AppData {
             let _ = sender.send(Err(reason));
         }
     }
+
+    fn cursor_position(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, x: i32, y: i32) {
+        dbg!(x, y);
+    }
 }
 
 impl DmabufHandler for AppData {
@@ -696,6 +724,33 @@ impl DmabufHandler for AppData {
         _buffer: &wl_buffer::WlBuffer,
     ) {
     }
+}
+
+impl SeatHandler for AppData {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {}
+    fn new_capability(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: seat::Capability,
+    ) {
+        if capability == seat::Capability::Pointer {
+            *self.wayland_helper.inner.pointer.lock().unwrap() = Some(seat.get_pointer(qh, ()));
+        }
+    }
+    fn remove_capability(
+        &mut self,
+        conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: seat::Capability,
+    ) {
+    }
+    fn remove_seat(&mut self, conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {}
 }
 
 impl Dispatch<wl_shm_pool::WlShmPool, ()> for AppData {
@@ -781,4 +836,6 @@ sctk::delegate_shm!(AppData);
 sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);
 sctk::delegate_dmabuf!(AppData);
+sctk::delegate_seat!(AppData);
 cosmic_client_toolkit::delegate_screencopy!(AppData, session: [SessionData], frame: [FrameData]);
+wayland_client::delegate_noop!(AppData: ignore wl_pointer::WlPointer);
