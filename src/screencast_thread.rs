@@ -42,14 +42,19 @@ impl MetadataCursor {
     }
 
     // , image: &crate::wayland::ShmImage<std::os::fd::OwnedFd>
-    fn update(&mut self) {
+    fn update(&mut self, update_image: bool) {
         self.meta_cursor = spa_sys::spa_meta_cursor {
             id: 1,
             flags: 0,
             position: spa_sys::spa_point { x: 50, y: 50 },
             hotspot: spa_sys::spa_point { x: 0, y: 0 },
+            //bitmap_offset: 0,
             bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
         };
+        if !update_image {
+            self.meta_cursor.bitmap_offset = 0;
+            return;
+        }
         self.meta_bitmap = spa_sys::spa_meta_bitmap {
             format: spa_sys::SPA_VIDEO_FORMAT_RGBA,
             size: spa_sys::spa_rectangle {
@@ -57,8 +62,8 @@ impl MetadataCursor {
                 width: 64,
                 height: 64,
             },
-            stride: 0 * 4,
-            offset: std::mem::size_of::<spa_sys::spa_meta_cursor>() as u32,
+            stride: 64 * 4,
+            offset: std::mem::size_of::<spa_sys::spa_meta_bitmap>() as u32,
         };
         for pixel in self.bytes.chunks_mut(4) {
             pixel.copy_from_slice(&[255, 0, 0, 255]);
@@ -119,6 +124,7 @@ struct StreamData {
     height: u32,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
+    update_cursor: bool,
 }
 
 impl StreamData {
@@ -419,7 +425,8 @@ impl StreamData {
                         )
                     } {
                         eprintln!("CURSOR DATA");
-                        cursor.update();
+                        cursor.update(self.update_cursor);
+                        self.update_cursor = false;
                     }
                 }
                 Err(err) => {
@@ -494,6 +501,7 @@ fn start_stream(
         height,
         node_id_tx: Some(node_id_tx),
         buffer_damage: HashMap::new(),
+        update_cursor: true,
     };
 
     let listener = stream
