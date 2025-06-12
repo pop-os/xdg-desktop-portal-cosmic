@@ -46,7 +46,7 @@ impl MetadataCursor {
         self.meta_cursor = spa_sys::spa_meta_cursor {
             id: 1,
             flags: 0,
-            position: spa_sys::spa_point { x: 0, y: 0 },
+            position: spa_sys::spa_point { x: 50, y: 50 },
             hotspot: spa_sys::spa_point { x: 0, y: 0 },
             bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
         };
@@ -60,7 +60,10 @@ impl MetadataCursor {
             stride: 0 * 4,
             offset: std::mem::size_of::<spa_sys::spa_meta_cursor>() as u32,
         };
-        self.bytes.len();
+        for pixel in self.bytes.chunks_mut(4) {
+            pixel.copy_from_slice(&[255, 0, 0, 255]);
+        }
+        dbg!(self.bytes.len());
     }
 }
 
@@ -408,6 +411,16 @@ impl StreamData {
                     } {
                         video_transform.transform = convert_transform(frame.transform);
                     }
+                    if let Some(cursor) = unsafe {
+                        buffer_cursor_find_meta_data(
+                            buffer,
+                            spa_sys::SPA_META_Cursor,
+                            MetadataCursor::size_of(64, 64),
+                        )
+                    } {
+                        eprintln!("CURSOR DATA");
+                        cursor.update();
+                    }
                 }
                 Err(err) => {
                     log::error!("screencopy failed: {:?}", err);
@@ -515,13 +528,24 @@ fn convert_transform(transform: WEnum<wl_output::Transform>) -> u32 {
 
 // SAFETY: buffer must be non-null, valid as long as return value is used
 //unsafe fn buffer_find_meta_data_with_size<'a, T: ?Sized>(
-unsafe fn buffer_find_meta_data_with_size<'a, T>(
+/*
+unsafe fn buffer_find_meta_data_with_size<'a, T: ?Sized>(
     buffer: *const pipewire_sys::pw_buffer,
     type_: u32,
     size: usize,
 ) -> Option<&'a mut T> {
     let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size);
-    (ptr as *mut T).as_mut()
+    (std::ptr::slice_from_raw_parts(ptr, size) as *mut T).as_mut()
+}
+*/
+
+unsafe fn buffer_cursor_find_meta_data<'a>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+    size: usize,
+) -> Option<&'a mut MetadataCursor> {
+    let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size);
+    (std::ptr::slice_from_raw_parts(ptr, size) as *mut MetadataCursor).as_mut()
 }
 
 // SAFETY: buffer must be non-null, and valid as long as return value is used
@@ -529,7 +553,8 @@ unsafe fn buffer_find_meta_data<'a, T>(
     buffer: *const pipewire_sys::pw_buffer,
     type_: u32,
 ) -> Option<&'a mut T> {
-    buffer_find_meta_data_with_size(buffer, type_, size_of::<T>())
+    let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size_of::<T>());
+    (ptr as *mut T).as_mut()
 }
 
 struct OwnedPod(Vec<u8>);
