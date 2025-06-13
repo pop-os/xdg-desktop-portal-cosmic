@@ -2,6 +2,7 @@
 
 use std::any::TypeId;
 
+use anyhow::Context;
 use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
 use futures::{future, SinkExt};
 use tokio::sync::mpsc::Receiver;
@@ -43,19 +44,29 @@ pub(crate) fn portal_subscription(
 ) -> cosmic::iced::Subscription<Event> {
     struct PortalSubscription;
     struct ConfigSubscription;
+    struct WaylandHelperSubscription;
+    let helper_portal = helper.clone();
     Subscription::batch([
         Subscription::run_with_id(
             TypeId::of::<PortalSubscription>(),
             cosmic::iced_futures::stream::channel(10, |mut output| async move {
                 let mut state = State::Init;
                 loop {
-                    if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
+                    if let Err(err) = process_changes(&mut state, &mut output, &helper_portal).await
+                    {
                         log::debug!("Portal Subscription Error: {:?}", err);
                         future::pending::<()>().await;
                     }
                 }
             }),
         ),
+        Subscription::run_with_id(
+            TypeId::of::<WaylandHelperSubscription>(),
+            helper.subscription(),
+        )
+        .map(|wl_event| match wl_event {
+            wayland::Event::ToplevelsUpdated => Event::BackgroundToplevels,
+        }),
         cosmic_config::config_subscription(
             TypeId::of::<ConfigSubscription>(),
             config::APP_ID.into(),
@@ -144,12 +155,19 @@ pub(crate) async fn process_changes(
                         }
                     }
                     Event::BackgroundToplevels => {
+                        log::debug!(
+                            "Emitting RunningApplicationsChanged in response to toplevel updates"
+                        );
                         let background = conn
                             .object_server()
                             .interface::<_, Background>(DBUS_PATH)
-                            .await?;
+                            .await
+                            .context("Connecting to Background portal D-Bus interface")?;
                         Background::running_applications_changed(background.signal_emitter())
-                            .await?;
+                            .await
+                            .context(
+                                "Emitting RunningApplicationsChanged for the Background portal",
+                            )?;
                     }
                     Event::Accent(a) => {
                         let object_server = conn.object_server();

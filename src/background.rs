@@ -37,42 +37,15 @@ pub struct Background {
 }
 
 impl Background {
-    pub fn new(
+    pub const fn new(
         wayland_helper: WaylandHelper,
         tx: mpsc::Sender<subscription::Event>,
         rx_conf: watch::Receiver<config::Config>,
     ) -> Self {
-        let toplevel_signal = wayland_helper.toplevel_signal();
-        let toplevel_tx = tx.clone();
-        std::thread::Builder::new()
-            .name("background-toplevel-updates".into())
-            .spawn(move || Background::toplevel_signal(toplevel_signal, toplevel_tx))
-            .expect("Spawning toplevels update thread should succeed");
-
         Self {
             wayland_helper,
             tx,
             rx_conf,
-        }
-    }
-
-    /// Trigger [`Background::running_applications_changed`] on toplevel updates
-    fn toplevel_signal(signal: Arc<(Mutex<bool>, Condvar)>, tx: mpsc::Sender<subscription::Event>) {
-        loop {
-            let (lock, cvar) = &*signal;
-            let mut updated = lock.lock().unwrap();
-
-            log::debug!("Waiting for toplevel updates");
-            while !*updated {
-                updated = cvar.wait(updated).unwrap();
-            }
-
-            log::debug!("Emitting RunningApplicationsChanged in response to toplevel updates");
-            debug_assert!(*updated);
-            *updated = false;
-            if let Err(e) = tx.blocking_send(subscription::Event::BackgroundToplevels) {
-                log::warn!("Failed sending event to trigger RunningApplicationsChanged: {e:?}");
-            }
         }
     }
 
