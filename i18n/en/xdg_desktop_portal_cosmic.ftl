@@ -13,3 +13,9 @@ share-screen = Share your screen
 unknown-application = Unknown Application
 output = Output
 window = Window
+
+# Background portal
+allow-once = Allow once
+deny = Deny
+bg-dialog-title = Background
+bg-dialog-body = {$appname} requests to run in the background. This will allow it to run without any open windows.
