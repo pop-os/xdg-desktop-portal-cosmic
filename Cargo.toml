@@ -64,7 +64,6 @@ git = "https://github.com/pop-os/libcosmic"
 default-features = false
 features = [
     "autosize",
-    "dbus-config",
     "desktop",
     "multi-window",
     "tokio",
