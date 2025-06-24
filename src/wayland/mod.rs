@@ -1,8 +1,9 @@
 use cosmic_client_toolkit::{
     screencopy::{
         CaptureCursorSession, CaptureFrame, CaptureOptions, CaptureSession, Capturer,
-        FailureReason, Formats, Frame, ScreencopyFrameData, ScreencopyFrameDataExt,
-        ScreencopyHandler, ScreencopySessionData, ScreencopySessionDataExt, ScreencopyState,
+        FailureReason, Formats, Frame, ScreencopyCursorSessionData, ScreencopyFrameData,
+        ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData, ScreencopySessionDataExt,
+        ScreencopyState,
     },
     sctk::{
         self,
@@ -391,7 +392,7 @@ impl WaylandHelper {
                             &source,
                             pointer,
                             &self.inner.qh,
-                            cosmic::cctk::GlobalData,
+                            ScreencopyCursorSessionData::default(),
                         )
                         .unwrap()
                 });
@@ -674,7 +675,14 @@ impl ScreencopyHandler for AppData {
         }
     }
 
-    fn cursor_position(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, x: i32, y: i32) {
+    fn cursor_position(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        session: &CaptureCursorSession,
+        x: i32,
+        y: i32,
+    ) {
         dbg!(x, y);
     }
 }
@@ -837,5 +845,5 @@ sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);
 sctk::delegate_dmabuf!(AppData);
 sctk::delegate_seat!(AppData);
-cosmic_client_toolkit::delegate_screencopy!(AppData, session: [SessionData], frame: [FrameData]);
+cosmic_client_toolkit::delegate_screencopy!(AppData);
 wayland_client::delegate_noop!(AppData: ignore wl_pointer::WlPointer);
