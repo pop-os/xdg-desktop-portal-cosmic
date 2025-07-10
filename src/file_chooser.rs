@@ -1,7 +1,7 @@
 use cosmic::{action, app, iced::window, widget};
 use cosmic_files::dialog::{
     DialogChoice, DialogChoiceOption, DialogFilter, DialogFilterPattern, DialogKind, DialogMessage,
-    DialogResult,
+    DialogResult, DialogSettings,
 };
 use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 use tokio::sync::mpsc::Sender;
@@ -389,11 +389,14 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
             DialogKind::OpenFolder
         }
     };
-    let path_opt = args.options.current_folder();
+    let mut settings = DialogSettings::new().kind(kind);
+    //TODO: setting app_id breaks dialog floating: .app_id(args.app_id.clone());
+    if let Some(path) = args.options.current_folder() {
+        settings = settings.path(path);
+    }
 
     let (mut dialog, command) = Dialog::new(
-        kind,
-        path_opt,
+        settings,
         |x| Msg::DialogMessage(x),
         |x| Msg::DialogResult(x),
     );
