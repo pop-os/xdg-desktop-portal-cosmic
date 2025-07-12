@@ -134,9 +134,17 @@ impl Rect {
         }
     }
 
-    pub fn dimensions(self: Self) -> Option<RectDimension> {
-        let width = NonZeroU32::new((self.right - self.left).unsigned_abs())?;
-        let height = NonZeroU32::new((self.bottom - self.top).unsigned_abs())?;
+    fn width(&self) -> i32 {
+        self.right - self.left
+    }
+
+    fn height(&self) -> i32 {
+        self.bottom - self.top
+    }
+
+    pub fn dimensions(self) -> Option<RectDimension> {
+        let width = NonZeroU32::new((self.width()).unsigned_abs())?;
+        let height = NonZeroU32::new((self.height()).unsigned_abs())?;
         Some(RectDimension { width, height })
     }
 }
@@ -271,7 +279,7 @@ impl Screenshot {
         }
 
         let (file, path) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let image = combined_image(bounds_opt.unwrap_or_default(), frames.into_iter());
+            let image = combined_image(bounds_opt.unwrap_or_default(), frames);
 
             let mut file = tempfile::Builder::new()
                 .prefix("screenshot-")
@@ -288,7 +296,23 @@ impl Screenshot {
     }
 }
 
-fn combined_image(bounds: Rect, frames: impl Iterator<Item = (RgbaImage, Rect)>) -> RgbaImage {
+fn combined_image(bounds: Rect, frames: Vec<(RgbaImage, Rect)>) -> RgbaImage {
+    // If we have only one image, crop without scaling
+    if frames.len() == 1 {
+        let (frame_image, rect) = &frames[0];
+
+        // TODO Don't have explicit scale factor; how to ensure pixel perfect scaling?
+        let width_scale = frame_image.width() as f64 / rect.width() as f64;
+        let height_scale = frame_image.height() as f64 / rect.height() as f64;
+
+        let width = (bounds.width() as f64 * width_scale).max(0.) as u32;
+        let height = (bounds.height() as f64 * height_scale).max(0.) as u32;
+        let x = ((bounds.left - rect.left) as f64 * width_scale).max(0.) as u32;
+        let y = ((bounds.top - rect.top) as f64 * height_scale).max(0.) as u32;
+
+        return image::imageops::crop_imm(frame_image, x, y, width, height).to_image();
+    }
+
     let width = bounds
         .right
         .saturating_sub(bounds.left)
@@ -301,8 +325,8 @@ fn combined_image(bounds: Rect, frames: impl Iterator<Item = (RgbaImage, Rect)>)
         .unwrap_or_default();
     let mut image = image::RgbaImage::new(width, height);
     for (mut frame_image, rect) in frames {
-        let width = (rect.right - rect.left) as u32;
-        let height = (rect.bottom - rect.top) as u32;
+        let width = rect.width() as u32;
+        let height = rect.height() as u32;
         if frame_image.dimensions() != (width, height) {
             frame_image = image::imageops::resize(
                 &frame_image,
@@ -620,24 +644,27 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         // then overlay the part of each image that intersects with the rect
                         //let mut img = RgbaImage::new(width.get(), height.get());
 
-                        let frames = images.into_iter().filter_map(|(name, raw_img)| {
-                            let Some(output) = outputs.iter().find(|o| o.name == name) else {
-                                return None;
-                            };
-                            let pos = output.logical_pos;
-                            let output_rect = Rect {
-                                left: pos.0,
-                                top: pos.1,
-                                right: pos.0 + output.logical_size.0 as i32,
-                                bottom: pos.1 + output.logical_size.1 as i32,
-                            };
+                        let frames = images
+                            .into_iter()
+                            .filter_map(|(name, raw_img)| {
+                                let Some(output) = outputs.iter().find(|o| o.name == name) else {
+                                    return None;
+                                };
+                                let pos = output.logical_pos;
+                                let output_rect = Rect {
+                                    left: pos.0,
+                                    top: pos.1,
+                                    right: pos.0 + output.logical_size.0 as i32,
+                                    bottom: pos.1 + output.logical_size.1 as i32,
+                                };
 
-                            let Some(intersect) = r.intersect(output_rect) else {
-                                return None;
-                            };
+                                let Some(intersect) = r.intersect(output_rect) else {
+                                    return None;
+                                };
 
-                            Some((raw_img.rgba, output_rect))
-                        });
+                                Some((raw_img.rgba, output_rect))
+                            })
+                            .collect::<Vec<_>>();
                         let img = combined_image(r, frames);
 
                         if let Some(ref image_path) = image_path {
