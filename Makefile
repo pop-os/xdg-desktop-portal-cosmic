@@ -1,4 +1,4 @@
-prefix ?= /usr/local
+prefix ?= /usr
 bindir = $(prefix)/bin
 libdir = $(prefix)/lib
 libexecdir = $(prefix)/libexec
