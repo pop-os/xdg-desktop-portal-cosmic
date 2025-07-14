@@ -539,17 +539,13 @@ impl Screenshot {
         option: HashMap<String, zvariant::Value<'_>>,
     ) -> PortalResponse<PickColorResult> {
         // TODO create handle
-        // XXX
-        PortalResponse::Success(PickColorResult {
-            color: (1., 1., 1.),
-        })
+        // XXX implement
+        PortalResponse::Other
     }
 
     #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
-        //TODO: increase version when color picking is implemented
-        // return 1 to indicate that the portal only supports screenshots, not color picking
-        1
+        2
     }
 }
 
