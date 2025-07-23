@@ -1,0 +1,7 @@
+[Unit]
+Description=Portal service (COSMIC implementation)
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.cosmic
+ExecStart=LIBEXECDIR/xdg-desktop-portal-cosmic
