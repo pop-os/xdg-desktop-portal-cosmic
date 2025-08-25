@@ -361,7 +361,7 @@ fn toplevel_button(
     is_selected: bool,
     icon: IconSource,
     msg: Msg,
-) -> cosmic::Element<Msg> {
+) -> cosmic::Element<'_, Msg> {
     let text = widget::text(label).class(theme::style::Text::Custom(|theme| {
         let container = theme.current_container();
         cosmic::iced_core::widget::text::Style {
@@ -386,7 +386,7 @@ fn toplevel_button(
     widget::row::with_children(children).spacing(12).into()
 }
 
-pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
+pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let Some(args) = portal.screencast_args.as_ref() else {
         return widget::horizontal_space()
             .width(iced::Length::Fixed(1.0))

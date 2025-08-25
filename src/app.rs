@@ -123,11 +123,11 @@ impl cosmic::Application for CosmicPortal {
         )
     }
 
-    fn view(&self) -> cosmic::prelude::Element<Self::Message> {
+    fn view(&self) -> cosmic::Element<'_, Self::Message> {
         unimplemented!()
     }
 
-    fn view_window(&self, id: window::Id) -> cosmic::prelude::Element<Self::Message> {
+    fn view_window(&self, id: window::Id) -> cosmic::Element<'_, Self::Message> {
         if Some(id) == self.access_args.as_ref().map(|args| args.access_id) {
             access::view(self).map(Msg::Access)
         } else if id == *screencast_dialog::SCREENCAST_ID {
