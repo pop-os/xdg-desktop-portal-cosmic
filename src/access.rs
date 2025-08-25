@@ -169,7 +169,7 @@ impl AccessDialogArgs {
     }
 }
 
-pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
+pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let spacing = portal.core.system_theme().cosmic().spacing;
     let Some(args) = portal.access_args.as_ref() else {
         return text("Oops, no access dialog args").into();

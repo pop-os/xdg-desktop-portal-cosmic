@@ -258,7 +258,7 @@ fn map_msg(id: window::Id, message: cosmic::Action<Msg>) -> cosmic::Action<AppMs
     }
 }
 
-pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<AppMsg> {
+pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_, AppMsg> {
     match portal.file_choosers.get(&id) {
         Some((_args, dialog)) => dialog.view(id).map(move |msg| AppMsg::FileChooser(id, msg)),
         None => widget::text(format!("no file chooser dialog with ID {id:?}")).into(),
