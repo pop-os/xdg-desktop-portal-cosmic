@@ -27,6 +27,7 @@ pub fn create_memfd(width: u32, height: u32) -> OwnedFd {
 
 pub fn create_dmabuf<T: AsFd>(
     device: &gbm::Device<T>,
+    format: gbm::Format,
     modifier: gbm::Modifier,
     width: u32,
     height: u32,
@@ -36,23 +37,18 @@ pub fn create_dmabuf<T: AsFd>(
             .create_buffer_object_with_modifiers2::<()>(
                 width,
                 height,
-                gbm::Format::Abgr8888,
+                format,
                 [modifier].into_iter(),
                 gbm::BufferObjectFlags::empty(),
             )
             .unwrap()
     } else {
         device
-            .create_buffer_object::<()>(
-                width,
-                height,
-                gbm::Format::Abgr8888,
-                gbm::BufferObjectFlags::empty(),
-            )
+            .create_buffer_object::<()>(width, height, format, gbm::BufferObjectFlags::empty())
             .unwrap()
     };
     Dmabuf {
-        format: gbm::Format::Abgr8888,
+        format,
         modifier,
         width,
         height,
