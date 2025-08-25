@@ -168,90 +168,93 @@ impl StreamData {
     }
 
     fn param_changed(&mut self, stream: &StreamRef, id: u32, pod: Option<&Pod>) {
+        let Some(pod) = pod else {
+            return;
+        };
         if id != spa_sys::SPA_PARAM_Format {
             return;
         }
-        if let Some(pod) = pod {
-            let value = PodDeserializer::deserialize_from::<pod::Value>(pod.as_bytes());
-            if let Ok((_, pod::Value::Object(object))) = &value {
-                if let Some(modifier_prop) = object
-                    .properties
-                    .iter()
-                    .find(|p| p.key == spa_sys::SPA_FORMAT_VIDEO_modifier)
-                {
-                    let pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(_, choice))) =
-                        &modifier_prop.value
-                    else {
-                        log::error!("invalid modifier prop: {:?}", modifier_prop.value);
-                        return;
-                    };
+        let object = match pod.as_object() {
+            Ok(object) => object,
+            Err(err) => {
+                log::error!("format param not an object?: {}", err);
+                return;
+            }
+        };
 
-                    if modifier_prop
-                        .flags
-                        .contains(pod::PropertyFlags::DONT_FIXATE)
-                    {
-                        let spa::utils::ChoiceEnum::Enum {
-                            default,
-                            alternatives,
-                        } = choice
-                        else {
-                            // TODO How does C code deal with variants of choice?
-                            log::error!("invalid modifier prop choice: {:?}", choice);
-                            return;
-                        };
+        if let Some(modifier_prop) = object.find_prop(Id(spa_sys::SPA_FORMAT_VIDEO_modifier)) {
+            let value =
+                PodDeserializer::deserialize_from::<pod::Value>(modifier_prop.value().as_bytes());
+            let Ok((_, pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(_, choice))))) =
+                &value
+            else {
+                log::error!("invalid modifier prop: {:?}", value);
+                return;
+            };
 
-                        log::info!(
-                            "modifier param-changed: (default: {}, alternatives: {:?})",
-                            default,
-                            alternatives
-                        );
+            if modifier_prop
+                .flags()
+                .contains(pod::PodPropFlags::DONT_FIXATE)
+            {
+                let spa::utils::ChoiceEnum::Enum {
+                    default,
+                    alternatives,
+                } = choice
+                else {
+                    // TODO How does C code deal with variants of choice?
+                    log::error!("invalid modifier prop choice: {:?}", choice);
+                    return;
+                };
 
-                        // Create temporary bo to get preferred modifier
-                        // Similar to xdg-desktop-portal-wlr
-                        let modifiers = iter::once(default)
-                            .chain(alternatives)
-                            .map(|x| gbm::Modifier::from(*x as u64))
-                            .collect::<Vec<_>>();
-                        if let Some(modifier) = self.choose_modifier(&modifiers) {
-                            self.modifier = Some(modifier);
+                log::info!(
+                    "modifier param-changed: (default: {}, alternatives: {:?})",
+                    default,
+                    alternatives
+                );
 
-                            let params = format_params(
-                                self.width,
-                                self.height,
-                                self.dmabuf_helper.as_ref(),
-                                Some(modifier),
-                                &self.formats,
-                            );
-                            let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
-                            if let Err(err) = stream.update_params(&mut params) {
-                                log::error!("failed to update pipewire params: {}", err);
-                            }
-                            return;
-                        } else {
-                            log::error!("failed to choose modifier from {:?}", modifiers);
-                            let params =
-                                format_params(self.width, self.height, None, None, &self.formats);
-                            let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
-                            if let Err(err) = stream.update_params(&mut params) {
-                                log::error!("failed to update pipewire params: {}", err);
-                            }
-                            return;
-                        }
+                // Create temporary bo to get preferred modifier
+                // Similar to xdg-desktop-portal-wlr
+                let modifiers = iter::once(default)
+                    .chain(alternatives)
+                    .map(|x| gbm::Modifier::from(*x as u64))
+                    .collect::<Vec<_>>();
+                if let Some(modifier) = self.choose_modifier(&modifiers) {
+                    self.modifier = Some(modifier);
+
+                    let params = format_params(
+                        self.width,
+                        self.height,
+                        self.dmabuf_helper.as_ref(),
+                        Some(modifier),
+                        &self.formats,
+                    );
+                    let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+                    if let Err(err) = stream.update_params(&mut params) {
+                        log::error!("failed to update pipewire params: {}", err);
                     }
-                }
-
-                log::info!("modifier fixated. Setting other params.");
-
-                let blocks = self
-                    .modifier
-                    .and_then(|m| self.plane_count(gbm::Format::Abgr8888, m))
-                    .unwrap_or(1);
-                let params = other_params(self.width, self.height, blocks, self.modifier.is_some());
-                let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
-                if let Err(err) = stream.update_params(&mut params) {
-                    log::error!("failed to update pipewire params: {}", err);
+                    return;
+                } else {
+                    log::error!("failed to choose modifier from {:?}", modifiers);
+                    let params = format_params(self.width, self.height, None, None, &self.formats);
+                    let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+                    if let Err(err) = stream.update_params(&mut params) {
+                        log::error!("failed to update pipewire params: {}", err);
+                    }
+                    return;
                 }
             }
+        }
+
+        log::info!("modifier fixated. Setting other params.");
+
+        let blocks = self
+            .modifier
+            .and_then(|m| self.plane_count(gbm::Format::Abgr8888, m))
+            .unwrap_or(1);
+        let params = other_params(self.width, self.height, blocks, self.modifier.is_some());
+        let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+        if let Err(err) = stream.update_params(&mut params) {
+            log::error!("failed to update pipewire params: {}", err);
         }
     }
 
