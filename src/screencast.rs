@@ -346,8 +346,7 @@ impl ScreenCast {
 
     #[zbus(property)]
     async fn available_source_types(&self) -> u32 {
-        // XXX
-        SOURCE_TYPE_MONITOR
+        SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW
     }
 
     #[zbus(property)]
