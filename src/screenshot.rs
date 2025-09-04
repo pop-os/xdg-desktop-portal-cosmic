@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::num::NonZeroU32;
 use std::{collections::HashMap, io, path::PathBuf};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::watch;
 
 use wayland_client::protocol::wl_output::WlOutput;
 use zbus::zvariant;
@@ -158,11 +159,20 @@ pub struct RectDimension {
 pub struct Screenshot {
     wayland_helper: WaylandHelper,
     tx: Sender<subscription::Event>,
+    rx_conf: watch::Receiver<config::Config>,
 }
 
 impl Screenshot {
-    pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
-        Self { wayland_helper, tx }
+    pub fn new(
+        wayland_helper: WaylandHelper,
+        tx: Sender<subscription::Event>,
+        rx_conf: watch::Receiver<config::Config>,
+    ) -> Self {
+        Self {
+            wayland_helper,
+            tx,
+            rx_conf,
+        }
     }
 
     async fn interactive_toplevel_images(
@@ -422,12 +432,9 @@ impl Screenshot {
     ) -> PortalResponse<ScreenshotResult> {
         // connection.object_server().at(&handle, Request);
 
-        // The screenshot handler is created when the portal is launched, but requests are
-        // handled on demand. The handler does not store extra state such as a reference to the
-        // portal. Storing a copy of the config is unideal because it would remain out of date.
-        //
-        // The most straightforward solution is to load the screenshot config here
-        let config = config::Config::load().0.screenshot;
+        // borrow() is simpler here as we don't need &mut self and reading a possibly out of
+        // date config isn't a major issue
+        let config = self.rx_conf.borrow().screenshot.clone();
 
         // TODO create handle, show dialog
         let mut outputs = Vec::new();
@@ -757,7 +764,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
                 config::screenshot::Screenshot {
                     choice,
-                    ..portal.config.screenshot
+                    ..portal
+                        .tx_conf
+                        .as_ref()
+                        .map(|tx| tx.borrow().screenshot.clone())
+                        .unwrap_or_default()
                 },
             ))
         }
@@ -806,7 +817,12 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
                     config::screenshot::Screenshot {
                         save_location: loc,
-                        choice: (&mut portal.config.screenshot.choice).into(),
+                        choice: portal
+                            .tx_conf
+                            .as_ref()
+                            .map(|tx| tx.borrow().screenshot.choice.clone())
+                            .unwrap_or_default()
+                            .into(),
                     },
                 ))
             } else {
