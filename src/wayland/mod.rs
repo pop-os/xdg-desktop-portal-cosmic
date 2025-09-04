@@ -178,7 +178,7 @@ struct SessionState {
 struct SessionInner {
     wayland_helper: WaylandHelper,
     capture_session: CaptureSession,
-    capture_cursor_session: Option<CaptureCursorSession>,
+    capture_cursor_session: Option<(CaptureCursorSession, CaptureSession)>,
     condvar: Condvar,
     state: Mutex<SessionState>,
 }
@@ -386,7 +386,8 @@ impl WaylandHelper {
             // XXX user data
             let capture_cursor_session =
                 self.inner.pointer.lock().unwrap().as_ref().map(|pointer| {
-                    self.inner
+                    let cursor_session = self
+                        .inner
                         .capturer
                         .create_cursor_session(
                             &source,
@@ -394,7 +395,11 @@ impl WaylandHelper {
                             &self.inner.qh,
                             ScreencopyCursorSessionData::default(),
                         )
-                        .unwrap()
+                        .unwrap();
+                    let capture_session = cursor_session
+                        .capture_session(&self.inner.qh, ScreencopySessionData::default())
+                        .unwrap();
+                    (cursor_session, capture_session)
                 });
             dbg!(&capture_cursor_session);
 
