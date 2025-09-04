@@ -241,6 +241,30 @@ impl Session {
         // TODO: wait for server to release buffer?
         receiver.await.unwrap()
     }
+
+    // XXX also need way to get formats?
+    pub async fn capture_cursor_wl_buffer(
+        &self,
+        buffer: &wl_buffer::WlBuffer,
+        buffer_damage: &[Rect],
+    ) -> Result<Option<Frame>, WEnum<FailureReason>> {
+        let Some((_, capture_session)) = &self.0.capture_cursor_session else {
+            return Ok(None);
+        };
+        let (sender, receiver) = oneshot::channel();
+        capture_session.capture(
+            buffer,
+            buffer_damage,
+            &self.0.wayland_helper.inner.qh,
+            FrameData {
+                frame_data: Default::default(),
+                sender: Mutex::new(Some(sender)),
+            },
+        );
+        self.0.wayland_helper.inner.conn.flush().unwrap();
+
+        receiver.await.unwrap().map(Some)
+    }
 }
 
 impl WaylandHelper {
