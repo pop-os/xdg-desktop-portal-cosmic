@@ -53,6 +53,7 @@ pub use cosmic_client_toolkit::screencopy::{CaptureSource, Rect};
 
 use crate::buffer;
 
+mod cursor_stream;
 mod gbm_devices;
 mod toplevel;
 mod workspaces;
@@ -243,28 +244,14 @@ impl Session {
         receiver.await.unwrap()
     }
 
-    // XXX also need way to get formats?
-    pub async fn capture_cursor_wl_buffer(
-        &self,
-        buffer: &wl_buffer::WlBuffer,
-        buffer_damage: &[Rect],
-    ) -> Result<Option<Frame>, WEnum<FailureReason>> {
+    // Should only be called once
+    fn cursor_stream(&self) -> Option<cursor_stream::CursorStream> {
         let Some((_, capture_session)) = &self.0.capture_cursor_session else {
-            return Ok(None);
+            return None;
         };
-        let (sender, receiver) = oneshot::channel();
-        capture_session.capture(
-            buffer,
-            buffer_damage,
-            &self.0.wayland_helper.inner.qh,
-            FrameData {
-                frame_data: Default::default(),
-                sender: Mutex::new(Some(sender)),
-            },
-        );
-        self.0.wayland_helper.inner.conn.flush().unwrap();
-
-        receiver.await.unwrap().map(Some)
+        Some(cursor_stream::CursorStream {
+            capture_session: capture_session.clone(),
+        })
     }
 }
 
