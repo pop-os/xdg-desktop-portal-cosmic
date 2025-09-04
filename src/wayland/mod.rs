@@ -180,7 +180,6 @@ struct SessionInner {
     wayland_helper: WaylandHelper,
     capture_session: CaptureSession,
     capture_cursor_session: Option<(CaptureCursorSession, CaptureSession)>,
-    capture_cursor_formats: Mutex<Option<Formats>>,
     condvar: Condvar,
     state: Mutex<SessionState>,
 }
@@ -244,14 +243,15 @@ impl Session {
         receiver.await.unwrap()
     }
 
-    // Should only be called once
+    // XXX Should only be called once
     fn cursor_stream(&self) -> Option<cursor_stream::CursorStream> {
         let Some((_, capture_session)) = &self.0.capture_cursor_session else {
             return None;
         };
-        Some(cursor_stream::CursorStream {
-            capture_session: capture_session.clone(),
-        })
+        Some(cursor_stream::CursorStream::new(
+            capture_session,
+            &self.0.wayland_helper.inner.qh,
+        ))
     }
 }
 
@@ -414,6 +414,8 @@ impl WaylandHelper {
                             CursorCaptureSessionData {
                                 session: weak_session.clone(),
                                 session_data: ScreencopySessionData::default(),
+                                waker: Mutex::new(None),
+                                formats: Mutex::new(None),
                             },
                         )
                         .unwrap();
@@ -427,7 +429,6 @@ impl WaylandHelper {
                 wayland_helper: self.clone(),
                 capture_session,
                 capture_cursor_session,
-                capture_cursor_formats: Mutex::new(None),
                 condvar: Condvar::new(),
                 state: Default::default(),
             }
@@ -658,9 +659,7 @@ impl ScreencopyHandler for AppData {
                 data.formats = Some(formats.clone());
             });
         } else if let Some(data) = session.data::<CursorCaptureSessionData>() {
-            if let Some(session_inner) = data.session.upgrade() {
-                *session_inner.capture_cursor_formats.lock().unwrap() = Some(formats.clone());
-            }
+            *data.formats.lock().unwrap() = Some(formats.clone());
             println!("Cursor session formats: {:?}", formats);
         }
     }
@@ -860,6 +859,8 @@ impl ScreencopySessionDataExt for SessionData {
 struct CursorCaptureSessionData {
     session: Weak<SessionInner>,
     session_data: ScreencopySessionData,
+    waker: Mutex<Option<std::task::Waker>>,
+    formats: Mutex<Option<Formats>>,
 }
 
 impl ScreencopySessionDataExt for CursorCaptureSessionData {
