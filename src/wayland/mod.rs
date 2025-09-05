@@ -54,6 +54,7 @@ pub use cosmic_client_toolkit::screencopy::{CaptureSource, Rect};
 use crate::buffer;
 
 mod cursor_stream;
+pub use cursor_stream::CursorStream;
 mod gbm_devices;
 mod toplevel;
 mod workspaces;
@@ -244,7 +245,7 @@ impl Session {
     }
 
     // XXX Should only be called once
-    fn cursor_stream(&self) -> Option<cursor_stream::CursorStream> {
+    pub fn cursor_stream(&self) -> Option<cursor_stream::CursorStream> {
         let Some((_, capture_session)) = &self.0.capture_cursor_session else {
             return None;
         };

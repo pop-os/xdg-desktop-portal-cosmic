@@ -5,7 +5,7 @@
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
 use cosmic_client_toolkit::screencopy::{Formats, Rect};
-use futures::executor::block_on;
+use futures::{executor::block_on, stream::StreamExt};
 use pipewire::{
     spa::{
         self,
@@ -15,7 +15,14 @@ use pipewire::{
     stream::{StreamRef, StreamState},
     sys::pw_buffer,
 };
-use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    io, iter,
+    os::fd::IntoRawFd,
+    slice,
+    task::{Context, Poll, Waker},
+};
 use tokio::sync::oneshot;
 use wayland_client::{
     protocol::{wl_buffer, wl_output, wl_shm},
@@ -24,7 +31,7 @@ use wayland_client::{
 
 use crate::{
     buffer,
-    wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
+    wayland::{CaptureSource, CursorStream, DmabufHelper, Session, WaylandHelper},
 };
 
 static FORMAT_MAP: &[(gbm::Format, Id)] = &[
@@ -149,6 +156,8 @@ struct StreamData {
     format: gbm::Format,
     modifier: Option<gbm::Modifier>,
     session: Session,
+    cursor_stream: Option<CursorStream>,
+    cursor_image: Option<image::RgbaImage>,
     formats: Formats,
     width: u32,
     height: u32,
@@ -450,6 +459,13 @@ impl StreamData {
     }
 
     fn process(&mut self, stream: &StreamRef) {
+        if let Some(stream) = &mut self.cursor_stream {
+            let mut context = Context::from_waker(Waker::noop());
+            if let Poll::Ready(image) = stream.poll_next_unpin(&mut context) {
+                self.cursor_image = image;
+            }
+        }
+
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
@@ -525,6 +541,16 @@ fn start_stream(
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
     let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
+    let mut cursor_stream = session.cursor_stream();
+    let mut cursor_image = None;
+    if let Some(stream) = &mut cursor_stream {
+        let mut context = Context::from_waker(Waker::noop());
+        if let Poll::Ready(image) = stream.poll_next_unpin(&mut context) {
+            cursor_image = image;
+        }
+    }
+
+    // TODO initial poll?
 
     let Some(formats) = block_on(session.wait_for_formats(|formats| formats.clone())) else {
         return Err(anyhow::anyhow!(
@@ -567,6 +593,8 @@ fn start_stream(
         wayland_helper,
         dmabuf_helper,
         session,
+        cursor_stream,
+        cursor_image,
         formats,
         format: gbm::Format::Abgr8888,
         modifier: None,
