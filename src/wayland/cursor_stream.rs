@@ -67,7 +67,7 @@ impl futures::stream::Stream for CursorStream {
                     width,
                     height,
                     width * 4,
-                    wl_shm::Format::Abgr8888,
+                    wl_shm::Format::Argb8888,
                 );
                 *buffer = Some((width, height, fd, wl_buffer));
                 *state = State::WaitingForFormats; // XXX, well, not waiting
@@ -81,7 +81,12 @@ impl futures::stream::Stream for CursorStream {
                     let (width, height, fd, _) = &buffer.as_ref().unwrap();
                     // XXX unwrap
                     let mmap = unsafe { memmap2::Mmap::map(fd).unwrap() };
-                    let image = image::RgbaImage::from_vec(*width, *height, mmap.to_vec());
+                    let mut bytes = mmap.to_vec();
+                    // Swap BGRA to RGBA
+                    for pixel in bytes.chunks_mut(4) {
+                        pixel.swap(2, 0);
+                    }
+                    let image = image::RgbaImage::from_vec(*width, *height, bytes);
                     return Poll::Ready(image);
                 }
                 // XXX Ignore error
