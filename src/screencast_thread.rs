@@ -98,7 +98,7 @@ impl MetadataCursor {
                 width: image.width(),
                 height: image.height(),
             },
-            stride: 64 * 4,
+            stride: image.width() as i32 * 4,
             offset: std::mem::size_of::<spa_sys::spa_meta_bitmap>() as u32,
         };
         // XXX what if buffer is not large enough?
