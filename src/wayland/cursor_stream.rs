@@ -1,6 +1,7 @@
 use cosmic_client_toolkit::screencopy::{CaptureSession, FailureReason, Frame};
 use futures::channel::oneshot;
 use std::{
+    future::Future,
     pin::Pin,
     sync::Mutex,
     task::{Context, Poll},
@@ -20,6 +21,7 @@ enum State {
 
 // TODO wake stream when we get formats?
 pub struct CursorStream {
+    state: Mutex<State>,
     // TODO formats
     capture_session: CaptureSession,
     wayland_helper: WaylandHelper,
@@ -30,6 +32,7 @@ pub struct CursorStream {
 impl CursorStream {
     pub(super) fn new(capture_session: &CaptureSession, wayland_helper: &WaylandHelper) -> Self {
         Self {
+            state: Mutex::new(State::WaitingForFormats),
             capture_session: capture_session.clone(),
             wayland_helper: wayland_helper.clone(),
             buffer: Mutex::new(None),
@@ -41,16 +44,17 @@ impl futures::stream::Stream for CursorStream {
     type Item = image::RgbaImage;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<image::RgbaImage>> {
-        let (sender, receiver) = oneshot::channel();
         let data = self
             .capture_session
             .data::<CursorCaptureSessionData>()
             .unwrap();
         *data.waker.lock().unwrap() = Some(cx.waker().clone());
 
+        let mut buffer = self.buffer.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+
         if let Some(formats) = &data.formats.lock().unwrap().clone() {
             // XXX test if res changed
-            let mut buffer = self.buffer.lock().unwrap();
             if buffer.is_none() {
                 let (width, height) = formats.buffer_size;
                 let fd = buffer::create_memfd(width, height);
@@ -65,16 +69,28 @@ impl futures::stream::Stream for CursorStream {
             }
         }
 
-        // WIP damage
-        self.capture_session.capture(
-            todo!(),
-            &[],
-            &self.wayland_helper.inner.qh,
-            FrameData {
-                frame_data: Default::default(),
-                sender: Mutex::new(Some(sender)),
-            },
-        );
-        todo!()
+        if let State::Capturing(receiver) = &mut *state {
+            match std::pin::Pin::new(receiver).poll(cx) {
+                Poll::Ready(_) => {}
+                Poll::Pending => {}
+            }
+        }
+
+        if let Some((_, _, wl_buffer)) = &*buffer {
+            let (sender, receiver) = oneshot::channel();
+            // WIP damage
+            self.capture_session.capture(
+                wl_buffer,
+                &[],
+                &self.wayland_helper.inner.qh,
+                FrameData {
+                    frame_data: Default::default(),
+                    sender: Mutex::new(Some(sender)),
+                },
+            );
+            *state = State::Capturing(receiver);
+        }
+
+        Poll::Pending
     }
 }
