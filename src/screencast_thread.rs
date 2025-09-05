@@ -78,7 +78,7 @@ impl MetadataCursor {
     }
 
     // , image: &crate::wayland::ShmImage<std::os::fd::OwnedFd>
-    fn update(&mut self, update_image: bool) {
+    fn update(&mut self, image: Option<&image::RgbaImage>) {
         self.meta_cursor = spa_sys::spa_meta_cursor {
             id: 1,
             flags: 0,
@@ -87,24 +87,22 @@ impl MetadataCursor {
             //bitmap_offset: 0,
             bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
         };
-        if !update_image {
+        let Some(image) = image else {
             self.meta_cursor.bitmap_offset = 0;
             return;
-        }
+        };
         self.meta_bitmap = spa_sys::spa_meta_bitmap {
             format: spa_sys::SPA_VIDEO_FORMAT_RGBA,
             size: spa_sys::spa_rectangle {
                 // XXX
-                width: 64,
-                height: 64,
+                width: image.width(),
+                height: image.height(),
             },
             stride: 64 * 4,
             offset: std::mem::size_of::<spa_sys::spa_meta_bitmap>() as u32,
         };
-        for pixel in self.bytes.chunks_mut(4) {
-            pixel.copy_from_slice(&[255, 0, 0, 255]);
-        }
-        dbg!(self.bytes.len());
+        // XXX what if buffer is not large enough?
+        self.bytes[..image.len()].copy_from_slice(image);
     }
 }
 
@@ -462,6 +460,7 @@ impl StreamData {
         if let Some(stream) = &mut self.cursor_stream {
             let mut context = Context::from_waker(Waker::noop());
             if let Poll::Ready(image) = stream.poll_next_unpin(&mut context) {
+                println!("Have cursor image");
                 self.cursor_image = image;
             }
         }
@@ -506,7 +505,9 @@ impl StreamData {
                             MetadataCursor::size_of(64, 64),
                         )
                     } {
-                        cursor.update(self.update_cursor);
+                        // cursor.update(self.update_cursor);
+                        // XXX update_cursor?
+                        cursor.update(self.cursor_image.as_ref());
                         self.update_cursor = false;
                     }
                 }
@@ -546,6 +547,7 @@ fn start_stream(
     if let Some(stream) = &mut cursor_stream {
         let mut context = Context::from_waker(Waker::noop());
         if let Poll::Ready(image) = stream.poll_next_unpin(&mut context) {
+            println!("Have cursor image 0");
             cursor_image = image;
         }
     }
