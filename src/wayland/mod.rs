@@ -250,7 +250,7 @@ impl Session {
         };
         Some(cursor_stream::CursorStream::new(
             capture_session,
-            &self.0.wayland_helper.inner.qh,
+            &self.0.wayland_helper,
         ))
     }
 }
@@ -660,6 +660,10 @@ impl ScreencopyHandler for AppData {
             });
         } else if let Some(data) = session.data::<CursorCaptureSessionData>() {
             *data.formats.lock().unwrap() = Some(formats.clone());
+            let waker = data.waker.lock().unwrap();
+            if let Some(waker) = &*waker {
+                waker.wake_by_ref();
+            }
             println!("Cursor session formats: {:?}", formats);
         }
     }

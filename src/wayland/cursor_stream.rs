@@ -5,9 +5,13 @@ use std::{
     sync::Mutex,
     task::{Context, Poll},
 };
-use wayland_client::{QueueHandle, WEnum};
+use wayland_client::{
+    protocol::{wl_buffer, wl_shm},
+    QueueHandle, WEnum,
+};
 
-use super::{AppData, CursorCaptureSessionData, FrameData};
+use super::{AppData, CursorCaptureSessionData, FrameData, WaylandHelper};
+use crate::buffer;
 
 enum State {
     WaitingForFormats,
@@ -18,14 +22,17 @@ enum State {
 pub struct CursorStream {
     // TODO formats
     capture_session: CaptureSession,
-    qh: QueueHandle<AppData>,
+    wayland_helper: WaylandHelper,
+    // XXX modify pin without mutex?
+    buffer: Mutex<Option<(u32, u32, wl_buffer::WlBuffer)>>,
 }
 
 impl CursorStream {
-    pub(super) fn new(capture_session: &CaptureSession, qh: &QueueHandle<AppData>) -> Self {
+    pub(super) fn new(capture_session: &CaptureSession, wayland_helper: &WaylandHelper) -> Self {
         Self {
             capture_session: capture_session.clone(),
-            qh: qh.clone(),
+            wayland_helper: wayland_helper.clone(),
+            buffer: Mutex::new(None),
         }
     }
 }
@@ -40,12 +47,29 @@ impl futures::stream::Stream for CursorStream {
             .data::<CursorCaptureSessionData>()
             .unwrap();
         *data.waker.lock().unwrap() = Some(cx.waker().clone());
-        let formats = data.formats.lock().unwrap().clone();
+
+        if let Some(formats) = &data.formats.lock().unwrap().clone() {
+            // XXX test if res changed
+            let mut buffer = self.buffer.lock().unwrap();
+            if buffer.is_none() {
+                let (width, height) = formats.buffer_size;
+                let fd = buffer::create_memfd(width, height);
+                let wl_buffer = self.wayland_helper.create_shm_buffer(
+                    &fd,
+                    width,
+                    height,
+                    width * 4,
+                    wl_shm::Format::Abgr8888,
+                );
+                *buffer = Some((width, height, wl_buffer));
+            }
+        }
+
         // WIP damage
         self.capture_session.capture(
             todo!(),
             &[],
-            &self.qh,
+            &self.wayland_helper.inner.qh,
             FrameData {
                 frame_data: Default::default(),
                 sender: Mutex::new(Some(sender)),
