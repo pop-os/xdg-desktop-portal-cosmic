@@ -275,8 +275,7 @@ impl StreamData {
                         self.width,
                         self.height,
                         self.dmabuf_helper.as_ref(),
-                        self.format,
-                        Some(modifier),
+                        Some((self.format, modifier)),
                         &self.formats,
                     );
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
@@ -286,14 +285,7 @@ impl StreamData {
                     return;
                 } else {
                     log::error!("failed to choose modifier from {:?}", modifiers);
-                    let params = format_params(
-                        self.width,
-                        self.height,
-                        None,
-                        self.format,
-                        None,
-                        &self.formats,
-                    );
+                    let params = format_params(self.width, self.height, None, None, &self.formats);
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                     if let Err(err) = stream.update_params(&mut params) {
                         log::error!("failed to update pipewire params: {}", err);
@@ -488,14 +480,7 @@ fn start_stream(
         },
     )?;
 
-    let initial_params = format_params(
-        width,
-        height,
-        dmabuf_helper.as_ref(),
-        gbm::Format::Abgr8888,
-        None,
-        &formats,
-    );
+    let initial_params = format_params(width, height, dmabuf_helper.as_ref(), None, &formats);
     let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
@@ -608,17 +593,16 @@ fn format_params(
     width: u32,
     height: u32,
     dmabuf: Option<&DmabufHelper>,
-    gbm_format: gbm::Format,
-    fixated_modifier: Option<gbm::Modifier>,
+    fixated: Option<(gbm::Format, gbm::Modifier)>,
     formats: &Formats,
 ) -> Vec<OwnedPod> {
     let mut pods = Vec::new();
-    if let Some(fixated_modifier) = fixated_modifier {
+    if let Some((fixated_format, fixated_modifier)) = fixated {
         pods.extend(format(
             width,
             height,
             None,
-            gbm_format,
+            fixated_format,
             Some(fixated_modifier),
             formats,
         ));
