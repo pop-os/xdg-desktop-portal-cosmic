@@ -274,8 +274,6 @@ impl StreamData {
                     self.modifier = Some(modifier);
 
                     let params = format_params(
-                        self.width(),
-                        self.height(),
                         self.dmabuf_helper.as_ref(),
                         Some((self.format, modifier)),
                         &self.formats,
@@ -287,8 +285,7 @@ impl StreamData {
                     return;
                 } else {
                     log::error!("failed to choose modifier from {:?}", modifiers);
-                    let params =
-                        format_params(self.width(), self.height(), None, None, &self.formats);
+                    let params = format_params(None, None, &self.formats);
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                     if let Err(err) = stream.update_params(&mut params) {
                         log::error!("failed to update pipewire params: {}", err);
@@ -470,7 +467,6 @@ fn start_stream(
             "failed to get formats for image copy; session stopped"
         ));
     };
-    let (width, height) = formats.buffer_size;
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
@@ -483,7 +479,7 @@ fn start_stream(
         },
     )?;
 
-    let initial_params = format_params(width, height, dmabuf_helper.as_ref(), None, &formats);
+    let initial_params = format_params(dmabuf_helper.as_ref(), None, &formats);
     let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
@@ -591,12 +587,12 @@ fn meta() -> OwnedPod {
 }
 
 fn format_params(
-    width: u32,
-    height: u32,
     dmabuf: Option<&DmabufHelper>,
     fixated: Option<(gbm::Format, gbm::Modifier)>,
     formats: &Formats,
 ) -> Vec<OwnedPod> {
+    let (width, height) = formats.buffer_size;
+
     let mut pods = Vec::new();
     if let Some((fixated_format, fixated_modifier)) = fixated {
         pods.extend(format(
