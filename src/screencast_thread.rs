@@ -4,7 +4,7 @@
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
-use cosmic_client_toolkit::screencopy::{Formats, Rect};
+use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Rect};
 use futures::executor::block_on;
 use pipewire::{
     spa::{
@@ -186,6 +186,29 @@ impl StreamData {
                 }
             }
         }
+    }
+
+    // Handle changes to capture source size, etc.
+    fn update_formats(&mut self, stream: &StreamRef) -> bool {
+        let Some(formats) = block_on(self.session.wait_for_formats(|formats| formats.clone()))
+        else {
+            return false;
+        };
+
+        if formats == self.formats {
+            // No change to formats, so nothing to do.
+            return false;
+        }
+
+        let initial_params = format_params(self.dmabuf_helper.as_ref(), None, &formats);
+        let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
+        if let Err(err) = stream.update_params(&mut initial_params) {
+            log::error!("failed to update pipewire params: {}", err);
+        }
+
+        self.formats = formats;
+
+        true
     }
 
     fn state_changed(&mut self, stream: &StreamRef, old: StreamState, new: StreamState) {
@@ -431,8 +454,15 @@ impl StreamData {
                     }
                 }
                 Err(err) => {
-                    log::error!("screencopy failed: {:?}", err);
-                    // TODO terminate screencasting?
+                    if err == WEnum::Value(FailureReason::BufferConstraints) {
+                        let changed = self.update_formats(stream);
+                        if !changed {
+                            log::error!("screencopy buffer constraints error, but no new formats?");
+                        }
+                    } else {
+                        log::error!("screencopy failed: {:?}", err);
+                        // TODO terminate screencasting?
+                    }
                 }
             }
             unsafe { stream.queue_raw_buffer(buffer) };
