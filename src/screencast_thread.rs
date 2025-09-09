@@ -234,11 +234,7 @@ impl StreamData {
             return;
         };
 
-        if let Some(modifier_prop) = pod
-            .as_object()
-            .unwrap()
-            .find_prop(Id(spa_sys::SPA_FORMAT_VIDEO_modifier))
-        {
+        if let Some(modifier_prop) = object.find_prop(Id(spa_sys::SPA_FORMAT_VIDEO_modifier)) {
             let value =
                 PodDeserializer::deserialize_from::<pod::Value>(modifier_prop.value().as_bytes());
             let Ok((_, pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(_, choice))))) =
