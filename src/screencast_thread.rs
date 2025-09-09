@@ -105,13 +105,19 @@ struct StreamData {
     modifier: Option<gbm::Modifier>,
     session: Session,
     formats: Formats,
-    width: u32,
-    height: u32,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
 }
 
 impl StreamData {
+    fn width(&self) -> u32 {
+        self.formats.buffer_size.0
+    }
+
+    fn height(&self) -> u32 {
+        self.formats.buffer_size.1
+    }
+
     fn plane_count(&self, format: gbm::Format, modifier: gbm::Modifier) -> Option<u32> {
         let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
         let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
@@ -148,8 +154,8 @@ impl StreamData {
         };
         if modifiers.iter().all(|x| *x == gbm::Modifier::Invalid) {
             match gbm.create_buffer_object::<()>(
-                self.width,
-                self.height,
+                self.width(),
+                self.height(),
                 format,
                 gbm::BufferObjectFlags::empty(),
             ) {
@@ -164,8 +170,8 @@ impl StreamData {
             }
         } else {
             match gbm.create_buffer_object_with_modifiers2::<()>(
-                self.width,
-                self.height,
+                self.width(),
+                self.height(),
                 format,
                 modifiers.iter().copied(),
                 gbm::BufferObjectFlags::empty(),
@@ -272,8 +278,8 @@ impl StreamData {
                     self.modifier = Some(modifier);
 
                     let params = format_params(
-                        self.width,
-                        self.height,
+                        self.width(),
+                        self.height(),
                         self.dmabuf_helper.as_ref(),
                         Some((self.format, modifier)),
                         &self.formats,
@@ -285,7 +291,8 @@ impl StreamData {
                     return;
                 } else {
                     log::error!("failed to choose modifier from {:?}", modifiers);
-                    let params = format_params(self.width, self.height, None, None, &self.formats);
+                    let params =
+                        format_params(self.width(), self.height(), None, None, &self.formats);
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                     if let Err(err) = stream.update_params(&mut params) {
                         log::error!("failed to update pipewire params: {}", err);
@@ -301,7 +308,7 @@ impl StreamData {
             .modifier
             .and_then(|m| self.plane_count(self.format, m))
             .unwrap_or(1);
-        let params = other_params(self.width, self.height, blocks, self.modifier.is_some());
+        let params = other_params(self.width(), self.height(), blocks, self.modifier.is_some());
         let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
         if let Err(err) = stream.update_params(&mut params) {
             log::error!("failed to update pipewire params: {}", err);
@@ -328,8 +335,8 @@ impl StreamData {
                 &gbm,
                 self.format,
                 self.modifier.unwrap(),
-                self.width,
-                self.height,
+                self.width(),
+                self.height(),
             );
 
             wl_buffer = self.wayland_helper.create_dmabuf_buffer(&dmabuf);
@@ -344,7 +351,7 @@ impl StreamData {
                 data.mapoffset = 0;
 
                 let chunk = unsafe { &mut *data.chunk };
-                chunk.size = self.height * plane.stride;
+                chunk.size = self.height() * plane.stride;
                 chunk.offset = plane.offset;
                 chunk.stride = plane.stride as i32;
             }
@@ -353,13 +360,13 @@ impl StreamData {
             assert_eq!(datas.len(), 1);
             let data = &mut datas[0];
 
-            let fd = buffer::create_memfd(self.width, self.height);
+            let fd = buffer::create_memfd(self.width(), self.height());
 
             wl_buffer = self.wayland_helper.create_shm_buffer(
                 &fd,
-                self.width,
-                self.height,
-                self.width * 4,
+                self.width(),
+                self.height(),
+                self.width() * 4,
                 shm_format(self.format).unwrap(),
             );
 
@@ -367,13 +374,13 @@ impl StreamData {
             data.flags = 0;
             data.fd = fd.into_raw_fd() as _;
             data.data = std::ptr::null_mut();
-            data.maxsize = self.width * self.height * 4;
+            data.maxsize = self.width() * self.height() * 4;
             data.mapoffset = 0;
 
             let chunk = unsafe { &mut *data.chunk };
-            chunk.size = self.width * self.height * 4;
+            chunk.size = self.width() * self.height() * 4;
             chunk.offset = 0;
-            chunk.stride = 4 * self.width as i32;
+            chunk.stride = 4 * self.width() as i32;
         }
 
         let user_data = Box::into_raw(Box::new(wl_buffer)) as *mut c_void;
@@ -402,8 +409,8 @@ impl StreamData {
             let full_damage = &[Rect {
                 x: 0,
                 y: 0,
-                width: self.width as i32,
-                height: self.height as i32,
+                width: self.width() as i32,
+                height: self.height() as i32,
             }];
             let damage = self
                 .buffer_damage
@@ -499,8 +506,6 @@ fn start_stream(
         formats,
         format: gbm::Format::Abgr8888,
         modifier: None,
-        width,
-        height,
         node_id_tx: Some(node_id_tx),
         buffer_damage: HashMap::new(),
     };
