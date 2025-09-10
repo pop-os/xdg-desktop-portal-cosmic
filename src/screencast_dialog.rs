@@ -22,16 +22,16 @@ use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
 use freedesktop_desktop_entry as fde;
 use freedesktop_desktop_entry::unicase::Ascii;
 use freedesktop_desktop_entry::{DesktopEntry, get_languages_from_env};
-use once_cell::sync::Lazy;
 use std::mem;
+use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 use zbus::zvariant;
 
-pub static SCREENCAST_ID: Lazy<window::Id> = Lazy::new(window::Id::unique);
-pub static SCREENCAST_WIDGET_ID: Lazy<widget::Id> =
-    Lazy::new(|| widget::Id::new("screencast".to_string()));
+pub static SCREENCAST_ID: LazyLock<window::Id> = LazyLock::new(window::Id::unique);
+pub static SCREENCAST_WIDGET_ID: LazyLock<widget::Id> =
+    LazyLock::new(|| widget::Id::new("screencast".to_string()));
 
 pub async fn hide_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
