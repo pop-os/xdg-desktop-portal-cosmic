@@ -21,10 +21,10 @@ use futures::{
 use rustix::fd::{FromRawFd, RawFd};
 use std::{
     collections::HashMap,
-    env, fs, io,
+    env,
     os::{
         fd::{AsFd, OwnedFd},
-        unix::{fs::MetadataExt, net::UnixStream},
+        unix::net::UnixStream,
     },
     process,
     sync::{Arc, Condvar, Mutex, Weak},

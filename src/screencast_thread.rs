@@ -159,7 +159,7 @@ impl StreamData {
                 format,
                 gbm::BufferObjectFlags::empty(),
             ) {
-                Ok(bo) => Some(gbm::Modifier::Invalid),
+                Ok(_bo) => Some(gbm::Modifier::Invalid),
                 Err(err) => {
                     log::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
@@ -567,8 +567,10 @@ unsafe fn buffer_find_meta_data<'a, T>(
     buffer: *const pipewire_sys::pw_buffer,
     type_: u32,
 ) -> Option<&'a mut T> {
-    let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size_of::<T>());
-    (ptr as *mut T).as_mut()
+    unsafe {
+        let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size_of::<T>());
+        (ptr as *mut T).as_mut()
+    }
 }
 
 struct OwnedPod(Vec<u8>);
@@ -772,7 +774,7 @@ fn format(
             flags: pod::PropertyFlags::MANDATORY,
             value: pod::Value::Long(u64::from(modifier) as i64),
         });
-    } else if let Some(dmabuf) = dmabuf {
+    } else if let Some(_dmabuf) = dmabuf {
         // TODO: Support other formats
         let modifiers = formats
             .dmabuf_formats
