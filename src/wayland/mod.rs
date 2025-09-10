@@ -30,6 +30,7 @@ use std::{
     sync::{Arc, Condvar, Mutex, Weak},
     thread,
 };
+use tokio::sync::broadcast;
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
@@ -54,6 +55,8 @@ use crate::buffer;
 mod gbm_devices;
 mod toplevel;
 mod workspaces;
+
+const SUB_BACKLOG: usize = 10;
 
 #[derive(Clone)]
 pub struct DmabufHelper {
@@ -93,6 +96,7 @@ struct WaylandHelperInner {
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
     output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ExtForeignToplevelHandleV1>>>,
     toplevels: Mutex<Vec<ToplevelInfo>>,
+    tx: broadcast::Sender<Event>,
     qh: QueueHandle<AppData>,
     capturer: Capturer,
     wl_shm: wl_shm::WlShm,
@@ -160,6 +164,11 @@ impl AppData {
 
         *self.wayland_helper.inner.toplevels.lock().unwrap() =
             self.toplevel_info_state.toplevels().cloned().collect();
+
+        // Signal that toplevels were updated; the actual updates are unimportant here
+        if let Err(e) = self.wayland_helper.inner.tx.send(Event::ToplevelsUpdated) {
+            log::warn!("Failed sending toplevels update message: {e}");
+        }
     }
 }
 
@@ -246,6 +255,7 @@ impl WaylandHelper {
         let screencopy_state = ScreencopyState::new(&globals, &qh);
         let shm_state = Shm::bind(&globals, &qh).unwrap();
         let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).unwrap();
+        let (tx, _) = broadcast::channel(SUB_BACKLOG);
         let wayland_helper = WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
                 conn,
@@ -253,6 +263,7 @@ impl WaylandHelper {
                 output_infos: Mutex::new(HashMap::new()),
                 output_toplevels: Mutex::new(HashMap::new()),
                 toplevels: Mutex::new(Vec::new()),
+                tx,
                 qh: qh.clone(),
                 capturer: screencopy_state.capturer().clone(),
                 wl_shm: shm_state.wl_shm().clone(),
@@ -491,6 +502,35 @@ impl WaylandHelper {
             (),
         )
     }
+
+    /// Subscribe to events from the compositor.
+    pub fn subscription(&self) -> impl Stream<Item = Event> {
+        let mut rx_helper = self.inner.tx.subscribe();
+
+        cosmic::iced::stream::channel(SUB_BACKLOG, |mut output| async move {
+            // Tokio's types don't implement std's Stream yet
+            loop {
+                match rx_helper.recv().await {
+                    Ok(message) => {
+                        let _ = output.try_send(message).inspect_err(|e| {
+                            log::warn!(
+                                "Failed sending message from Wayland helper subscription: {e}"
+                            )
+                        });
+                    }
+                    Err(e) if matches!(e, broadcast::error::RecvError::Lagged(_)) => (),
+                    _ => break,
+                }
+            }
+        })
+    }
+}
+
+/// Events from the compositor, such as new toplevels.
+#[derive(Clone, Copy)]
+pub enum Event {
+    /// Toplevels updated in some way (created, destroyed, focus changed)
+    ToplevelsUpdated,
 }
 
 pub struct ShmImage<T: AsFd> {

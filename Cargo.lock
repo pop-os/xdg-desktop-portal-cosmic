@@ -9025,6 +9025,7 @@ dependencies = [
  "rust-embed",
  "rustix 0.38.44",
  "serde",
+ "shlex",
  "tempfile",
  "tokio",
  "url",
