@@ -1,4 +1,4 @@
-use cosmic::{action, app, iced::window, widget};
+use cosmic::{action, iced::window, widget};
 use cosmic_files::dialog::{
     DialogChoice, DialogChoiceOption, DialogFilter, DialogFilterPattern, DialogKind, DialogMessage,
     DialogResult, DialogSettings,
