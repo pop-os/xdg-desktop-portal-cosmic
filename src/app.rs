@@ -1,11 +1,11 @@
 use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
+use cosmic::Task;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::widget;
-use cosmic::Task;
 use cosmic::{
     app, cosmic_config,
     iced::window,
-    iced_futures::{event::listen_with, Subscription},
+    iced_futures::{Subscription, event::listen_with},
 };
 use std::collections::HashMap;
 use wayland_client::protocol::wl_output::WlOutput;

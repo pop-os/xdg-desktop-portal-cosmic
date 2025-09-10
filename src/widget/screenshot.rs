@@ -1,18 +1,18 @@
 use std::{borrow::Cow, collections::HashMap, rc::Rc};
 
 use cosmic::{
+    Element,
     cosmic_theme::Spacing,
     iced::{self, window},
     iced_core::{
-        alignment, gradient::Linear, layout, overlay, widget::Tree, Background, Border, ContentFit,
-        Degrees, Layout, Length, Point, Size,
+        Background, Border, ContentFit, Degrees, Layout, Length, Point, Size, alignment,
+        gradient::Linear, layout, overlay, widget::Tree,
     },
     iced_widget::row,
     widget::{
-        button, divider::vertical, dropdown, horizontal_space, icon, image, layer_container, text,
-        Row,
+        Row, button, divider::vertical, dropdown, horizontal_space, icon, image, layer_container,
+        text,
     },
-    Element,
 };
 use cosmic_bg_config::Source;
 use wayland_client::protocol::wl_output::WlOutput;

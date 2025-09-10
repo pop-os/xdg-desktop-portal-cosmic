@@ -31,9 +31,9 @@ use std::{
     thread,
 };
 use wayland_client::{
+    Connection, Dispatch, QueueHandle, WEnum,
     globals::registry_queue_init,
     protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
-    Connection, Dispatch, QueueHandle, WEnum,
 };
 use wayland_protocols::{
     ext::{
@@ -278,8 +278,10 @@ impl WaylandHelper {
 
         event_queue.roundtrip(&mut data).unwrap();
 
-        thread::spawn(move || loop {
-            event_queue.blocking_dispatch(&mut data).unwrap();
+        thread::spawn(move || {
+            loop {
+                event_queue.blocking_dispatch(&mut data).unwrap();
+            }
         });
 
         wayland_helper
@@ -727,7 +729,9 @@ fn portal_wayland_socket() -> Option<UnixStream> {
         .ok()?
         .parse::<RawFd>()
         .ok()?;
-    env::remove_var("PORTAL_WAYLAND_SOCKET");
+    unsafe {
+        env::remove_var("PORTAL_WAYLAND_SOCKET");
+    }
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
     // set the CLOEXEC flag on this FD
     let mut flags = rustix::io::fcntl_getfd(&fd).ok()?;

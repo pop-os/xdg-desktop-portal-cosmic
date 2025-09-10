@@ -9,8 +9,8 @@ use cosmic::{
         mouse,
     },
     iced_core::{
-        self, clipboard::DndSource, layout::Node, renderer::Quad, Border, Color, Length, Point,
-        Rectangle, Renderer, Shadow, Size,
+        self, Border, Color, Length, Point, Rectangle, Renderer, Shadow, Size,
+        clipboard::DndSource, layout::Node, renderer::Quad,
     },
     widget::{self, Widget},
 };
@@ -499,9 +499,9 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         #[cfg(feature = "wgpu")]
         {
             use cosmic::iced_widget::graphics::{
-                color::{pack, Packed},
-                mesh::{Indexed, SolidVertex2D},
                 Mesh,
+                color::{Packed, pack},
+                mesh::{Indexed, SolidVertex2D},
             };
             let mut overlay = Color::BLACK;
             overlay.a = 0.3;

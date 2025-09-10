@@ -5,10 +5,10 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
 };
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
 use cosmic::widget::autosize::autosize;
-use cosmic::widget::{self, button, dropdown, icon, text, Column, Id};
+use cosmic::widget::{self, Column, Id, button, dropdown, icon, text};
 use cosmic::{
     iced::{
-        keyboard::{key::Named, Key},
+        keyboard::{Key, key::Named},
         widget::{column, row},
         window,
     },
@@ -20,8 +20,8 @@ use zbus::zvariant;
 
 use crate::wayland::WaylandHelper;
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
+use crate::{PortalResponse, subscription};
 use crate::{app::CosmicPortal, fl};
-use crate::{subscription, PortalResponse};
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Debug, Clone)]
 #[zvariant(signature = "a{sv}")]

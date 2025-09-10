@@ -1,8 +1,8 @@
 use cosmic::iced_core::{
+    Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
     event::{self, Event},
     keyboard, layout, mouse, overlay, renderer,
     widget::{Operation, Tree},
-    Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
 };
 
 #[allow(missing_debug_implementations)]
