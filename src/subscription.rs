@@ -3,14 +3,14 @@
 use std::any::TypeId;
 
 use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
-use futures::{future, SinkExt};
+use futures::{SinkExt, future};
 use tokio::sync::mpsc::Receiver;
-use zbus::{zvariant, Connection};
+use zbus::{Connection, zvariant};
 
 use crate::{
-    access::Access, config, file_chooser::FileChooser, screencast::ScreenCast,
-    screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings, ACCENT_COLOR_KEY,
-    APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
+    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
+    DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
+    screencast::ScreenCast, screenshot::Screenshot, wayland,
 };
 
 #[derive(Clone, Debug)]

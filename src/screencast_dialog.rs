@@ -6,14 +6,14 @@ use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
 use cosmic::desktop::IconSourceExt;
 use cosmic::iced::{
     self,
-    keyboard::{key::Named, Key},
+    keyboard::{Key, key::Named},
     window,
 };
 use fde::IconSource;
 
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::iced_winit::commands::layer_surface::{
-    destroy_layer_surface, get_layer_surface, KeyboardInteractivity, Layer,
+    KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,
 };
 use cosmic::widget::autosize;
 use cosmic::{theme, widget};
@@ -21,7 +21,7 @@ use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
 use freedesktop_desktop_entry as fde;
 use freedesktop_desktop_entry::unicase::Ascii;
-use freedesktop_desktop_entry::{get_languages_from_env, DesktopEntry};
+use freedesktop_desktop_entry::{DesktopEntry, get_languages_from_env};
 use once_cell::sync::Lazy;
 use std::mem;
 use tokio::sync::mpsc;

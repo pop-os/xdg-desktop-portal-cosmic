@@ -9,7 +9,7 @@ use futures::executor::block_on;
 use pipewire::{
     spa::{
         self,
-        pod::{self, deserialize::PodDeserializer, serialize::PodSerializer, Pod},
+        pod::{self, Pod, deserialize::PodDeserializer, serialize::PodSerializer},
         utils::Id,
     },
     stream::{StreamRef, StreamState},
@@ -18,8 +18,8 @@ use pipewire::{
 use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
 use tokio::sync::oneshot;
 use wayland_client::{
-    protocol::{wl_buffer, wl_output, wl_shm},
     WEnum,
+    protocol::{wl_buffer, wl_output, wl_shm},
 };
 
 use crate::{

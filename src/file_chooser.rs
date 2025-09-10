@@ -8,8 +8,9 @@ use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
 use crate::{
+    PortalResponse,
     app::{CosmicPortal, Msg as AppMsg},
-    subscription, PortalResponse,
+    subscription,
 };
 
 pub(crate) type Dialog = cosmic_files::dialog::Dialog<Msg>;

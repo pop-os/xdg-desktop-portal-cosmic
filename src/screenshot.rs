@@ -2,8 +2,8 @@
 
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
-use cosmic::iced::keyboard::{key::Named, Key};
-use cosmic::iced::{window, Limits};
+use cosmic::iced::keyboard::{Key, key::Named};
+use cosmic::iced::{Limits, window};
 use cosmic::iced_core::Length;
 use cosmic::iced_runtime::clipboard;
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
@@ -27,7 +27,7 @@ use crate::app::{CosmicPortal, OutputState};
 use crate::config::{self, screenshot::ImageSaveLocation};
 use crate::wayland::{CaptureSource, ShmImage, WaylandHelper};
 use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::DragState};
-use crate::{fl, subscription, PortalResponse};
+use crate::{PortalResponse, fl, subscription};
 
 #[derive(Clone, Debug)]
 pub struct ScreenshotImage {
