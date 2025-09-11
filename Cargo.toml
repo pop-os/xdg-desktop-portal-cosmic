@@ -62,6 +62,7 @@ git = "https://github.com/pop-os/libcosmic"
 # TODO: a11y feature crashes file chooser dialog
 default-features = false
 features = [
+    "about",
     "autosize",
     "dbus-config",
     "desktop",
