@@ -1,0 +1,11 @@
+allow = Luba
+cancel = Katkesta
+share = Jaga
+save-to = Salvesta
+    .clipboard = { save-to } lõikelauale
+    .pictures = { save-to } piltide kausta
+    .documents = { save-to } dokumentide kausta
+choose-folder = Vali kaust
+unknown-application = Tundmatu rakendus
+output = Väljund
+window = Aken
