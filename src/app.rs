@@ -163,7 +163,8 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
-                | subscription::Event::HighContrast(_) => cosmic::iced::Task::none(),
+                | subscription::Event::HighContrast(_)
+                | subscription::Event::ButtonPlacement(_) => cosmic::iced::Task::none(),
                 subscription::Event::Init(tx) => {
                     self.tx = Some(tx);
                     Task::none()
@@ -322,6 +323,10 @@ impl cosmic::Application for CosmicPortal {
                 new_theme.is_high_contrast,
             ));
         }
+        // TODO: only send if value actually changed
+        msgs.push(subscription::Event::ButtonPlacement(
+            crate::Settings::new().button_placement,
+        ));
         {
             if let Some(tx) = self.tx.clone() {
                 tokio::spawn(async move {
