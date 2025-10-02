@@ -1,0 +1,11 @@
+allow = Дазволіць
+cancel = Скасаваць
+capture = Зрабіць здымак
+share = Абагуліць
+save-to = Сохранить в
+    .clipboard = { save-to } Буфер абмену
+    .pictures = { save-to } Відарысы
+    .documents = { save-to } Дакументы
+choose-folder = Выберыце папку
+unknown-application = Невядомая праграма
+window = Акно
