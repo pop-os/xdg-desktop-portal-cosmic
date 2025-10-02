@@ -9,3 +9,6 @@ choose-folder = Vali kaust
 unknown-application = Tundmatu rakendus
 output = Väljund
 window = Aken
+share-screen = Jaga oma ekraani
+    .description = Süsteem soovib jagada sinu ekraani sisu rakendusega „{ $app_name }“. Vali jagatav ekraani osa või aken.
+capture = Ekraanitõmmis
