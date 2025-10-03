@@ -352,7 +352,7 @@ impl ScreenCast {
     #[zbus(property)]
     async fn available_cursor_modes(&self) -> u32 {
         // TODO: Support metadata?
-        CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED
+        CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED | CURSOR_MODE_METADATA
     }
 
     #[zbus(property, name = "version")]
