@@ -785,4 +785,4 @@ sctk::delegate_shm!(AppData);
 sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);
 sctk::delegate_dmabuf!(AppData);
-cosmic_client_toolkit::delegate_screencopy!(AppData, session: [SessionData], frame: [FrameData]);
+cosmic_client_toolkit::delegate_screencopy!(AppData);

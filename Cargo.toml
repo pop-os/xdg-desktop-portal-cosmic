@@ -92,6 +92,3 @@ lto = "thin"
 [patch."https://github.com/pop-os/cosmic-protocols"]
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
-
-[patch.crates-io]
-license = { git = "https://github.com/evenorog/license.git" }
