@@ -105,11 +105,10 @@ pub async fn show_screencast_prompt(
 async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry> {
     let mut entries = Vec::new();
     for p in fde::Iter::new(fde::default_paths()) {
-        if let Ok(data) = tokio::fs::read_to_string(&p).await {
-            if let Ok(entry) = DesktopEntry::from_str(&p, &data, Some(&locales)) {
+        if let Ok(data) = tokio::fs::read_to_string(&p).await
+            && let Ok(entry) = DesktopEntry::from_str(&p, &data, Some(locales)) {
                 entries.push(entry.to_owned());
             }
-        }
     }
     entries
 }
@@ -283,7 +282,7 @@ pub fn cancel(
     if portal
         .screencast_args
         .as_ref()
-        .map_or(false, |args| args.session_handle == session_handle)
+        .is_some_and(|args| args.session_handle == session_handle)
     {
         let args = portal.screencast_args.take().unwrap();
         args.send_response(None);
@@ -424,9 +423,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
                 let label = &toplevel_info.title;
                 let is_selected = args
                     .capture_sources
-                    .toplevels
-                    .iter()
-                    .any(|t| *t == toplevel_info.foreign_toplevel);
+                    .toplevels.contains(&toplevel_info.foreign_toplevel);
                 list = list.add(toplevel_button(
                     label,
                     is_selected,
@@ -448,7 +445,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let unknown = fl!("unknown-application");
     let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
-    let control = widget::column::with_children(vec![tabs.into(), list.into()]).spacing(8);
+    let control = widget::column::with_children(vec![tabs.into(), list]).spacing(8);
     autosize::autosize(
         KeyboardWrapper::new(
             widget::dialog()

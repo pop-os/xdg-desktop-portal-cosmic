@@ -185,7 +185,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
             .active_choices
             .get(id)
             .and_then(|choice_id| choices.iter().position(|(x, _)| x == choice_id));
-        let dropdown = dropdown(&*choice_labels, active_choice, move |j| Msg::Choice(i, j));
+        let dropdown = dropdown(choice_labels, active_choice, move |j| Msg::Choice(i, j));
         options.push(row![label, dropdown].into());
     }
 
@@ -268,12 +268,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         }
         Msg::Choice(i, j) => {
             let args = portal.access_args.as_mut().unwrap();
-            if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i)) {
-                if let Some((option_id, _)) = choice.2.get(j) {
+            if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i))
+                && let Some((option_id, _)) = choice.2.get(j) {
                     args.active_choices
                         .insert(choice.0.clone(), option_id.clone());
                 }
-            }
             cosmic::iced::Task::none()
         }
         Msg::Ignore => cosmic::iced::Task::none(),

@@ -129,7 +129,7 @@ impl AppData {
             .unwrap();
         *guard = toplevels
             .filter_map(|info| {
-                let Some(o) = self.workspace_state.workspace_groups().find_map(|wg| {
+                let o = self.workspace_state.workspace_groups().find_map(|wg| {
                     wg.workspaces
                         .iter()
                         .filter_map(|handle| self.workspace_state.workspace_info(handle))
@@ -142,9 +142,7 @@ impl AppData {
                                 })
                                 .then(|| info.output.iter().cloned().collect::<Vec<_>>())
                         })
-                }) else {
-                    return None;
-                };
+                })?;
 
                 Some((o, info.foreign_toplevel.clone()))
             })

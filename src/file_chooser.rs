@@ -171,9 +171,9 @@ impl FileChooser {
             return PortalResponse::Other;
         }
         if let Some(res) = rx.recv().await {
-            return res;
+            res
         } else {
-            return PortalResponse::Cancelled;
+            PortalResponse::Cancelled
         }
     }
 }
@@ -326,8 +326,8 @@ pub fn update_msg(
 
                             let (filters, filter_selected) = dialog.filters();
                             let mut current_filter = None;
-                            if let Some(filter_i) = filter_selected {
-                                if let Some(filter) = filters.get(filter_i) {
+                            if let Some(filter_i) = filter_selected
+                                && let Some(filter) = filters.get(filter_i) {
                                     let mut patterns = Vec::with_capacity(filter.patterns.len());
                                     for pattern in filter.patterns.iter() {
                                         patterns.push(match pattern {
@@ -337,7 +337,6 @@ pub fn update_msg(
                                     }
                                     current_filter = Some((filter.label.clone(), patterns));
                                 }
-                            }
 
                             PortalResponse::Success(FileChooserResult {
                                 uris,
@@ -374,12 +373,10 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
                 } else {
                     DialogKind::OpenFolder
                 }
+            } else if options.multiple.unwrap_or(false) {
+                DialogKind::OpenMultipleFiles
             } else {
-                if options.multiple.unwrap_or(false) {
-                    DialogKind::OpenMultipleFiles
-                } else {
-                    DialogKind::OpenFile
-                }
+                DialogKind::OpenFile
             }
         }
         FileChooserOptions::SaveFile(options) => DialogKind::SaveFile {
@@ -398,8 +395,8 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
 
     let (mut dialog, command) = Dialog::new(
         settings,
-        |x| Msg::DialogMessage(x),
-        |x| Msg::DialogResult(x),
+        Msg::DialogMessage,
+        Msg::DialogResult,
     );
     cmds.push(command);
     cmds.push(dialog.set_title(args.title.clone()));

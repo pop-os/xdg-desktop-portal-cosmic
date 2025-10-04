@@ -1,7 +1,4 @@
-use std::{
-    ffi::CStr,
-    os::fd::{AsFd, OwnedFd},
-};
+use std::os::fd::{AsFd, OwnedFd};
 
 pub struct Plane<Fd: AsFd> {
     pub fd: Fd,
@@ -19,7 +16,7 @@ pub struct Dmabuf<Fd: AsFd> {
 
 pub fn create_memfd(width: u32, height: u32) -> OwnedFd {
     // TODO: BSD support using shm_open
-    let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
+    let name = c"pipewire-screencopy";
     let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
     rustix::fs::ftruncate(&fd, (width * height * 4) as _).unwrap();
     fd

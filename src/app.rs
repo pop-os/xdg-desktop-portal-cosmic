@@ -279,7 +279,7 @@ impl cosmic::Application for CosmicPortal {
             }),
         ];
         for (id, (_args, dialog)) in self.file_choosers.iter() {
-            let id = id.clone();
+            let id = *id;
             subscriptions.push(dialog.subscription().map(move |x| Msg::FileChooser(id, x)));
         }
         Subscription::batch(subscriptions)
@@ -292,13 +292,12 @@ impl cosmic::Application for CosmicPortal {
     ) -> app::Task<Self::Message> {
         let old = self.core.system_is_dark();
         let new = new_theme.is_dark;
-        if new != old {
-            if let Some(tx) = self.tx.clone() {
+        if new != old
+            && let Some(tx) = self.tx.clone() {
                 tokio::spawn(async move {
                     _ = tx.send(subscription::Event::IsDark(new)).await;
                 });
             }
-        }
         Task::none()
     }
 
