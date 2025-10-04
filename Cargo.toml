@@ -88,6 +88,7 @@ clap = { version = "4.5.48", features = ["derive"] }
 [profile.release]
 opt-level = 3
 lto = "thin"
+panic = "abort"
 
 [patch."https://github.com/pop-os/cosmic-protocols"]
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
