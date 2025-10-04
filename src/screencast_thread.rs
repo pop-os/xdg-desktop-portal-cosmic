@@ -124,7 +124,7 @@ impl StreamData {
         let dev = self
             .formats
             .dmabuf_device
-            .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+            .unwrap_or(dmabuf_helper.feedback().main_device());
         let (_, gbm) = gbm_devices.gbm_device(dev).ok()??;
         gbm.format_modifier_plane_count(format, modifier)
     }
@@ -140,7 +140,7 @@ impl StreamData {
         let dev = self
             .formats
             .dmabuf_device
-            .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+            .unwrap_or(dmabuf_helper.feedback().main_device());
         let gbm = match gbm_devices.gbm_device(dev) {
             Ok(Some((_, gbm))) => gbm,
             Ok(None) => {
@@ -344,11 +344,11 @@ impl StreamData {
             let dev = self
                 .formats
                 .dmabuf_device
-                .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+                .unwrap_or(dmabuf_helper.feedback().main_device());
             // Unwrap: assumes `choose_buffer` successfully opened gbm device
             let (_, gbm) = gbm_devices.gbm_device(dev).unwrap().unwrap();
             let dmabuf = buffer::create_dmabuf(
-                &gbm,
+                gbm,
                 self.format,
                 self.modifier.unwrap(),
                 self.width(),
@@ -471,7 +471,7 @@ impl StreamData {
 }
 
 #[allow(clippy::type_complexity)]
-fn start_stream<'a>(
+fn start_stream(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
     overlay_cursor: bool,

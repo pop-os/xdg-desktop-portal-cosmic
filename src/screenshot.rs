@@ -176,7 +176,7 @@ impl Screenshot {
                 let wayland_helper = wayland_helper.clone();
                 async move {
                     let frame = wayland_helper
-                        .capture_output_toplevels_shm(&output, false)
+                        .capture_output_toplevels_shm(output, false)
                         .filter_map(|img| async { ScreenshotImage::new(img).ok() })
                         .collect()
                         .await;
@@ -263,8 +263,8 @@ impl Screenshot {
             let rect = Rect {
                 left: *output_x,
                 top: *output_y,
-                right: output_x.saturating_add(i32::try_from(*output_w).unwrap_or_default()),
-                bottom: output_y.saturating_add(i32::try_from(*output_h).unwrap_or_default()),
+                right: output_x.saturating_add(*output_w),
+                bottom: output_y.saturating_add(*output_h),
             };
             bounds_opt = Some(match bounds_opt.take() {
                 Some(bounds) => Rect {
@@ -564,7 +564,7 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
     KeyboardWrapper::new(
         crate::widget::screenshot::ScreenshotSelection::new(
             args.choice.clone(),
-            &img,
+            img,
             Msg::Capture,
             Msg::Cancel,
             output,
@@ -643,9 +643,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         let frames = images
                             .into_iter()
                             .filter_map(|(name, raw_img)| {
-                                let Some(output) = outputs.iter().find(|o| o.name == name) else {
-                                    return None;
-                                };
+                                let output = outputs.iter().find(|o| o.name == name)?;
                                 let pos = output.logical_pos;
                                 let output_rect = Rect {
                                     left: pos.0,
@@ -654,9 +652,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                                     bottom: pos.1 + output.logical_size.1 as i32,
                                 };
 
-                                let Some(intersect) = r.intersect(output_rect) else {
-                                    return None;
-                                };
+                                let intersect = r.intersect(output_rect)?;
 
                                 Some((raw_img.rgba, output_rect))
                             })
@@ -716,7 +712,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 })
             } else if success && image_path.is_none() {
                 PortalResponse::Success(ScreenshotResult {
-                    uri: format!("clipboard:///"),
+                    uri: "clipboard:///".to_string(),
                 })
             } else {
                 PortalResponse::Other

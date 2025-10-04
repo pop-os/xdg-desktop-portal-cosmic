@@ -114,7 +114,7 @@ where
                     .unwrap_or_default();
                 let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
 
-                let img_buttons = imgs.into_iter().enumerate().map(|(i, img)| {
+                let img_buttons = imgs.iter().enumerate().map(|(i, img)| {
                     let portion =
                         (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
                     layer_container(

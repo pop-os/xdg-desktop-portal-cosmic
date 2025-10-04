@@ -1,4 +1,4 @@
-use std::{borrow::Cow, convert::Infallible};
+use std::borrow::Cow;
 
 use cosmic::{
     iced::{
@@ -17,14 +17,12 @@ use cosmic::{
 
 use crate::screenshot::Rect;
 
-pub const MIME: &'static str = "X-COSMIC-PORTAL-MyData";
+pub const MIME: &str = "X-COSMIC-PORTAL-MyData";
 pub struct MyData;
 
-impl TryFrom<(Vec<u8>, String)> for MyData {
-    type Error = Infallible;
-
-    fn try_from(_: (Vec<u8>, String)) -> Result<Self, Self::Error> {
-        Ok(MyData)
+impl From<(Vec<u8>, String)> for MyData {
+    fn from(_: (Vec<u8>, String)) -> Self {
+        MyData
     }
 }
 
