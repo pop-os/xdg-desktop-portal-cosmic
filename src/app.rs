@@ -100,7 +100,7 @@ impl cosmic::Application for CosmicPortal {
             config,
         }: Self::Flags,
     ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
-        let wayland_conn = crate::wayland::connect_to_wayland();
+        let wayland_conn = wayland_client::Connection::connect_to_env().unwrap();
         let wayland_helper = crate::wayland::WaylandHelper::new(wayland_conn);
         (
             Self {
