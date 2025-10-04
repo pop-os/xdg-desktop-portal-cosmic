@@ -12,14 +12,14 @@ wgpu = ["libcosmic/wgpu"]
 members = ["cosmic-portal-config"]
 
 [dependencies]
-anyhow = "1.0.99"
+anyhow = "1.0.100"
 ashpd = "0.12"
 cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
     "gvfs",
     "wayland",
 ] }
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "6254f50" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "6254f50" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "d0e95be" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "d0e95be" }
 futures = "0.3"
 image = "0.25"
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
@@ -50,10 +50,10 @@ rust-embed = "8.7.2"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-freedesktop-desktop-entry = "0.7.14"
+freedesktop-desktop-entry = "0.7.19"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
-tempfile = "3.22.0"
+tempfile = "3.23.0"
 tokio = { version = "1.47.1", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.11" }
 
@@ -75,11 +75,11 @@ features = [
 [workspace.dependencies]
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
 log = "0.4.28"
-serde = "1.0.219"
+serde = "1.0.228"
 
 [dev-dependencies]
-gst = { package = "gstreamer", version = "0.24.1" }
-clap = { version = "4.5.47", features = ["derive"] }
+gst = { package = "gstreamer", version = "0.24.2" }
+clap = { version = "4.5.48", features = ["derive"] }
 
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { path = "../libcosmic" }
@@ -92,6 +92,3 @@ lto = "thin"
 [patch."https://github.com/pop-os/cosmic-protocols"]
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
-
-[patch.crates-io]
-license = { git = "https://github.com/evenorog/license.git" }

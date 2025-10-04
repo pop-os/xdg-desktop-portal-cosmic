@@ -12,7 +12,7 @@ use pipewire::{
         pod::{self, Pod, deserialize::PodDeserializer, serialize::PodSerializer},
         utils::Id,
     },
-    stream::{StreamRef, StreamState},
+    stream::{Stream, StreamState},
     sys::pw_buffer,
 };
 use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
@@ -189,7 +189,7 @@ impl StreamData {
     }
 
     // Handle changes to capture source size, etc.
-    fn update_formats(&mut self, stream: &StreamRef) -> bool {
+    fn update_formats(&mut self, stream: &Stream) -> bool {
         let Some(formats) = block_on(self.session.wait_for_formats(|formats| formats.clone()))
         else {
             return false;
@@ -211,7 +211,7 @@ impl StreamData {
         true
     }
 
-    fn state_changed(&mut self, stream: &StreamRef, old: StreamState, new: StreamState) {
+    fn state_changed(&mut self, stream: &Stream, old: StreamState, new: StreamState) {
         log::info!("state-changed '{:?}' -> '{:?}'", old, new);
         match new {
             StreamState::Paused => {
@@ -230,7 +230,7 @@ impl StreamData {
         }
     }
 
-    fn param_changed(&mut self, stream: &StreamRef, id: u32, pod: Option<&Pod>) {
+    fn param_changed(&mut self, stream: &Stream, id: u32, pod: Option<&Pod>) {
         let Some(pod) = pod else {
             return;
         };
@@ -331,7 +331,7 @@ impl StreamData {
         }
     }
 
-    fn add_buffer(&mut self, _stream: &StreamRef, buffer: *mut pw_buffer) {
+    fn add_buffer(&mut self, _stream: &Stream, buffer: *mut pw_buffer) {
         let buf = unsafe { &mut *(*buffer).buffer };
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
         // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
@@ -403,7 +403,7 @@ impl StreamData {
         unsafe { (*buffer).user_data = user_data };
     }
 
-    fn remove_buffer(&mut self, _stream: &StreamRef, buffer: *mut pw_buffer) {
+    fn remove_buffer(&mut self, _stream: &Stream, buffer: *mut pw_buffer) {
         let buf = unsafe { &mut *(*buffer).buffer };
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
 
@@ -418,7 +418,7 @@ impl StreamData {
         wl_buffer.destroy();
     }
 
-    fn process(&mut self, stream: &StreamRef) {
+    fn process(&mut self, stream: &Stream) {
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
@@ -471,20 +471,20 @@ impl StreamData {
 }
 
 #[allow(clippy::type_complexity)]
-fn start_stream(
+fn start_stream<'a>(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
     overlay_cursor: bool,
 ) -> anyhow::Result<(
-    pipewire::main_loop::MainLoop,
-    pipewire::stream::Stream,
+    pipewire::main_loop::MainLoopRc,
+    pipewire::stream::StreamRc,
     pipewire::stream::StreamListener<StreamData>,
-    pipewire::context::Context,
+    pipewire::context::ContextRc,
     oneshot::Receiver<anyhow::Result<u32>>,
 )> {
-    let loop_ = pipewire::main_loop::MainLoop::new(None)?;
-    let context = pipewire::context::Context::new(&loop_)?;
-    let core = context.connect(None)?;
+    let loop_ = pipewire::main_loop::MainLoopRc::new(None)?;
+    let context = pipewire::context::ContextRc::new(&loop_, None)?;
+    let core = context.connect_rc(None)?;
 
     let name = "cosmic-screenshot".to_string(); // XXX randomize?
 
@@ -500,8 +500,8 @@ fn start_stream(
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
-    let stream = pipewire::stream::Stream::new(
-        &core,
+    let stream = pipewire::stream::StreamRc::new(
+        core,
         &name,
         pipewire::properties::properties! {
             "media.class" => "Video/Source",
