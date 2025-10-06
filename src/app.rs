@@ -293,11 +293,12 @@ impl cosmic::Application for CosmicPortal {
         let old = self.core.system_is_dark();
         let new = new_theme.is_dark;
         if new != old
-            && let Some(tx) = self.tx.clone() {
-                tokio::spawn(async move {
-                    _ = tx.send(subscription::Event::IsDark(new)).await;
-                });
-            }
+            && let Some(tx) = self.tx.clone()
+        {
+            tokio::spawn(async move {
+                _ = tx.send(subscription::Event::IsDark(new)).await;
+            });
+        }
         Task::none()
     }
 

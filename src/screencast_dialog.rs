@@ -106,9 +106,10 @@ async fn load_desktop_entries(locales: &[String]) -> Vec<DesktopEntry> {
     let mut entries = Vec::new();
     for p in fde::Iter::new(fde::default_paths()) {
         if let Ok(data) = tokio::fs::read_to_string(&p).await
-            && let Ok(entry) = DesktopEntry::from_str(&p, &data, Some(locales)) {
-                entries.push(entry.to_owned());
-            }
+            && let Ok(entry) = DesktopEntry::from_str(&p, &data, Some(locales))
+        {
+            entries.push(entry.to_owned());
+        }
     }
     entries
 }
@@ -423,7 +424,8 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
                 let label = &toplevel_info.title;
                 let is_selected = args
                     .capture_sources
-                    .toplevels.contains(&toplevel_info.foreign_toplevel);
+                    .toplevels
+                    .contains(&toplevel_info.foreign_toplevel);
                 list = list.add(toplevel_button(
                     label,
                     is_selected,
