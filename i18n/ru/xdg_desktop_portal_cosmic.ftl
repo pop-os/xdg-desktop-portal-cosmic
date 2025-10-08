@@ -1,5 +1,5 @@
 allow = Разрешить
-cancel = Отменить
+cancel = Отмена
 capture = Сделать снимок
 save-to = Сохранить в
     .clipboard = { save-to } буфер обмена
