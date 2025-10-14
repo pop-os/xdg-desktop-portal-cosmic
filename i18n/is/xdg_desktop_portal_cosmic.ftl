@@ -1,3 +1,14 @@
 output = Úttak
 cancel = Hætta við
 allow = Leyfa
+share = Deila
+save-to = Vista í
+    .clipboard = { save-to } Klippispjaldi
+    .pictures = { save-to } Myndum
+    .documents = { save-to } Skjölum
+choose-folder = Velja möppu
+share-screen = Samnýta skjáinn þinn
+    .description = Tölvan vill deila efninu á skjánum þínum með „{ $app_name }“. Veldu skjá eða glugga til að samnýta.
+unknown-application = Óþekkt forrit
+window = Gluggi
+capture = Fanga

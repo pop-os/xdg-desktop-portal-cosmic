@@ -1,5 +1,5 @@
 allow = سماح
-cancel = إلغاء
+cancel = ألغِ
 capture = التقاط
 share = مشاركة
 save-to = حفظ إلى
