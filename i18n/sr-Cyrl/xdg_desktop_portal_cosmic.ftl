@@ -1,7 +1,13 @@
 allow = Дозволи
-cancel = Поништи
+cancel = Прекини
 capture = Сними
 save-to = Сачувај у
     .pictures = { save-to } Слике
     .documents = { save-to } Документи
 choose-folder = Изаберите фасциклу
+share = Подели
+share-screen = Подели свој екран
+    .description = Систем жели да подели садржај Вашег екрана са апликацијом "{ $app_name }". Изаберите екран или прозор који желите да поделите.
+unknown-application = Непозната Апликација
+output = Излаз
+window = Прозор
