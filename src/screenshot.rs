@@ -9,18 +9,23 @@ use cosmic::iced_runtime::clipboard;
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced_winit::{
+    commands::layer_surface::{destroy_layer_surface, get_layer_surface},
+    platform_specific::wayland::subsurface_widget::{Shmbuf, SubsurfaceBuffer},
+};
 use cosmic::widget::horizontal_space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use futures::stream::{FuturesUnordered, StreamExt};
 use image::RgbaImage;
-use rustix::fd::AsFd;
+use rustix::fd::{AsFd, OwnedFd};
 use std::borrow::Cow;
 use std::num::NonZeroU32;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::{collections::HashMap, io, path::PathBuf};
 use tokio::sync::mpsc::Sender;
 
-use wayland_client::protocol::wl_output::WlOutput;
+use wayland_client::protocol::wl_output::{self, WlOutput};
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
@@ -31,27 +36,34 @@ use crate::{PortalResponse, fl, subscription};
 
 #[derive(Clone, Debug)]
 pub struct ScreenshotImage {
-    pub rgba: RgbaImage,
-    pub handle: cosmic::widget::image::Handle,
+    pub img: Arc<ShmImage<OwnedFd>>,
+    pub transform: wl_output::Transform,
+    pub subsurface_buffer: SubsurfaceBuffer,
 }
 
 impl ScreenshotImage {
-    fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
-        let rgba = img.image_transformed()?;
-        let handle = cosmic::widget::image::Handle::from_rgba(
-            rgba.width(),
-            rgba.height(),
-            rgba.clone().into_vec(),
-        );
-        Ok(Self { rgba, handle })
+    fn new(img: ShmImage<OwnedFd>) -> anyhow::Result<Self> {
+        let transform = img.transform;
+        let (subsurface_buffer, _) =
+            SubsurfaceBuffer::new(Arc::new(Shmbuf::from(img.try_clone()?).into()));
+        Ok(Self {
+            img: Arc::new(img),
+            transform,
+            subsurface_buffer,
+        })
+    }
+
+    // TODO `ImageBuffer` direct wrapping mmaped memory?
+    pub fn image_transformed(&self) -> anyhow::Result<image::RgbaImage> {
+        self.img.image_transformed()
     }
 
     pub fn width(&self) -> u32 {
-        self.rgba.width()
+        self.img.width
     }
 
     pub fn height(&self) -> u32 {
-        self.rgba.height()
+        self.img.height
     }
 }
 
@@ -615,19 +627,30 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             match choice {
                 Choice::Output(name) => {
                     if let Some(img) = images.remove(&name) {
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
-                                log::error!("Failed to capture screenshot: {:?}", err);
-                            };
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
-                            {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
+                        match img.image_transformed() {
+                            Ok(rgba) => {
+                                if let Some(ref image_path) = image_path {
+                                    if let Err(err) = Screenshot::save_rgba(&rgba, image_path) {
+                                        log::error!("Failed to capture screenshot: {}", err);
+                                    };
+                                } else {
+                                    let mut buffer = Vec::new();
+                                    if let Err(e) =
+                                        Screenshot::save_rgba_to_buffer(&rgba, &mut buffer)
+                                    {
+                                        log::error!("Failed to save screenshot to buffer: {}", e);
+                                        success = false;
+                                    } else {
+                                        cmds.push(clipboard::write_data(ScreenshotBytes::new(
+                                            buffer,
+                                        )))
+                                    };
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("Failed to produce rgba image for screenshot: {}", err);
                                 success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
+                            }
                         }
                     } else {
                         log::error!("Failed to find output {}", name);
@@ -652,9 +675,20 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                                     bottom: pos.1 + output.logical_size.1 as i32,
                                 };
 
-                                let intersect = r.intersect(output_rect)?;
-
-                                Some((raw_img.rgba, output_rect))
+                                let Some(intersect) = r.intersect(output_rect) else {
+                                    return None;
+                                };
+                                let img = match raw_img.image_transformed() {
+                                    Ok(img) => img,
+                                    Err(err) => {
+                                        log::error!(
+                                            "Failed to produce rgba image for screenshot: {}",
+                                            err
+                                        );
+                                        return None;
+                                    }
+                                };
+                                Some((img, output_rect))
                             })
                             .collect::<Vec<_>>();
                         let img = combined_image(r, frames);
@@ -666,7 +700,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         } else {
                             let mut buffer = Vec::new();
                             if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
+                                log::error!("Failed to save screenshot to buffer: {}", e);
                                 success = false;
                             } else {
                                 cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
@@ -682,20 +716,31 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
-                                log::error!("Failed to capture screenshot: {:?}", err);
+                        match img.image_transformed() {
+                            Ok(rgba) => {
+                                if let Some(ref image_path) = image_path {
+                                    if let Err(err) = Screenshot::save_rgba(&rgba, image_path) {
+                                        log::error!("Failed to capture screenshot: {}", err);
+                                        success = false;
+                                    }
+                                } else {
+                                    let mut buffer = Vec::new();
+                                    if let Err(e) =
+                                        Screenshot::save_rgba_to_buffer(&rgba, &mut buffer)
+                                    {
+                                        log::error!("Failed to save screenshot to buffer: {}", e);
+                                        success = false;
+                                    } else {
+                                        cmds.push(clipboard::write_data(ScreenshotBytes::new(
+                                            buffer,
+                                        )))
+                                    };
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("Failed to produce rgba image for screenshot: {}", err);
                                 success = false;
                             }
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
-                            {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
                         }
                     } else {
                         success = false;

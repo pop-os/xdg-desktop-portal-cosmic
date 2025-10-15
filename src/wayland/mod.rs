@@ -1,3 +1,4 @@
+use cosmic::iced_winit::platform_specific::wayland::subsurface_widget::Shmbuf;
 use cosmic_client_toolkit::{
     screencopy::{
         CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
@@ -21,7 +22,7 @@ use futures::{
 use rustix::fd::{FromRawFd, RawFd};
 use std::{
     collections::HashMap,
-    env,
+    env, io,
     os::{
         fd::{AsFd, OwnedFd},
         unix::net::UnixStream,
@@ -493,6 +494,7 @@ impl WaylandHelper {
     }
 }
 
+#[derive(Debug)]
 pub struct ShmImage<T: AsFd> {
     fd: T,
     pub width: u32,
@@ -523,6 +525,31 @@ impl<T: AsFd> ShmImage<T> {
         match image {
             image::DynamicImage::ImageRgba8(image) => Ok(image),
             _ => unreachable!(),
+        }
+    }
+}
+
+impl ShmImage<OwnedFd> {
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            fd: self.fd.try_clone()?,
+            width: self.width,
+            height: self.height,
+            transform: self.transform,
+        })
+    }
+}
+
+impl<T: AsFd + Into<OwnedFd>> From<ShmImage<T>> for Shmbuf {
+    fn from(image: ShmImage<T>) -> Self {
+        Shmbuf {
+            fd: image.fd.into(),
+            height: image.height as i32,
+            width: image.width as i32,
+            offset: 0,
+            stride: image.width as i32 * 4,
+            // TODO: Change when support for other formats is added
+            format: wl_shm::Format::Abgr8888,
         }
     }
 }

@@ -327,16 +327,17 @@ pub fn update_msg(
                             let (filters, filter_selected) = dialog.filters();
                             let mut current_filter = None;
                             if let Some(filter_i) = filter_selected
-                                && let Some(filter) = filters.get(filter_i) {
-                                    let mut patterns = Vec::with_capacity(filter.patterns.len());
-                                    for pattern in filter.patterns.iter() {
-                                        patterns.push(match pattern {
-                                            DialogFilterPattern::Glob(glob) => (0u32, glob.clone()),
-                                            DialogFilterPattern::Mime(mime) => (1u32, mime.clone()),
-                                        });
-                                    }
-                                    current_filter = Some((filter.label.clone(), patterns));
+                                && let Some(filter) = filters.get(filter_i)
+                            {
+                                let mut patterns = Vec::with_capacity(filter.patterns.len());
+                                for pattern in filter.patterns.iter() {
+                                    patterns.push(match pattern {
+                                        DialogFilterPattern::Glob(glob) => (0u32, glob.clone()),
+                                        DialogFilterPattern::Mime(mime) => (1u32, mime.clone()),
+                                    });
                                 }
+                                current_filter = Some((filter.label.clone(), patterns));
+                            }
 
                             PortalResponse::Success(FileChooserResult {
                                 uris,
@@ -393,11 +394,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
         settings = settings.path(path);
     }
 
-    let (mut dialog, command) = Dialog::new(
-        settings,
-        Msg::DialogMessage,
-        Msg::DialogResult,
-    );
+    let (mut dialog, command) = Dialog::new(settings, Msg::DialogMessage, Msg::DialogResult);
     cmds.push(command);
     cmds.push(dialog.set_title(args.title.clone()));
     if let Some(accept_label) = args.options.accept_label() {
