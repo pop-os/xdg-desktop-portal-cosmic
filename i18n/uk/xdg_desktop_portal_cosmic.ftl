@@ -1,6 +1,6 @@
 allow = Дозволити
 cancel = Скасувати
-capture = Знімок екрана
+capture = Захоплення екрана
 save-to = Зберегти в
     .clipboard = { save-to } буфер обміну
     .pictures = { save-to } Зображення
