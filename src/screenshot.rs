@@ -885,7 +885,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
                         id: *id,
                         layer: Layer::Overlay,
                         keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                        pointer_interactivity: true,
+                        input_zone: None,
                         anchor: Anchor::all(),
                         output: IcedOutput::Output(output.clone()),
                         namespace: "screenshot".to_string(),
