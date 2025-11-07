@@ -91,7 +91,7 @@ struct WaylandHelperInner {
     capturer: Capturer,
     wl_shm: wl_shm::WlShm,
     dmabuf: Mutex<Option<DmabufHelper>>,
-    zwp_dmabuf: ZwpLinuxDmabufV1,
+    zwp_dmabuf: Option<ZwpLinuxDmabufV1>,
 }
 
 // TODO seperate state object from what is passed to threads
@@ -237,7 +237,7 @@ impl WaylandHelper {
         let registry_state = RegistryState::new(&globals);
         let screencopy_state = ScreencopyState::new(&globals, &qh);
         let shm_state = Shm::bind(&globals, &qh).unwrap();
-        let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).unwrap();
+        let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).ok();
         let wayland_helper = WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
                 conn,
@@ -458,10 +458,10 @@ impl WaylandHelper {
     ) -> wl_buffer::WlBuffer {
         // TODO ensure dmabuf is valid format with right number of planes?
         // - params.add can raise protocol error
-        let params = self
-            .inner
-            .zwp_dmabuf
-            .create_params(&self.inner.qh, sctk::globals::GlobalData);
+        let zwp_dmabuf = self.inner.zwp_dmabuf.as_ref().unwrap_or_else(|| {
+            panic!("zwp_linux_dmabuf_v1 not available on this compositor");
+        });
+        let params = zwp_dmabuf.create_params(&self.inner.qh, sctk::globals::GlobalData);
         let modifier = u64::from(dmabuf.modifier);
         let modifier_hi = (modifier >> 32) as u32;
         let modifier_lo = (modifier & 0xffffffff) as u32;
