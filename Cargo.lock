@@ -1514,7 +1514,7 @@ dependencies = [
 [[package]]
 name = "cosmic-files"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-files?branch=contains-surface#b571f11b92d3f71606c5038534fbbaba4b8a2426"
+source = "git+https://github.com/pop-os/cosmic-files#10b2bd7383c66b97dd42a406982774ae9a229e01"
 dependencies = [
  "anyhow",
  "chrono",
