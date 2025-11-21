@@ -10,5 +10,5 @@ choose-folder = Map selecteren
 share-screen = Scherm delen
     .description = Het systeem wil de inhoud van uw scherm delen met "{ $app_name }". Selecteer en schem of venster dat u wilt delen.
 unknown-application = Onbekende applicatie
-output = Scherm
+output = Uitvoer
 window = Venster
