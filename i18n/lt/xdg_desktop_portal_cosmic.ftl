@@ -1,0 +1,14 @@
+allow = Leisti
+output = Išvestis
+cancel = Atšaukti
+capture = Užfiksuoti
+share = Dalintis
+save-to = Išsaugoti į
+    .clipboard = { save-to } Iškarpinę
+    .pictures = { save-to } Nuotraukų aplanką
+    .documents = { save-to } Dokumentų aplanką
+choose-folder = Pasirinkti aplanką
+share-screen = Leisti dalintis ekranu
+    .description = Sistema nori dalintis jūsų ekrano vaizdu su „{ $app_name }“ aplikacija. Pasirinkite ekraną ar langą, kuriuo norite dalintis.
+unknown-application = Nežinoma Aplikacija
+window = Langas
