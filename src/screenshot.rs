@@ -481,7 +481,11 @@ impl Screenshot {
                 }
                 config::screenshot::Choice::Output(_) => Choice::Output(first_output.into()),
                 config::screenshot::Choice::Rectangle => {
-                    Choice::Rectangle(Rect::default(), DragState::default())
+                    // Use saved rectangle from config if available
+                    let rect = config.last_rectangle
+                        .map(|r| Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom })
+                        .unwrap_or_default();
+                    Choice::Rectangle(rect, DragState::default())
                 }
                 config::screenshot::Choice::Window => Choice::Window(first_output.into(), None),
             };
@@ -742,17 +746,27 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         }
         Msg::Choice(c) => {
             let choice = (&c).into();
+            let last_rect = if let Choice::Rectangle(r, _) = &c {
+                portal.prev_rectangle = Some(*r);
+                Some(config::screenshot::Rect {
+                    left: r.left,
+                    top: r.top,
+                    right: r.right,
+                    bottom: r.bottom,
+                })
+            } else {
+                portal.config.screenshot.last_rectangle
+            };
+
             if let Some(args) = portal.screenshot_args.as_mut() {
                 args.choice = c;
-                if let Choice::Rectangle(r, s) = &args.choice {
-                    portal.prev_rectangle = Some(*r);
-                }
             } else {
                 log::error!("Failed to find screenshot Args for Choice message.");
             }
             cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
                 config::screenshot::Screenshot {
                     choice,
+                    last_rectangle: last_rect,
                     ..portal.config.screenshot
                 },
             ))
@@ -803,6 +817,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     config::screenshot::Screenshot {
                         save_location: loc,
                         choice: (&mut portal.config.screenshot.choice).into(),
+                        last_rectangle: portal.config.screenshot.last_rectangle,
                     },
                 ))
             } else {
