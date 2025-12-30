@@ -1,4 +1,4 @@
-use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
+use crate::{access, background, config, file_chooser, screencast_dialog, screenshot, subscription};
 use cosmic::Task;
 use cosmic::iced_core::event::wayland::OutputEvent;
 use cosmic::widget;
@@ -31,6 +31,7 @@ pub struct CosmicPortal {
     pub config: config::Config,
 
     pub access_args: Option<access::AccessDialogArgs>,
+    pub background_args: Option<background::BackgroundDialogArgs>,
 
     pub file_choosers: HashMap<window::Id, (file_chooser::Args, file_chooser::Dialog)>,
 
@@ -60,6 +61,7 @@ pub struct OutputState {
 #[derive(Debug, Clone)]
 pub enum Msg {
     Access(access::Msg),
+    Background(background::Msg),
     FileChooser(window::Id, file_chooser::Msg),
     Screenshot(screenshot::Msg),
     Screencast(screencast_dialog::Msg),
@@ -108,6 +110,7 @@ impl cosmic::Application for CosmicPortal {
                 config_handler,
                 config,
                 access_args: Default::default(),
+                background_args: Default::default(),
                 file_choosers: Default::default(),
                 screenshot_args: Default::default(),
                 screencast_args: Default::default(),
@@ -130,6 +133,8 @@ impl cosmic::Application for CosmicPortal {
     fn view_window(&self, id: window::Id) -> cosmic::Element<'_, Self::Message> {
         if Some(id) == self.access_args.as_ref().map(|args| args.access_id) {
             access::view(self).map(Msg::Access)
+        } else if Some(id) == self.background_args.as_ref().map(|args| args.background_id) {
+            background::view(self).map(Msg::Background)
         } else if id == *screencast_dialog::SCREENCAST_ID {
             screencast_dialog::view(self).map(Msg::Screencast)
         } else if self.outputs.iter().any(|o| o.id == id) {
@@ -145,10 +150,14 @@ impl cosmic::Application for CosmicPortal {
     ) -> cosmic::iced::Task<cosmic::Action<Self::Message>> {
         match message {
             Msg::Access(m) => access::update_msg(self, m).map(cosmic::Action::App),
+            Msg::Background(m) => background::update_msg(self, m).map(cosmic::Action::App),
             Msg::FileChooser(id, m) => file_chooser::update_msg(self, id, m),
             Msg::Portal(e) => match e {
                 subscription::Event::Access(args) => {
                     access::update_args(self, args).map(cosmic::Action::App)
+                }
+                subscription::Event::Background(args) => {
+                    background::update_args(self, args).map(cosmic::Action::App)
                 }
                 subscription::Event::FileChooser(args) => file_chooser::update_args(self, args),
                 subscription::Event::Screenshot(args) => {

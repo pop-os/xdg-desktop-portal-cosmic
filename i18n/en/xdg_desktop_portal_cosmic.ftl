@@ -13,3 +13,9 @@ share-screen = Share your screen
 unknown-application = Unknown Application
 output = Output
 window = Window
+
+# Background permission dialog
+background-permission-title = Background Activity
+background-permission-subtitle = An application wants to run in the background
+background-permission-body = {$app_id} is requesting permission to continue running when its window is closed.
+background-permission-reason = Reason: {$reason}
