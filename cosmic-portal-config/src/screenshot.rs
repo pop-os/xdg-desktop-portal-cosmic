@@ -2,11 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Logical coordinates of a rectangle selection
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Screenshot {
     pub save_location: ImageSaveLocation,
     pub choice: Choice,
+    #[serde(default)]
+    pub last_rectangle: Option<Rect>,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
