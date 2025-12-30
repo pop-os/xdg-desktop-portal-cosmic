@@ -9,13 +9,14 @@ use zbus::{Connection, zvariant};
 
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
-    DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland,
+    DBUS_NAME, DBUS_PATH, Settings, access::Access, background::Background, config,
+    file_chooser::FileChooser, screencast::ScreenCast, screenshot::Screenshot, wayland,
 };
 
 #[derive(Clone, Debug)]
 pub enum Event {
     Access(crate::access::AccessDialogArgs),
+    Background(crate::background::BackgroundDialogArgs),
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
@@ -77,6 +78,7 @@ pub(crate) async fn process_changes(
             let connection = zbus::connection::Builder::session()?
                 .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
+                .serve_at(DBUS_PATH, Background::new(wayland_helper.clone(), tx.clone()))?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
@@ -98,6 +100,11 @@ pub(crate) async fn process_changes(
                     Event::Access(args) => {
                         if let Err(err) = output.send(Event::Access(args)).await {
                             log::error!("Error sending access event: {:?}", err);
+                        };
+                    }
+                    Event::Background(args) => {
+                        if let Err(err) = output.send(Event::Background(args)).await {
+                            log::error!("Error sending background event: {:?}", err);
                         };
                     }
                     Event::FileChooser(args) => {
