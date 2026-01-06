@@ -126,8 +126,14 @@ struct SelectSourcesOptions {
 
 #[derive(zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
+struct StreamProps {
+    source_type: u32,
+}
+
+#[derive(zvariant::SerializeDict, zvariant::Type)]
+#[zvariant(signature = "a{sv}")]
 struct StartResult {
-    streams: Vec<(u32, HashMap<String, zvariant::OwnedValue>)>,
+    streams: Vec<(u32, StreamProps)>,
     persist_mode: Option<u32>,
     restore_data: Option<RestoreData>,
 }
@@ -286,6 +292,7 @@ impl ScreenCast {
                     self.wayland_helper.clone(),
                     CaptureSource::Output(output.clone()),
                     overlay_cursor,
+                    SOURCE_TYPE_MONITOR,
                 ));
             }
             for foreign_toplevel in &capture_sources.toplevels {
@@ -293,6 +300,7 @@ impl ScreenCast {
                     self.wayland_helper.clone(),
                     CaptureSource::Toplevel(foreign_toplevel.clone()),
                     overlay_cursor,
+                    SOURCE_TYPE_WINDOW,
                 ));
             }
 
@@ -326,7 +334,14 @@ impl ScreenCast {
 
             let streams = screencast_threads
                 .iter()
-                .map(|thread| (thread.node_id(), HashMap::new()))
+                .map(|thread| {
+                    (
+                        thread.node_id(),
+                        StreamProps {
+                            source_type: thread.source_type(),
+                        },
+                    )
+                })
                 .collect();
             interface.get_mut().await.screencast_threads = screencast_threads;
 
