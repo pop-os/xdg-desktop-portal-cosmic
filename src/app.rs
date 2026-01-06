@@ -168,6 +168,10 @@ impl cosmic::Application for CosmicPortal {
                     self.tx = Some(tx);
                     Task::none()
                 }
+                subscription::Event::NameLost => {
+                    log::warn!("'{}' name on bus lost. Exiting.", crate::DBUS_NAME);
+                    cosmic::iced::exit()
+                }
             },
             Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::Action::App),
             Msg::Screencast(m) => screencast_dialog::update_msg(self, m).map(cosmic::Action::App),

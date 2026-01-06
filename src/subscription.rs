@@ -3,9 +3,9 @@
 use std::any::TypeId;
 
 use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
-use futures::{SinkExt, future};
+use futures::{SinkExt, StreamExt, future};
 use tokio::sync::mpsc::Receiver;
-use zbus::{Connection, zvariant};
+use zbus::{Connection, fdo, zvariant};
 
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
@@ -25,6 +25,7 @@ pub enum Event {
     HighContrast(bool),
     Config(config::Config),
     Init(tokio::sync::mpsc::Sender<Event>),
+    NameLost,
 }
 
 pub enum State {
@@ -75,7 +76,6 @@ pub(crate) async fn process_changes(
             let (tx, rx) = tokio::sync::mpsc::channel(10);
 
             let connection = zbus::connection::Builder::session()?
-                .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
@@ -89,6 +89,16 @@ pub(crate) async fn process_changes(
                 .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
+
+            // Create name lost stream before requesting name
+            let dbus = fdo::DBusProxy::new(&connection).await?;
+            tokio::spawn(name_lost_task(
+                dbus.receive_name_lost().await?,
+                output.clone(),
+            ));
+
+            connection.request_name(DBUS_NAME).await?;
+
             _ = output.send(Event::Init(tx)).await;
             *state = State::Waiting(connection, rx);
         }
@@ -181,9 +191,24 @@ pub(crate) async fn process_changes(
                         }
                     }
                     Event::Init(_) => {}
+                    Event::NameLost => {}
                 }
             }
         }
     };
     Ok(())
+}
+
+async fn name_lost_task(
+    mut name_lost_stream: fdo::NameLostStream,
+    mut output: futures::channel::mpsc::Sender<Event>,
+) {
+    while let Some(name_lost) = name_lost_stream.next().await {
+        let Ok(args) = name_lost.args() else {
+            return;
+        };
+        if args.name == DBUS_NAME {
+            let _ = output.send(Event::NameLost).await;
+        }
+    }
 }
