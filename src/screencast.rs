@@ -124,10 +124,14 @@ struct SelectSourcesOptions {
     persist_mode: Option<u32>,
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
+#[derive(Clone, zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
-struct StreamProps {
+pub struct StreamProps {
+    position: Option<(i32, i32)>,
+    size: (i32, i32),
     source_type: u32,
+    // TODO: Add when remote desktop portal is implemented
+    mapping_id: Option<String>,
 }
 
 #[derive(zvariant::SerializeDict, zvariant::Type)]
@@ -288,19 +292,49 @@ impl ScreenCast {
             // Use `FuturesOrdered` so streams are in consistent order
             let mut res_futures = FuturesOrdered::new();
             for output in &capture_sources.outputs {
+                let info = self.wayland_helper.output_info(output);
+                let (position, size) = if let Some(info) = info {
+                    (info.logical_position, info.logical_size.unwrap_or((0, 0)))
+                } else {
+                    (Some((0, 0)), (0, 0))
+                };
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
                     CaptureSource::Output(output.clone()),
                     overlay_cursor,
-                    SOURCE_TYPE_MONITOR,
+                    StreamProps {
+                        position,
+                        size,
+                        source_type: SOURCE_TYPE_MONITOR,
+                        mapping_id: None,
+                    },
                 ));
             }
+            let toplevel_infos = self.wayland_helper.toplevels();
             for foreign_toplevel in &capture_sources.toplevels {
+                let info = toplevel_infos
+                    .iter()
+                    .find(|info| info.foreign_toplevel == *foreign_toplevel);
+                let size = if let Some(info) = info {
+                    // Use size on output with greatest area
+                    // XXX: No way to get size of whole toplevel?
+                    info.geometry
+                        .values()
+                        .max_by_key(|info| info.width * info.height)
+                        .map_or((0, 0), |info| (info.width, info.height))
+                } else {
+                    (0, 0)
+                };
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
                     CaptureSource::Toplevel(foreign_toplevel.clone()),
                     overlay_cursor,
-                    SOURCE_TYPE_WINDOW,
+                    StreamProps {
+                        position: None,
+                        size: size,
+                        source_type: SOURCE_TYPE_WINDOW,
+                        mapping_id: None,
+                    },
                 ));
             }
 
@@ -334,14 +368,7 @@ impl ScreenCast {
 
             let streams = screencast_threads
                 .iter()
-                .map(|thread| {
-                    (
-                        thread.node_id(),
-                        StreamProps {
-                            source_type: thread.source_type(),
-                        },
-                    )
-                })
+                .map(|thread| (thread.node_id(), thread.stream_props()))
                 .collect();
             interface.get_mut().await.screencast_threads = screencast_threads;
 

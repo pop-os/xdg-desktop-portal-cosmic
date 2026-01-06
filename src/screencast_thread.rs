@@ -24,6 +24,7 @@ use wayland_client::{
 
 use crate::{
     buffer,
+    screencast::StreamProps,
     wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
 };
 
@@ -57,7 +58,7 @@ fn shm_format_to_gbm(format: wl_shm::Format) -> Option<gbm::Format> {
 }
 
 pub struct ScreencastThread {
-    source_type: u32,
+    stream_props: StreamProps,
     node_id: u32,
     thread_stop_tx: pipewire::channel::Sender<()>,
 }
@@ -67,7 +68,7 @@ impl ScreencastThread {
         wayland_helper: WaylandHelper,
         capture_source: CaptureSource,
         overlay_cursor: bool,
-        source_type: u32,
+        stream_props: StreamProps,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
@@ -85,15 +86,15 @@ impl ScreencastThread {
             }
         });
         Ok(Self {
-            source_type,
+            stream_props,
             // XXX can second unwrap fail?
             node_id: rx.await.unwrap()?.await.unwrap()?,
             thread_stop_tx,
         })
     }
 
-    pub fn source_type(&self) -> u32 {
-        self.source_type
+    pub fn stream_props(&self) -> StreamProps {
+        self.stream_props.clone()
     }
 
     pub fn node_id(&self) -> u32 {
