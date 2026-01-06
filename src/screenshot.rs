@@ -482,8 +482,14 @@ impl Screenshot {
                 config::screenshot::Choice::Output(_) => Choice::Output(first_output.into()),
                 config::screenshot::Choice::Rectangle => {
                     // Use saved rectangle from config if available
-                    let rect = config.last_rectangle
-                        .map(|r| Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom })
+                    let rect = config
+                        .last_rectangle
+                        .map(|r| Rect {
+                            left: r.left,
+                            top: r.top,
+                            right: r.right,
+                            bottom: r.bottom,
+                        })
                         .unwrap_or_default();
                     Choice::Rectangle(rect, DragState::default())
                 }
