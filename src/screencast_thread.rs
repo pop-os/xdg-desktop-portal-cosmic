@@ -395,7 +395,7 @@ impl StreamData {
             );
 
             data.type_ = spa_sys::SPA_DATA_MemFd;
-            data.flags = 0;
+            data.flags = spa_sys::SPA_DATA_FLAG_READABLE | spa_sys::SPA_DATA_FLAG_MAPPABLE;
             data.fd = fd.into_raw_fd() as _;
             data.data = std::ptr::null_mut();
             data.maxsize = self.width() * self.height() * 4;
