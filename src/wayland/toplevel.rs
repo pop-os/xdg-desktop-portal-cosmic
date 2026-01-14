@@ -27,7 +27,9 @@ impl ToplevelInfoHandler for AppData {
         _qh: &QueueHandle<Self>,
         _toplevel: &ExtForeignToplevelHandleV1,
     ) {
-        self.update_output_toplevels()
+        // Don't emit RunningApplicationsChanged on focus/title changes - only on
+        // toplevel creation/destruction. This matches GNOME's behavior and prevents
+        // excessive signal spam.
     }
 
     fn toplevel_closed(
