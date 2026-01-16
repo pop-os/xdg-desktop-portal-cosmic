@@ -752,6 +752,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         }
         Msg::Choice(c) => {
             let choice = (&c).into();
+            // Only save config when drag is finished to avoid disk writes on every mouse motion
+            let should_save_config = !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
             let last_rect = if let Choice::Rectangle(r, _) = &c {
                 portal.prev_rectangle = Some(*r);
                 Some(config::screenshot::Rect {
@@ -769,13 +771,17 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             } else {
                 log::error!("Failed to find screenshot Args for Choice message.");
             }
-            cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
-                config::screenshot::Screenshot {
-                    choice,
-                    last_rectangle: last_rect,
-                    ..portal.config.screenshot
-                },
-            ))
+            if should_save_config {
+                cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
+                    config::screenshot::Screenshot {
+                        choice,
+                        last_rectangle: last_rect,
+                        ..portal.config.screenshot
+                    },
+                ))
+            } else {
+                cosmic::Task::none()
+            }
         }
         Msg::OutputChanged(wl_output) => {
             if let (Some(args), Some(o)) = (
