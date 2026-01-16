@@ -1,5 +1,6 @@
 #!/usr/bin/make -f
 
+DESTDIR = debian/xdg-desktop-portal-cosmic
 CLEAN ?= 1
 VENDOR ?= 1
 
@@ -7,18 +8,16 @@ VENDOR ?= 1
 	dh $@
 
 override_dh_auto_clean:
-ifeq ($(CLEAN),1)
-	make clean
-endif
-ifeq ($(VENDOR),1)
-	if ! ischroot; then \
-		make vendor; \
+	if test "${CLEAN}" = "1"; then \
+		cargo clean; \
 	fi
-endif
+
+	if ! ischroot && test "${VENDOR}" = "1"; then \
+		just vendor; \
+	fi
 
 override_dh_auto_build:
-	env CARGO_HOME="$$(pwd)/target/cargo" \
-		make all VENDOR=$(VENDOR) prefix=/usr
+	just build-vendored
 
 override_dh_auto_install:
-	dh_auto_install -- prefix=/usr
+	just rootdir=$(DESTDIR) install
