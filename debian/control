@@ -6,6 +6,7 @@ Build-Depends:
   debhelper (>= 11),
   debhelper-compat (= 11),
   cargo,
+  just,
   libclang-dev,
   libglib2.0-dev,
   libegl-dev,
