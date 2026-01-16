@@ -17,7 +17,11 @@ use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::{collections::HashMap, io, path::PathBuf};
+use std::{
+    collections::HashMap,
+    io,
+    path::{Path, PathBuf},
+};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
@@ -215,13 +219,17 @@ impl Screenshot {
         Ok(map)
     }
 
-    pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
-        let mut file = std::fs::File::create(path)?;
-        Ok(write_png(&mut file, img)?)
-    }
+    /// Encode image as PNG and optionally save to disk.
+    /// Returns the PNG buffer for clipboard operations.
+    pub fn save_rgba(img: &RgbaImage, path: Option<&Path>) -> anyhow::Result<Vec<u8>> {
+        let mut buffer = Vec::new();
+        write_png(&mut buffer, img)?;
 
-    pub fn save_rgba_to_buffer(img: &RgbaImage, buffer: &mut Vec<u8>) -> anyhow::Result<()> {
-        Ok(write_png(buffer, img)?)
+        if let Some(path) = path {
+            std::fs::write(path, &buffer)?;
+        }
+
+        Ok(buffer)
     }
 
     pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
@@ -625,19 +633,14 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             match choice {
                 Choice::Output(name) => {
                     if let Some(img) = images.remove(&name) {
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
+                        match Screenshot::save_rgba(&img.rgba, image_path.as_deref()) {
+                            Ok(buffer) => {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                            }
+                            Err(err) => {
                                 log::error!("Failed to capture screenshot: {:?}", err);
-                            };
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
-                            {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
                                 success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
+                            }
                         }
                     } else {
                         log::error!("Failed to find output {}", name);
@@ -669,18 +672,14 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                             .collect::<Vec<_>>();
                         let img = combined_image(r, frames);
 
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                        match Screenshot::save_rgba(&img, image_path.as_deref()) {
+                            Ok(buffer) => {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                            }
+                            Err(err) => {
+                                log::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             }
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
                         }
                     } else {
                         success = false;
@@ -692,20 +691,14 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
+                        match Screenshot::save_rgba(&img.rgba, image_path.as_deref()) {
+                            Ok(buffer) => {
+                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                            }
+                            Err(err) => {
                                 log::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             }
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
-                            {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
                         }
                     } else {
                         success = false;
