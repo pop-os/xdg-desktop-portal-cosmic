@@ -10,7 +10,7 @@ use zbus::{Connection, fdo, zvariant};
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
     DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland,
+    input_capture::InputCapture, screencast::ScreenCast, screenshot::Screenshot, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -87,6 +87,7 @@ pub(crate) async fn process_changes(
                     ScreenCast::new(wayland_helper.clone(), tx.clone()),
                 )?
                 .serve_at(DBUS_PATH, Settings::new())?
+                .serve_at(DBUS_PATH, InputCapture)?
                 .build()
                 .await?;
 
