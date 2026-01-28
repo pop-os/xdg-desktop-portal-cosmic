@@ -457,7 +457,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
                 .secondary_action(cancel_button)
                 .primary_action(share_button)
                 .control(control),
-            |key| match key {
+            |key, _| match key {
                 Key::Named(Named::Enter) => Some(Msg::Share),
                 Key::Named(Named::Escape) => Some(Msg::Cancel),
                 _ => None,

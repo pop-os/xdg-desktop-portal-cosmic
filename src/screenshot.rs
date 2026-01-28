@@ -361,6 +361,7 @@ fn write_png<W: io::Write>(w: W, image: &RgbaImage) -> Result<(), png::EncodingE
 #[derive(Debug, Clone)]
 pub enum Msg {
     Capture,
+    CaptureWithLocation(ImageSaveLocation),
     Cancel,
     Choice(Choice),
     OutputChanged(WlOutput),
@@ -597,10 +598,32 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
             theme.spacing,
             i as u128,
         ),
-        |key| match key {
-            Key::Named(Named::Enter) => Some(Msg::Capture),
-            Key::Named(Named::Escape) => Some(Msg::Cancel),
-            _ => None,
+        |key, modifiers| {
+            if modifiers.control() {
+                match key {
+                    Key::Named(Named::Copy) => {
+                        return Some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard));
+                    }
+                    Key::Named(Named::Save) => {
+                        return Some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures));
+                    }
+                    Key::Character(ref value) => {
+                        let value = value.as_str();
+                        if value.eq_ignore_ascii_case("c") {
+                            return Some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard));
+                        } else if value.eq_ignore_ascii_case("s") {
+                            return Some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            match key {
+                Key::Named(Named::Enter) => Some(Msg::Capture),
+                Key::Named(Named::Escape) => Some(Msg::Cancel),
+                _ => None,
+            }
         },
     )
     .into()
@@ -724,6 +747,15 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 }
             });
             cosmic::Task::batch(cmds)
+        }
+        Msg::CaptureWithLocation(location) => {
+            if let Some(args) = portal.screenshot_args.as_mut() {
+                args.location = location;
+            } else {
+                log::error!("Failed to find screenshot Args for CaptureWithLocation message.");
+                return cosmic::Task::none();
+            }
+            update_msg(portal, Msg::Capture)
         }
         Msg::Cancel => {
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
