@@ -1,0 +1,14 @@
+allow = Izinkan
+cancel = Batalkan
+capture = Ambil
+share = Bagikan
+save-to = Simpan ke
+    .clipboard = { save-to } Papan Klip
+    .pictures = { save-to } Gambar
+    .documents = { save-to } Dokumen
+choose-folder = Pilih map
+share-screen = Bagikan layar anda
+    .description = Sistem ingin membagikan konten layar Anda dengan "{ $app_name }". Pilih layar atau jendela yang ingin dibagikan.
+unknown-application = Aplikasi Tidak Diketahui
+output = Keluaran
+window = Jendela
