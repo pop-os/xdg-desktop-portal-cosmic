@@ -453,12 +453,14 @@ impl<'s> PwBackend<'s> {
 
         let loop_ = mainloop.loop_();
         // Time out after 60 seconds
+        let mut is_node_id_assigned = false;
         for _ in 0..12 {
             loop_.iterate(Duration::from_secs(5));
             match is_ready.take() {
                 Some(res) => match res {
                     Ok(_) => {
                         log::info!("Created a new screencast with node ID {}", stream.node_id());
+                        is_node_id_assigned = true;
                         // Node ID assigned successfully
                         break;
                     }
@@ -470,6 +472,9 @@ impl<'s> PwBackend<'s> {
             }
         }
         _listener.unregister();
+        if !is_node_id_assigned {
+            return Err(anyhow::Error::msg("Cannot get PipeWire stream node ID"));
+        }
 
         let stream_data = Rc::new(RefCell::new(StreamData {
             wayland_helper,
