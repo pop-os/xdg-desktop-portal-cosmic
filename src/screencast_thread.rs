@@ -1132,9 +1132,9 @@ impl<'s> StreamData<'s> {
             data.fd = -1;
         }
 
-        let frame_data: Rc<PwBufferUserData> =
+        let user_data: Rc<PwBufferUserData> =
             unsafe { Rc::from_raw((*buffer).user_data as *mut _) };
-        frame_data.is_attached_with_pw_buffer.set(false);
+        user_data.is_attached_with_pw_buffer.set(false);
     }
 }
 
