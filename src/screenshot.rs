@@ -903,7 +903,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
             let source = bg_state.wallpapers.iter().find(|s| s.0 == o.name);
             o.bg_source = Some(source.cloned().map(|s| s.1).unwrap_or_else(|| {
                 cosmic_bg_config::Source::Path(
-                    "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
+                    "/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg".into(),
                 )
             }));
         }
@@ -911,7 +911,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
         log::error!("Failed to get bg config state");
         for o in &mut portal.outputs {
             o.bg_source = Some(cosmic_bg_config::Source::Path(
-                "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
+                "/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg".into(),
             ));
         }
     }
