@@ -1,5 +1,5 @@
 allow = Toestaan
-cancel = Annuleer
+cancel = Annuleren
 capture = Opnemen
 share = Delen
 save-to = Opslaan naar
