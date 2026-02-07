@@ -584,6 +584,56 @@ impl<'s> ScreencastLoop<'s> {
                     } {
                         video_transform.transform = convert_transform(frame.transform);
                     }
+
+                    if let Some(meta_damage) = unsafe {
+                        buffer_find_meta(
+                            pw_buffer.raw_buffer.as_ptr(),
+                            spa_sys::SPA_META_VideoDamage,
+                        )
+                    } {
+                        let meta_region_len = meta_damage.size as usize
+                            / std::mem::size_of::<spa_sys::spa_meta_region>();
+                        let frame_damage_len = frame.damage.len();
+                        let meta_regions = unsafe {
+                            let ptr = meta_damage.data as *mut spa_sys::spa_meta_region;
+                            core::slice::from_raw_parts_mut(ptr, meta_region_len)
+                        };
+                        let mut meta_region_iter = meta_regions.iter_mut();
+
+                        if meta_region_len < frame_damage_len {
+                            log::info!(
+                                "Not enough buffers ({}) to accommodate damaged regions ({})",
+                                meta_region_len,
+                                frame_damage_len
+                            );
+                            // TODO: Merge damage properly
+                            // SAFETY: We know that `meta_regions` is not empty because at least one buffer is allocated.
+                            unsafe {
+                                let region = meta_region_iter.next().unwrap_unchecked();
+                                region.region.position.x = 0;
+                                region.region.position.y = 0;
+                                region.region.size.width = pw_buffer.frame_size.0;
+                                region.region.size.height = pw_buffer.frame_size.1;
+                            }
+                        } else {
+                            frame.damage.iter().for_each(|rect| {
+                                // SAFETY: We know that `meta_regions` length is equal or less than `frame_damage` length.
+                                let region = unsafe { meta_region_iter.next().unwrap_unchecked() };
+                                region.region.position.x = rect.x;
+                                region.region.position.y = rect.y;
+                                region.region.size.width = rect.width as _;
+                                region.region.size.height = rect.height as _;
+                            });
+                        }
+
+                        // Set invalid region to mark end of array
+                        if let Some(region) = meta_region_iter.next() {
+                            region.region.position.x = 0;
+                            region.region.position.y = 0;
+                            region.region.size.width = 0;
+                            region.region.size.height = 0;
+                        }
+                    }
                 }
                 Err(err) => {
                     if err == WEnum::Value(FailureReason::BufferConstraints) {
@@ -1167,6 +1217,17 @@ unsafe fn buffer_find_meta_data<'a, T>(
     }
 }
 
+// SAFETY: buffer must be non-null, and valid as long as return value is used
+unsafe fn buffer_find_meta<'a>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+) -> Option<&'a mut spa_sys::spa_meta> {
+    unsafe {
+        let ptr = spa_sys::spa_buffer_find_meta((*buffer).buffer, type_);
+        (ptr as *mut spa_sys::spa_meta).as_mut()
+    }
+}
+
 struct OwnedPod(Vec<u8>);
 
 impl OwnedPod {
@@ -1192,7 +1253,7 @@ impl std::ops::Deref for OwnedPod {
     }
 }
 
-fn meta() -> OwnedPod {
+fn transform_meta() -> OwnedPod {
     OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
         id: spa_sys::SPA_PARAM_Meta,
@@ -1209,8 +1270,35 @@ fn meta() -> OwnedPod {
             },
         ],
     }))
-    // TODO: header, video damage
 }
+
+fn damage_meta() -> OwnedPod {
+    println!("damage_meta");
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
+        type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa_sys::SPA_PARAM_Meta,
+        properties: vec![
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_type,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_VideoDamage)),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_size,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
+                    spa::utils::ChoiceFlags::empty(),
+                    spa::utils::ChoiceEnum::Range {
+                        default: (size_of::<spa_sys::spa_meta_region>() * 4) as _,
+                        min: size_of::<spa_sys::spa_meta_region>() as _,
+                        max: (size_of::<spa_sys::spa_meta_region>() * 32) as _,
+                    },
+                ))),
+            },
+        ],
+    }))
+}
+// TODO: header
 
 fn format_params(
     dmabuf: Option<&DmabufHelper>,
@@ -1256,7 +1344,8 @@ fn format_params(
 fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<OwnedPod> {
     [
         Some(buffers(width, height, blocks, allow_dmabuf)),
-        Some(meta()),
+        Some(transform_meta()),
+        Some(damage_meta()),
     ]
     .into_iter()
     .flatten()
