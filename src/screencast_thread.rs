@@ -1297,7 +1297,6 @@ fn transform_meta() -> OwnedPod {
 }
 
 fn damage_meta() -> OwnedPod {
-    println!("damage_meta");
     OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
         id: spa_sys::SPA_PARAM_Meta,
