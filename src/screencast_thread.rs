@@ -591,14 +591,37 @@ impl<'s> ScreencastLoop<'s> {
                             spa_sys::SPA_META_VideoDamage,
                         )
                     } {
-                        let meta_region_len = meta_damage.size as usize
-                            / std::mem::size_of::<spa_sys::spa_meta_region>();
+                        fn update_meta_region(
+                            meta_region: &mut spa_sys::spa_meta_region,
+                            x: i32,
+                            y: i32,
+                            width: u32,
+                            height: u32,
+                        ) {
+                            meta_region.region.position.x = x;
+                            meta_region.region.position.y = y;
+                            meta_region.region.size.width = width;
+                            meta_region.region.size.height = height;
+                        }
+
+                        let meta_region_len =
+                            meta_damage.size as usize / size_of::<spa_sys::spa_meta_region>();
+                        assert_eq!(
+                            meta_region_len * size_of::<spa_sys::spa_meta_region>(),
+                            meta_damage.size as usize
+                        );
                         let frame_damage_len = frame.damage.len();
+
+                        // SAFETY:
+                        // The Video Damage metadata is initialized by PipeWire as a contiguous array
+                        // of `spa_meta_region`. The type is `#[repr(C)]` POD (C integers only),
+                        // and `meta_region_len` is bounded by the metadata size, so it is safe
+                        // to treat as `&mut [spa_meta_region]`.
                         let meta_regions = unsafe {
                             let ptr = meta_damage.data as *mut spa_sys::spa_meta_region;
                             core::slice::from_raw_parts_mut(ptr, meta_region_len)
                         };
-                        let mut meta_region_iter = meta_regions.iter_mut();
+                        let mut meta_regions_iter = meta_regions.iter_mut();
 
                         if meta_region_len < frame_damage_len {
                             log::info!(
@@ -608,30 +631,31 @@ impl<'s> ScreencastLoop<'s> {
                             );
                             // TODO: Merge damage properly
                             // SAFETY: We know that `meta_regions` is not empty because at least one buffer is allocated.
-                            unsafe {
-                                let region = meta_region_iter.next().unwrap_unchecked();
-                                region.region.position.x = 0;
-                                region.region.position.y = 0;
-                                region.region.size.width = pw_buffer.frame_size.0;
-                                region.region.size.height = pw_buffer.frame_size.1;
-                            }
+                            let meta_region = meta_regions_iter.next().unwrap();
+                            update_meta_region(
+                                meta_region,
+                                0,
+                                0,
+                                pw_buffer.frame_size.0,
+                                pw_buffer.frame_size.1,
+                            );
                         } else {
                             frame.damage.iter().for_each(|rect| {
                                 // SAFETY: We know that `meta_regions` length is equal or less than `frame_damage` length.
-                                let region = unsafe { meta_region_iter.next().unwrap_unchecked() };
-                                region.region.position.x = rect.x;
-                                region.region.position.y = rect.y;
-                                region.region.size.width = rect.width as _;
-                                region.region.size.height = rect.height as _;
+                                let meta_region = meta_regions_iter.next().unwrap();
+                                update_meta_region(
+                                    meta_region,
+                                    rect.x,
+                                    rect.y,
+                                    rect.width as _,
+                                    rect.height as _,
+                                );
                             });
                         }
 
                         // Set invalid region to mark end of array
-                        if let Some(region) = meta_region_iter.next() {
-                            region.region.position.x = 0;
-                            region.region.position.y = 0;
-                            region.region.size.width = 0;
-                            region.region.size.height = 0;
+                        if let Some(meta_region) = meta_regions_iter.next() {
+                            update_meta_region(meta_region, 0, 0, 0, 0);
                         }
                     }
                 }
