@@ -99,6 +99,7 @@ impl Request {
 
 struct Session<T: Send + Sync + 'static> {
     data: T,
+    #[allow(clippy::type_complexity)]
     close_cb: Option<Box<dyn FnOnce(&mut T) + Send + Sync + 'static>>,
 }
 

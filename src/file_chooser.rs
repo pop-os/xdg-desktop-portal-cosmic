@@ -158,9 +158,9 @@ impl FileChooser {
         if let Err(err) = self
             .tx
             .send(subscription::Event::FileChooser(Args {
-                handle: handle.to_owned(),
-                app_id: app_id.to_string(),
-                parent_window: parent_window.to_string(),
+                _handle: handle.to_owned(),
+                _app_id: app_id.to_string(),
+                _parent_window: parent_window.to_string(),
                 title: title.to_string(),
                 options,
                 tx,
@@ -236,6 +236,7 @@ impl FileChooser {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Msg {
     DialogMessage(DialogMessage),
     DialogResult(DialogResult),
@@ -243,9 +244,9 @@ pub enum Msg {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Args {
-    pub handle: zvariant::ObjectPath<'static>,
-    pub app_id: String,
-    pub parent_window: String,
+    pub _handle: zvariant::ObjectPath<'static>,
+    pub _app_id: String,
+    pub _parent_window: String,
     pub title: String,
     pub options: FileChooserOptions,
     pub tx: Sender<PortalResponse<FileChooserResult>>,
@@ -426,7 +427,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
         }
     };
     let mut settings = DialogSettings::new().kind(kind);
-    //TODO: setting app_id breaks dialog floating: .app_id(args.app_id.clone());
+    //TODO: setting app_id breaks dialog floating: .app_id(args._app_id.clone());
     if let Some(path) = args.options.current_folder() {
         settings = settings.path(path);
     }

@@ -62,6 +62,7 @@ impl DmabufHelper {
 
     // TODO: consider scanout flag?
     // Consider tranches in some way?
+    #[allow(dead_code)]
     fn feedback_formats(&self) -> impl Iterator<Item = &DmabufFormat> {
         self.feedback
             .tranches()
@@ -70,6 +71,7 @@ impl DmabufHelper {
             .filter_map(|x| self.feedback.format_table().get(*x as usize))
     }
 
+    #[allow(dead_code)]
     pub fn modifiers_for_format(&self, format: u32) -> impl Iterator<Item = u64> + '_ {
         self.feedback_formats()
             .filter(move |x| x.format == format)

@@ -58,6 +58,7 @@ pub struct OutputState {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Msg {
     Access(access::Msg),
     FileChooser(window::Id, file_chooser::Msg),

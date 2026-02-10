@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables)]
+#![allow(dead_code, unused_variables, clippy::type_complexity)]
 
 use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
@@ -31,7 +31,6 @@ pub(crate) struct AccessDialogOptions {
     grant_label: Option<String>,
     icon: Option<String>,
     //(ID returned with the response, choices (ID, label), label, initial selection or "" meaning the portal should choose)
-    #[allow(clippy::type_complexity)]
     choices: Option<Vec<(String, String, Vec<(String, String)>, String)>>,
 }
 
