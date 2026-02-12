@@ -14,7 +14,12 @@ members = ["cosmic-portal-config"]
 [dependencies]
 anyhow = "1.0.100"
 ashpd = "0.12"
-cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
+# cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
+#     "gvfs",
+#     "wayland",
+# ] }
+
+cosmic-files = { path = "../cosmic-files", default-features = false, features = [
     "gvfs",
     "wayland",
 ] }
@@ -22,7 +27,8 @@ cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "d0e95be" }
 futures = "0.3"
 image = "0.25"
-cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
+# cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
+cosmic-bg-config = { path = "../cosmic-bg/config" }
 cosmic-portal-config = { path = "./cosmic-portal-config" }
 memmap2 = "0.9.8"
 # pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
@@ -50,7 +56,7 @@ rust-embed = "8.7.2"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-freedesktop-desktop-entry = "0.7.19"
+freedesktop-desktop-entry = "0.8"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.23.0"
@@ -58,7 +64,8 @@ tokio = { version = "1.47.1", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.11" }
 
 [dependencies.libcosmic]
-git = "https://github.com/pop-os/libcosmic"
+# git = "https://github.com/pop-os/libcosmic"
+path = "../libcosmic"
 # TODO: a11y feature crashes file chooser dialog
 default-features = false
 features = [
@@ -73,7 +80,8 @@ features = [
 ]
 
 [workspace.dependencies]
-cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
+cosmic-config = { path = "../libcosmic/cosmic-config" }
 log = "0.4.28"
 serde = "1.0.228"
 
@@ -81,9 +89,9 @@ serde = "1.0.228"
 gst = { package = "gstreamer", version = "0.24.2" }
 clap = { version = "4.5.48", features = ["derive"] }
 
-# [patch."https://github.com/pop-os/libcosmic"]
-# libcosmic = { path = "../libcosmic" }
-# cosmic-config = { path = "../libcosmic/cosmic-config" }
+[patch."https://github.com/pop-os/libcosmic"]
+libcosmic = { path = "../libcosmic" }
+cosmic-config = { path = "../libcosmic/cosmic-config" }
 
 [profile.release]
 opt-level = 3

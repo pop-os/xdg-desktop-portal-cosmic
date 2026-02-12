@@ -9,10 +9,7 @@ use cosmic::{
         gradient::Linear, layout, overlay, widget::Tree,
     },
     iced_widget::row,
-    widget::{
-        Row, button, divider::vertical, dropdown, horizontal_space, icon, image, layer_container,
-        text,
-    },
+    widget::{Row, button, divider::vertical, dropdown, icon, image, layer_container, space, text},
 };
 use cosmic_bg_config::Source;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -157,7 +154,7 @@ where
                     .height(Length::Fill)
                     .into(),
                 Some(Source::Color(color)) => {
-                    layer_container(horizontal_space().width(Length::Fill))
+                    layer_container(space::horizontal().width(Length::Fill))
                         .width(Length::Fill)
                         .height(Length::Fill)
                         .class(cosmic::theme::Container::Custom(Box::new(move |_| {
@@ -165,7 +162,7 @@ where
                             cosmic::iced_widget::container::Style {
                                 background: Some(match color {
                                     cosmic_bg_config::Color::Single(c) => Background::Color(
-                                        cosmic::iced::Color::new(c[0], c[1], c[2], 1.0),
+                                        cosmic::iced::Color::from_rgba(c[0], c[1], c[2], 1.0),
                                     ),
                                     cosmic_bg_config::Color::Gradient(
                                         cosmic_bg_config::Gradient { colors, radius },
@@ -343,8 +340,9 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
     fn overlay<'b>(
         &'b mut self,
         state: &'b mut Tree,
-        layout: Layout<'_>,
+        layout: Layout<'b>,
         renderer: &cosmic::Renderer,
+        viewport: &cosmic::iced_core::Rectangle,
         translation: iced::Vector,
     ) -> Option<cosmic::iced_core::overlay::Element<'b, Msg, cosmic::Theme, cosmic::Renderer>> {
         let children = [
@@ -358,24 +356,24 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         .filter_map(|((child, state), layout)| {
             child
                 .as_widget_mut()
-                .overlay(state, layout, renderer, translation)
+                .overlay(state, layout, renderer, viewport, translation)
         })
         .collect::<Vec<_>>();
 
         (!children.is_empty()).then(|| overlay::Group::with_children(children).overlay())
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut cosmic::iced_core::widget::Tree,
-        event: cosmic::iced_core::Event,
+        event: &cosmic::iced_core::Event,
         layout: Layout<'_>,
         cursor: cosmic::iced_core::mouse::Cursor,
         renderer: &cosmic::Renderer,
         clipboard: &mut dyn cosmic::iced_core::Clipboard,
         shell: &mut cosmic::iced_core::Shell<'_, Msg>,
         viewport: &cosmic::iced_core::Rectangle,
-    ) -> cosmic::iced_core::event::Status {
+    ) {
         let children = [
             &mut self.bg_element,
             &mut self.fg_element,
@@ -384,7 +382,6 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
         let layout = layout.children().collect::<Vec<_>>();
         // draw children in order
-        let mut status = cosmic::iced_core::event::Status::Ignored;
         for (i, (layout, child)) in layout
             .into_iter()
             .zip(children.into_iter())
@@ -393,24 +390,13 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         {
             let tree = &mut tree.children[i];
 
-            status = child.as_widget_mut().on_event(
-                tree,
-                event.clone(),
-                layout,
-                cursor,
-                renderer,
-                clipboard,
-                shell,
-                viewport,
+            child.as_widget_mut().update(
+                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
             );
-            if matches!(event, cosmic::iced_core::event::Event::PlatformSpecific(_)) {
-                continue;
-            }
-            if matches!(status, cosmic::iced_core::event::Status::Captured) {
-                return status;
+            if shell.is_event_captured() {
+                break;
             }
         }
-        status
     }
 
     fn mouse_interaction(
@@ -441,14 +427,18 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
     }
 
     fn operate(
-        &self,
+        &mut self,
         tree: &mut cosmic::iced_core::widget::Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
         operation: &mut dyn cosmic::widget::Operation<()>,
     ) {
         let layout = layout.children().collect::<Vec<_>>();
-        let children = [&self.bg_element, &self.fg_element, &self.menu_element];
+        let children = [
+            &mut self.bg_element,
+            &mut self.fg_element,
+            &mut self.menu_element,
+        ];
         for (i, (layout, child)) in layout
             .into_iter()
             .zip(children.into_iter())
@@ -456,7 +446,9 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
             .rev()
         {
             let tree = &mut tree.children[i];
-            child.as_widget().operate(tree, layout, renderer, operation);
+            child
+                .as_widget_mut()
+                .operate(tree, layout, renderer, operation);
         }
     }
 
@@ -473,7 +465,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut cosmic::iced_core::widget::Tree,
         renderer: &cosmic::Renderer,
         limits: &cosmic::iced_core::layout::Limits,
@@ -482,15 +474,15 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         let bg_image = &mut children[0];
         let bg_node = self
             .bg_element
-            .as_widget()
+            .as_widget_mut()
             .layout(bg_image, renderer, limits);
         let fg_node = self
             .fg_element
-            .as_widget()
+            .as_widget_mut()
             .layout(&mut children[1], renderer, limits);
         let mut menu_node =
             self.menu_element
-                .as_widget()
+                .as_widget_mut()
                 .layout(&mut children[2], renderer, limits);
         let menu_bounds = menu_node.bounds();
         menu_node = menu_node.move_to(Point {
