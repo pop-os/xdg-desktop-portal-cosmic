@@ -37,7 +37,7 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         tree::Tag::of::<MyState>()
     }
 
-    fn layout(&self, _tree: &mut Tree, _renderer: &cosmic::Renderer, limits: &Limits) -> Node {
+    fn layout(&mut self, _tree: &mut Tree, _renderer: &cosmic::Renderer, limits: &Limits) -> Node {
         let limits = limits.width(Length::Fill).height(Length::Fill);
         Node::new(limits.resolve(Length::Fill, Length::Fill, Size::ZERO))
     }
@@ -76,6 +76,7 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
                     color: accent,
                 },
                 shadow: Shadow::default(),
+                snap: true,
             },
             Background::Color(Color::TRANSPARENT),
         );
@@ -111,43 +112,37 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         }
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         state: &mut Tree,
-        event: cosmic::iced_core::Event,
+        event: &cosmic::iced_core::Event,
         layout: cosmic::iced_core::Layout<'_>,
         cursor: cosmic::iced_core::mouse::Cursor,
         _renderer: &cosmic::Renderer,
         _clipboard: &mut dyn cosmic::iced_core::Clipboard,
         shell: &mut cosmic::iced_core::Shell<'_, Msg>,
         _viewport: &cosmic::iced_core::Rectangle,
-    ) -> cosmic::iced_core::event::Status {
+    ) {
         // update hover state
         let my_state = state.state.downcast_mut::<MyState>();
         let hovered = cursor.is_over(layout.bounds());
         let changed = my_state.hovered != hovered;
         my_state.hovered = hovered;
 
-        let mut ret = match event {
-            cosmic::iced_core::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                shell.publish(self.on_press.clone());
-                cosmic::iced_core::event::Status::Captured
-            }
-            _ => cosmic::iced_core::event::Status::Ignored,
-        };
-
+        if let cosmic::iced_core::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) =
+            event
+        {
+            shell.publish(self.on_press.clone());
+            shell.capture_event();
+        }
         if changed {
-            ret = match event {
-                cosmic::iced_core::Event::Mouse(mouse::Event::CursorMoved { .. })
-                | cosmic::iced_core::Event::Mouse(mouse::Event::CursorEntered) => {
-                    shell.publish(self.on_enter.clone());
-                    cosmic::iced_core::event::Status::Captured
-                }
-                _ => cosmic::iced_core::event::Status::Ignored,
-            };
-        };
-
-        ret
+            if let cosmic::iced_core::Event::Mouse(mouse::Event::CursorMoved { .. })
+            | cosmic::iced_core::Event::Mouse(mouse::Event::CursorEntered) = event
+            {
+                shell.publish(self.on_enter.clone());
+                shell.capture_event();
+            }
+        }
     }
 }
 

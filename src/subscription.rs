@@ -1,6 +1,6 @@
 // contains the subscription which sends portal events and response channels to iced.
 
-use std::any::TypeId;
+use std::{any::TypeId, hash::Hash};
 
 use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
 use futures::{SinkExt, StreamExt, future};
@@ -36,11 +36,18 @@ pub enum State {
 pub(crate) fn portal_subscription(
     helper: wayland::WaylandHelper,
 ) -> cosmic::iced::Subscription<Event> {
-    struct PortalSubscription;
     struct ConfigSubscription;
+    struct Wrapper {
+        helper: wayland::WaylandHelper,
+    }
+    impl Hash for Wrapper {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            std::any::TypeId::of::<wayland::WaylandHelper>().hash(state);
+        }
+    }
     Subscription::batch([
-        Subscription::run_with_id(
-            TypeId::of::<PortalSubscription>(),
+        Subscription::run_with(Wrapper { helper }, |Wrapper { helper }| {
+            let helper = helper.clone();
             cosmic::iced_futures::stream::channel(10, |mut output| async move {
                 let mut state = State::Init;
                 loop {
@@ -49,8 +56,8 @@ pub(crate) fn portal_subscription(
                         future::pending::<()>().await;
                     }
                 }
-            }),
-        ),
+            })
+        }),
         cosmic_config::config_subscription(
             TypeId::of::<ConfigSubscription>(),
             config::APP_ID.into(),
