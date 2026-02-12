@@ -377,7 +377,7 @@ fn toplevel_button(
         .selected(is_selected)
         .on_press(msg);
     let mut children = Vec::new();
-    children.push(icon.as_cosmic_icon().size(24).into());
+    children.push(icon.as_cosmic_icon().icon().size(24).into());
     children.push(button.into());
     // TODO
     if is_selected {
@@ -388,7 +388,7 @@ fn toplevel_button(
 
 pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let Some(args) = portal.screencast_args.as_ref() else {
-        return widget::horizontal_space()
+        return widget::space::horizontal()
             .width(iced::Length::Fixed(1.0))
             .into();
     };

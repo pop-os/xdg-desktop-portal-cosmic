@@ -310,7 +310,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
     }
 
     fn layout(
-        &self,
+        &mut self,
         _tree: &mut cosmic::iced_core::widget::Tree,
         _renderer: &cosmic::Renderer,
         limits: &cosmic::iced_core::layout::Limits,
@@ -355,42 +355,42 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         }
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         _state: &mut iced_core::widget::Tree,
-        event: iced_core::Event,
+        event: &iced_core::Event,
         layout: iced_core::Layout<'_>,
         cursor: iced_core::mouse::Cursor,
         _renderer: &cosmic::Renderer,
         clipboard: &mut dyn iced_core::Clipboard,
         shell: &mut iced_core::Shell<'_, Msg>,
         _viewport: &Rectangle,
-    ) -> iced_core::event::Status {
+    ) {
         match event {
-            cosmic::iced_core::Event::Dnd(DndEvent::Offer(id, e)) if id == Some(self.drag_id) => {
+            cosmic::iced_core::Event::Dnd(DndEvent::Offer(id, e)) if *id == Some(self.drag_id) => {
                 if self.drag_state == DragState::None {
-                    return cosmic::iced_core::event::Status::Ignored;
+                    return;
                 }
                 // Don't need to accept mime types or actions
                 match e {
                     OfferEvent::Enter { x, y, .. } => {
-                        let p = Point::new(x as f32, y as f32);
+                        let p = Point::new(*x as f32, *y as f32);
                         let cursor = mouse::Cursor::Available(p);
                         if !cursor.is_over(layout.bounds()) {
-                            return cosmic::iced_core::event::Status::Ignored;
+                            return;
                         }
 
                         self.handle_drag_pos(x.round() as i32, y.round() as i32, shell);
-                        cosmic::iced_core::event::Status::Captured
+                        shell.capture_event();
                     }
                     OfferEvent::Motion { x, y } => {
-                        let p = Point::new(x as f32, y as f32);
+                        let p = Point::new(*x as f32, *y as f32);
                         let cursor = mouse::Cursor::Available(p);
                         if !cursor.is_over(layout.bounds()) {
-                            return cosmic::iced_core::event::Status::Ignored;
+                            return;
                         }
                         self.handle_drag_pos(x.round() as i32, y.round() as i32, shell);
-                        cosmic::iced_core::event::Status::Captured
+                        shell.capture_event();
                     }
                     OfferEvent::Drop => {
                         self.drag_state = DragState::None;
@@ -398,9 +398,9 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                             DragState::None,
                             self.rectangle_selection,
                         ));
-                        cosmic::iced_core::event::Status::Captured
+                        shell.capture_event();
                     }
-                    _ => cosmic::iced_core::event::Status::Ignored,
+                    _ => {}
                 }
             }
             cosmic::iced_core::Event::Dnd(DndEvent::Source(e)) => {
@@ -414,12 +414,10 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                         self.rectangle_selection,
                     ));
                 }
-
-                cosmic::iced_core::event::Status::Ignored
             }
             cosmic::iced_core::Event::Mouse(e) => {
                 if !cursor.is_over(layout.bounds()) {
-                    return cosmic::iced_core::event::Status::Ignored;
+                    return;
                 }
 
                 // on press start internal DnD and set drag state
@@ -453,12 +451,12 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                         self.drag_state = s;
                         shell.publish((self.on_rectangle)(s, self.rectangle_selection));
                     }
-                    return cosmic::iced_core::event::Status::Captured;
+                    return shell.capture_event();
                 }
-                cosmic::iced_core::event::Status::Captured
+                shell.capture_event();
             }
-            _ => cosmic::iced_core::event::Status::Ignored,
-        }
+            _ => (),
+        };
     }
 
     fn draw(
@@ -564,6 +562,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                 color: accent,
             },
             shadow: Shadow::default(),
+            snap: true,
         };
         renderer.fill_quad(quad, Color::TRANSPARENT);
 
@@ -598,6 +597,7 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                     color: Color::TRANSPARENT,
                 },
                 shadow: Shadow::default(),
+                snap: true,
             };
             renderer.fill_quad(quad, accent);
         }
