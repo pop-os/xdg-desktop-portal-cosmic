@@ -29,6 +29,7 @@ memmap2 = "0.9.8"
 pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", features = [
     "v0_3_33",
 ] }
+reis = { version = "0.5", features = ["tokio"] }
 png = "0.18"
 rustix = { version = "1.1", features = ["fs"] }
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }

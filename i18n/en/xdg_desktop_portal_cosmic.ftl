@@ -13,3 +13,9 @@ share-screen = Share your screen
 unknown-application = Unknown Application
 output = Output
 window = Window
+
+remote-desktop-access = Remote Desktop Access
+    .description = "{$app_name}" is requesting remote control of your desktop. The following inputs will be shared:
+remote-desktop-keyboard = keyboard
+remote-desktop-pointer = pointer
+remote-desktop-touchscreen = touchscreen

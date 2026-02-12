@@ -130,8 +130,18 @@ pub struct StreamProps {
     position: Option<(i32, i32)>,
     size: (i32, i32),
     source_type: u32,
-    // TODO: Add when remote desktop portal is implemented
     mapping_id: Option<String>,
+}
+
+impl StreamProps {
+    pub fn new(position: Option<(i32, i32)>, size: (i32, i32), source_type: u32) -> Self {
+        Self {
+            position,
+            size,
+            source_type,
+            mapping_id: None,
+        }
+    }
 }
 
 #[derive(zvariant::SerializeDict, zvariant::Type)]
