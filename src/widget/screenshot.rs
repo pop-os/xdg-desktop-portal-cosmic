@@ -194,7 +194,7 @@ where
                         .into()
                 }
                 None => image::Image::new(image::Handle::from_path(
-                    "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png",
+                    "/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg",
                 ))
                 .content_fit(ContentFit::Cover)
                 .width(Length::Fill)
