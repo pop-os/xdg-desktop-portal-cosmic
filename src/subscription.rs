@@ -10,7 +10,7 @@ use zbus::{Connection, fdo, zvariant};
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
     DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland,
+    remote_desktop::RemoteDesktop, screencast::ScreenCast, screenshot::Screenshot, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -20,6 +20,8 @@ pub enum Event {
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
+    RemoteDesktop(crate::remote_desktop_dialog::Args),
+    CancelRemoteDesktop(zvariant::ObjectPath<'static>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -86,6 +88,10 @@ pub(crate) async fn process_changes(
                     DBUS_PATH,
                     ScreenCast::new(wayland_helper.clone(), tx.clone()),
                 )?
+                .serve_at(
+                    DBUS_PATH,
+                    RemoteDesktop::new(wayland_helper.clone(), tx.clone()),
+                )?
                 .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
@@ -128,6 +134,16 @@ pub(crate) async fn process_changes(
                     Event::CancelScreencast(handle) => {
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
                             log::error!("Error sending screencast cancel: {:?}", err);
+                        };
+                    }
+                    Event::RemoteDesktop(args) => {
+                        if let Err(err) = output.send(Event::RemoteDesktop(args)).await {
+                            log::error!("Error sending remotedesktop event: {:?}", err);
+                        };
+                    }
+                    Event::CancelRemoteDesktop(handle) => {
+                        if let Err(err) = output.send(Event::CancelRemoteDesktop(handle)).await {
+                            log::error!("Error sending remotedesktop cancel: {:?}", err);
                         };
                     }
                     Event::Accent(a) => {

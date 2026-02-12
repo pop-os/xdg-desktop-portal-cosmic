@@ -14,6 +14,8 @@ mod buffer;
 mod documents;
 mod file_chooser;
 mod localize;
+mod remote_desktop;
+mod remote_desktop_dialog;
 mod screencast;
 mod screencast_dialog;
 mod screencast_thread;
