@@ -230,7 +230,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
             .icon(icon)
             .secondary_action(cancel_button)
             .primary_action(allow_button),
-        |key| match key {
+        |key, _| match key {
             Key::Named(Named::Enter) => Some(Msg::Allow),
             Key::Named(Named::Escape) => Some(Msg::Cancel),
             _ => None,

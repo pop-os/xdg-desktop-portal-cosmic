@@ -17,7 +17,11 @@ use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
-use std::{collections::HashMap, io, path::PathBuf};
+use std::{
+    collections::HashMap,
+    io,
+    path::{Path, PathBuf},
+};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
@@ -215,13 +219,17 @@ impl Screenshot {
         Ok(map)
     }
 
-    pub fn save_rgba(img: &RgbaImage, path: &PathBuf) -> anyhow::Result<()> {
-        let mut file = std::fs::File::create(path)?;
-        Ok(write_png(&mut file, img)?)
-    }
+    pub fn save_rgba(img: &RgbaImage, path: Option<&Path>) -> anyhow::Result<Vec<u8>> {
+        // Write to the buffer first since the image data will always be copied to the clipboard.
+        // This skips encoding the PNG twice.
+        let mut buffer = Vec::new();
+        write_png(&mut buffer, img)?;
 
-    pub fn save_rgba_to_buffer(img: &RgbaImage, buffer: &mut Vec<u8>) -> anyhow::Result<()> {
-        Ok(write_png(buffer, img)?)
+        if let Some(path) = path {
+            std::fs::write(path, &buffer)?;
+        }
+
+        Ok(buffer)
     }
 
     pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
@@ -368,6 +376,7 @@ fn write_png<W: io::Write>(w: W, image: &RgbaImage) -> Result<(), png::EncodingE
 #[derive(Debug, Clone)]
 pub enum Msg {
     Capture,
+    CaptureWithLocation(ImageSaveLocation),
     Cancel,
     Choice(Choice),
     OutputChanged(WlOutput),
@@ -604,10 +613,32 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
             theme.spacing,
             i as u128,
         ),
-        |key| match key {
-            Key::Named(Named::Enter) => Some(Msg::Capture),
-            Key::Named(Named::Escape) => Some(Msg::Cancel),
-            _ => None,
+        |key, modifiers| {
+            if modifiers.control() {
+                match key {
+                    Key::Named(Named::Copy) => {
+                        return Some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard));
+                    }
+                    Key::Named(Named::Save) => {
+                        return Some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures));
+                    }
+                    Key::Character(ref value) => {
+                        let value = value.as_str();
+                        if value.eq_ignore_ascii_case("c") {
+                            return Some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard));
+                        } else if value.eq_ignore_ascii_case("s") {
+                            return Some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            match key {
+                Key::Named(Named::Enter) => Some(Msg::Capture),
+                Key::Named(Named::Escape) => Some(Msg::Cancel),
+                _ => None,
+            }
         },
     )
     .into()
@@ -640,19 +671,13 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             match choice {
                 Choice::Output(name) => {
                     if let Some(img) = images.remove(&name) {
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
+                        if let Ok(buffer) = Screenshot::save_rgba(&img.rgba, image_path.as_deref())
+                            .inspect_err(|err| {
                                 log::error!("Failed to capture screenshot: {:?}", err);
-                            };
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
-                            {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
                                 success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
+                            })
+                        {
+                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
                         }
                     } else {
                         log::error!("Failed to find output {}", name);
@@ -684,18 +709,13 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                             .collect::<Vec<_>>();
                         let img = combined_image(r, frames);
 
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img, image_path) {
+                        if let Ok(buffer) = Screenshot::save_rgba(&img, image_path.as_deref())
+                            .inspect_err(|err| {
+                                log::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
-                            }
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img, &mut buffer) {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
+                            })
+                        {
+                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
                         }
                     } else {
                         success = false;
@@ -707,20 +727,13 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
-                        if let Some(ref image_path) = image_path {
-                            if let Err(err) = Screenshot::save_rgba(&img.rgba, image_path) {
+                        if let Ok(buffer) = Screenshot::save_rgba(&img.rgba, image_path.as_deref())
+                            .inspect_err(|err| {
                                 log::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
-                            }
-                        } else {
-                            let mut buffer = Vec::new();
-                            if let Err(e) = Screenshot::save_rgba_to_buffer(&img.rgba, &mut buffer)
-                            {
-                                log::error!("Failed to save screenshot to buffer: {:?}", e);
-                                success = false;
-                            } else {
-                                cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)))
-                            };
+                            })
+                        {
+                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
                         }
                     } else {
                         success = false;
@@ -750,6 +763,15 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             });
             cosmic::Task::batch(cmds)
         }
+        Msg::CaptureWithLocation(location) => {
+            if let Some(args) = portal.screenshot_args.as_mut() {
+                args.location = location;
+            } else {
+                log::error!("Failed to find screenshot Args for CaptureWithLocation message.");
+                return cosmic::Task::none();
+            }
+            update_msg(portal, Msg::Capture)
+        }
         Msg::Cancel => {
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
             let Some(args) = portal.screenshot_args.take() else {
@@ -767,6 +789,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         }
         Msg::Choice(c) => {
             let choice = (&c).into();
+            // Only save config when drag is finished to avoid disk writes on every mouse motion
+            let should_save_config = !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
             let last_rect = if let Choice::Rectangle(r, _) = &c {
                 portal.prev_rectangle = Some(*r);
                 Some(config::screenshot::Rect {
@@ -784,13 +808,17 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             } else {
                 log::error!("Failed to find screenshot Args for Choice message.");
             }
-            cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
-                config::screenshot::Screenshot {
-                    choice,
-                    last_rectangle: last_rect,
-                    ..portal.config.screenshot
-                },
-            ))
+            if should_save_config {
+                cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
+                    config::screenshot::Screenshot {
+                        choice,
+                        last_rectangle: last_rect,
+                        ..portal.config.screenshot
+                    },
+                ))
+            } else {
+                cosmic::Task::none()
+            }
         }
         Msg::OutputChanged(wl_output) => {
             if let (Some(args), Some(o)) = (
@@ -890,7 +918,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
             let source = bg_state.wallpapers.iter().find(|s| s.0 == o.name);
             o.bg_source = Some(source.cloned().map(|s| s.1).unwrap_or_else(|| {
                 cosmic_bg_config::Source::Path(
-                    "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
+                    "/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg".into(),
                 )
             }));
         }
@@ -898,7 +926,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
         log::error!("Failed to get bg config state");
         for o in &mut portal.outputs {
             o.bg_source = Some(cosmic_bg_config::Source::Path(
-                "/usr/share/backgrounds/pop/kate-hazen-COSMIC-desktop-wallpaper.png".into(),
+                "/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg".into(),
             ));
         }
     }
