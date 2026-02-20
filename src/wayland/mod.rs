@@ -1,9 +1,9 @@
 use cosmic_client_toolkit::{
     screencopy::{
         CaptureCursorSession, CaptureFrame, CaptureOptions, CaptureSession, Capturer,
-        FailureReason, Formats, Frame, ScreencopyCursorSessionData, ScreencopyFrameData,
-        ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData, ScreencopySessionDataExt,
-        ScreencopyState,
+        FailureReason, Formats, Frame, ScreencopyCursorSessionData, ScreencopyCursorSessionDataExt,
+        ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
+        ScreencopySessionDataExt, ScreencopyState,
     },
     sctk::{
         self,
@@ -413,7 +413,10 @@ impl WaylandHelper {
                             &source,
                             pointer,
                             &self.inner.qh,
-                            ScreencopyCursorSessionData::default(),
+                            CursorSessionData {
+                                session: weak_session.clone(),
+                                session_data: ScreencopyCursorSessionData::default(),
+                            },
                         )
                         .unwrap();
                     let capture_session = cursor_session
@@ -724,11 +727,11 @@ impl ScreencopyHandler for AppData {
         x: i32,
         y: i32,
     ) {
-        let data = session.data::<CursorCaptureSessionData>().unwrap();
+        let data = session.data::<CursorSessionData>().unwrap();
         if let Some(session) = data.session.upgrade() {
             let mut value = [0; 8];
-            value[..3].copy_from_slice(&x.to_ne_bytes());
-            value[3..].copy_from_slice(&y.to_ne_bytes());
+            value[..4].copy_from_slice(&x.to_ne_bytes());
+            value[4..].copy_from_slice(&y.to_ne_bytes());
             let value = u64::from_ne_bytes(value);
             session.cursor_position.store(value, Ordering::Relaxed);
         }
@@ -841,6 +844,17 @@ struct SessionData {
 
 impl ScreencopySessionDataExt for SessionData {
     fn screencopy_session_data(&self) -> &ScreencopySessionData {
+        &self.session_data
+    }
+}
+
+struct CursorSessionData {
+    session: Weak<SessionInner>,
+    session_data: ScreencopyCursorSessionData,
+}
+
+impl ScreencopyCursorSessionDataExt for CursorSessionData {
+    fn screencopy_cursor_session_data(&self) -> &ScreencopyCursorSessionData {
         &self.session_data
     }
 }
