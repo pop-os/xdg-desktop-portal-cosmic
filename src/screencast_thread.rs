@@ -79,11 +79,14 @@ impl MetadataCursor {
     }
 
     // , image: &crate::wayland::ShmImage<std::os::fd::OwnedFd>
-    fn update(&mut self, image: Option<&image::RgbaImage>) {
+    fn update(&mut self, image: Option<&image::RgbaImage>, position: (i32, i32)) {
         self.meta_cursor = spa_sys::spa_meta_cursor {
             id: 1,
             flags: 0,
-            position: spa_sys::spa_point { x: 50, y: 50 },
+            position: spa_sys::spa_point {
+                x: position.0,
+                y: position.1,
+            },
             hotspot: spa_sys::spa_point { x: 0, y: 0 },
             //bitmap_offset: 0,
             bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
@@ -528,9 +531,8 @@ impl StreamData {
                             MetadataCursor::size_of(64, 64),
                         )
                     } {
-                        // cursor.update(self.update_cursor);
-                        // XXX update_cursor?
-                        cursor.update(self.cursor_image.as_ref());
+                        let position = self.session.cursor_position();
+                        cursor.update(self.cursor_image.as_ref(), position);
                         self.update_cursor = false;
                     }
                 }
