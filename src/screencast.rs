@@ -339,7 +339,7 @@ impl ScreenCast {
             }
 
             let mut failed = false;
-            let mut screencast_threads = Vec::new();
+            let mut screencast_threads = Vec::<ScreencastThread>::new();
             while let Some(res) = res_futures.next().await {
                 match res {
                     Ok(thread) => screencast_threads.push(thread),
@@ -394,7 +394,7 @@ impl ScreenCast {
     #[zbus(property)]
     async fn available_cursor_modes(&self) -> u32 {
         // TODO: Support metadata?
-        CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED
+        CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED | CURSOR_MODE_METADATA
     }
 
     #[zbus(property, name = "version")]
