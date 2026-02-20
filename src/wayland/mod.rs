@@ -1,5 +1,6 @@
 use cosmic_client_toolkit::screencopy::{
-    CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
+    CaptureCursorSession, CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason,
+    Formats, Frame, ScreencopyCursorSessionData, ScreencopyCursorSessionDataExt,
     ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
     ScreencopySessionDataExt, ScreencopyState,
 };
@@ -8,6 +9,8 @@ use cosmic_client_toolkit::sctk::dmabuf::{
 };
 use cosmic_client_toolkit::sctk::output::{OutputHandler, OutputInfo, OutputState};
 use cosmic_client_toolkit::sctk::registry::{ProvidesRegistryState, RegistryState};
+use cosmic_client_toolkit::sctk::seat::pointer::{PointerEvent, PointerHandler};
+use cosmic_client_toolkit::sctk::seat::{self, SeatHandler, SeatState};
 use cosmic_client_toolkit::sctk::shm::{Shm, ShmHandler};
 use cosmic_client_toolkit::sctk::{self};
 use cosmic_client_toolkit::toplevel_info::{ToplevelInfo, ToplevelInfoState};
@@ -16,10 +19,11 @@ use futures::channel::oneshot;
 use futures::stream::{FuturesOrdered, Stream, StreamExt};
 use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool};
+use wayland_client::protocol::{wl_buffer, wl_output, wl_pointer, wl_seat, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1;
@@ -33,6 +37,8 @@ pub use cosmic_client_toolkit::screencopy::{CaptureSource, Rect};
 
 use crate::buffer;
 
+mod cursor_stream;
+pub use cursor_stream::CursorStream;
 mod gbm_devices;
 mod toplevel;
 mod workspaces;
@@ -80,6 +86,8 @@ struct WaylandHelperInner {
     wl_shm: wl_shm::WlShm,
     dmabuf: Mutex<Option<DmabufHelper>>,
     zwp_dmabuf: Option<ZwpLinuxDmabufV1>,
+    // TODO: Multiple; remove on seat or cap removal
+    pointer: Mutex<Option<wl_pointer::WlPointer>>,
 }
 
 // TODO seperate state object from what is passed to threads
@@ -97,6 +105,7 @@ struct AppData {
     dmabuf_state: DmabufState,
     toplevel_info_state: ToplevelInfoState,
     workspace_state: WorkspaceState,
+    seat_state: SeatState,
 }
 
 impl AppData {
@@ -151,10 +160,15 @@ struct SessionState {
 }
 
 struct SessionInner {
+    source: CaptureSource,
     wayland_helper: WaylandHelper,
     capture_session: CaptureSession,
+    capture_cursor_session: Mutex<Option<(CaptureCursorSession, CaptureSession)>>,
     condvar: Condvar,
     state: Mutex<SessionState>,
+    // Pack x and y into a single atomic
+    cursor_position: AtomicU64,
+    cursor_hotspot: AtomicU64,
 }
 
 pub struct Session(Arc<SessionInner>);
@@ -224,6 +238,70 @@ impl Session {
     pub fn is_stopped(&self) -> bool {
         self.0.state.lock().unwrap().stopped
     }
+
+    // Should only be called once
+    // TODO rename cursor_image_stream?
+    pub fn cursor_stream(&self) -> Option<cursor_stream::CursorStream> {
+        // TODO: If multiple seat is ever supported, how can it be handled?
+        let pointer = self.0.wayland_helper.inner.pointer.lock().unwrap();
+        let pointer = pointer.as_ref()?;
+
+        let weak_session = Arc::downgrade(&self.0);
+
+        let mut capture_cursor_session = self.0.capture_cursor_session.lock().unwrap();
+        if capture_cursor_session.is_some() {
+            return None;
+        }
+
+        let cursor_session = self
+            .0
+            .wayland_helper
+            .inner
+            .capturer
+            .create_cursor_session(
+                &self.0.source,
+                pointer,
+                &self.0.wayland_helper.inner.qh,
+                CursorSessionData {
+                    session: weak_session.clone(),
+                    session_data: ScreencopyCursorSessionData::default(),
+                },
+            )
+            .unwrap();
+
+        let capture_session = cursor_session
+            .capture_session(
+                &self.0.wayland_helper.inner.qh,
+                CursorCaptureSessionData {
+                    session: weak_session.clone(),
+                    session_data: ScreencopySessionData::default(),
+                    waker: Mutex::new(None),
+                    formats: Mutex::new(None),
+                },
+            )
+            .unwrap();
+
+        *capture_cursor_session = Some((cursor_session, capture_session.clone()));
+
+        Some(cursor_stream::CursorStream::new(
+            &capture_session,
+            &self.0.wayland_helper,
+        ))
+    }
+
+    pub fn cursor_position(&self) -> (i32, i32) {
+        let value = self.0.cursor_position.load(Ordering::Relaxed).to_ne_bytes();
+        let x = i32::from_ne_bytes(value[..4].try_into().unwrap());
+        let y = i32::from_ne_bytes(value[4..].try_into().unwrap());
+        (x, y)
+    }
+
+    pub fn cursor_hotspot(&self) -> (i32, i32) {
+        let value = self.0.cursor_hotspot.load(Ordering::Relaxed).to_ne_bytes();
+        let x = i32::from_ne_bytes(value[..4].try_into().unwrap());
+        let y = i32::from_ne_bytes(value[4..].try_into().unwrap());
+        (x, y)
+    }
 }
 
 impl WaylandHelper {
@@ -247,6 +325,7 @@ impl WaylandHelper {
                 wl_shm: shm_state.wl_shm().clone(),
                 dmabuf: Mutex::new(None),
                 zwp_dmabuf,
+                pointer: Mutex::new(None),
             }),
         };
         let dmabuf_state = DmabufState::new(&globals, &qh);
@@ -262,6 +341,7 @@ impl WaylandHelper {
             workspace_state: WorkspaceState::new(&registry_state, &qh),
             toplevel_info_state: ToplevelInfoState::new(&registry_state, &qh),
             registry_state,
+            seat_state: SeatState::new(&globals, &qh),
         };
         event_queue.flush().unwrap();
 
@@ -368,10 +448,14 @@ impl WaylandHelper {
             self.inner.conn.flush().unwrap();
 
             SessionInner {
+                source,
                 wayland_helper: self.clone(),
                 capture_session,
+                capture_cursor_session: Mutex::new(None),
                 condvar: Condvar::new(),
                 state: Default::default(),
+                cursor_position: AtomicU64::new(0),
+                cursor_hotspot: AtomicU64::new(0),
             }
         }))
     }
@@ -599,6 +683,12 @@ impl ScreencopyHandler for AppData {
             session.update(|data| {
                 data.formats = Some(formats.clone());
             });
+        } else if let Some(data) = session.data::<CursorCaptureSessionData>() {
+            *data.formats.lock().unwrap() = Some(formats.clone());
+            let waker = data.waker.lock().unwrap();
+            if let Some(waker) = &*waker {
+                waker.wake_by_ref();
+            }
         }
     }
 
@@ -618,6 +708,7 @@ impl ScreencopyHandler for AppData {
         screencopy_frame: &CaptureFrame,
         frame: Frame,
     ) {
+        // TODO apply hotspot if this is a cursor capture?
         if let Some(sender) = screencopy_frame
             .data::<FrameData>()
             .and_then(|data| data.sender.lock().unwrap().take())
@@ -638,6 +729,43 @@ impl ScreencopyHandler for AppData {
             .and_then(|data| data.sender.lock().unwrap().take())
         {
             let _ = sender.send(Err(reason));
+        }
+    }
+
+    fn cursor_position(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        session: &CaptureCursorSession,
+        x: i32,
+        y: i32,
+    ) {
+        let data = session.data::<CursorSessionData>().unwrap();
+        if let Some(session) = data.session.upgrade() {
+            let mut value = [0; 8];
+            value[..4].copy_from_slice(&x.to_ne_bytes());
+            value[4..].copy_from_slice(&y.to_ne_bytes());
+            let value = u64::from_ne_bytes(value);
+            session.cursor_position.store(value, Ordering::Relaxed);
+        }
+    }
+
+    // XXX delay until ready event?
+    fn cursor_hotspot(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        session: &CaptureCursorSession,
+        x: i32,
+        y: i32,
+    ) {
+        let data = session.data::<CursorSessionData>().unwrap();
+        if let Some(session) = data.session.upgrade() {
+            let mut value = [0; 8];
+            value[..4].copy_from_slice(&x.to_ne_bytes());
+            value[4..].copy_from_slice(&y.to_ne_bytes());
+            let value = u64::from_ne_bytes(value);
+            session.cursor_hotspot.store(value, Ordering::Relaxed);
         }
     }
 }
@@ -689,6 +817,49 @@ impl DmabufHandler for AppData {
     }
 }
 
+impl SeatHandler for AppData {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: seat::Capability,
+    ) {
+        if capability == seat::Capability::Pointer {
+            let pointer = self.seat_state.get_pointer(qh, &seat).unwrap();
+            *self.wayland_helper.inner.pointer.lock().unwrap() = Some(pointer);
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _seat: wl_seat::WlSeat,
+        _capability: seat::Capability,
+    ) {
+    }
+
+    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for AppData {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        _events: &[PointerEvent],
+    ) {
+    }
+}
+
 impl Dispatch<wl_shm_pool::WlShmPool, ()> for AppData {
     fn event(
         _app_data: &mut Self,
@@ -724,6 +895,32 @@ impl ScreencopySessionDataExt for SessionData {
     }
 }
 
+struct CursorSessionData {
+    session: Weak<SessionInner>,
+    session_data: ScreencopyCursorSessionData,
+}
+
+impl ScreencopyCursorSessionDataExt for CursorSessionData {
+    fn screencopy_cursor_session_data(&self) -> &ScreencopyCursorSessionData {
+        &self.session_data
+    }
+}
+
+struct CursorCaptureSessionData {
+    session: Weak<SessionInner>,
+    session_data: ScreencopySessionData,
+    waker: Mutex<Option<std::task::Waker>>,
+    formats: Mutex<Option<Formats>>,
+}
+
+impl ScreencopySessionDataExt for CursorCaptureSessionData {
+    fn screencopy_session_data(&self) -> &ScreencopySessionData {
+        &self.session_data
+    }
+}
+
+// enum for cursor frames vs non cursor?
+// Surface, Cursor
 struct FrameData {
     frame_data: ScreencopyFrameData,
     #[allow(clippy::type_complexity)]
@@ -740,4 +937,6 @@ sctk::delegate_shm!(AppData);
 sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);
 sctk::delegate_dmabuf!(AppData);
+sctk::delegate_seat!(AppData);
+sctk::delegate_pointer!(AppData);
 cosmic_client_toolkit::delegate_screencopy!(AppData);
