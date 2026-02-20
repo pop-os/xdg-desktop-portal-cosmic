@@ -23,7 +23,10 @@ use futures::{
 use std::{
     collections::HashMap,
     os::fd::{AsFd, OwnedFd},
-    sync::{Arc, Condvar, Mutex, Weak},
+    sync::{
+        Arc, Condvar, Mutex, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
 };
 use wayland_client::{
@@ -175,6 +178,8 @@ struct SessionInner {
     capture_cursor_session: Option<(CaptureCursorSession, CaptureSession)>,
     condvar: Condvar,
     state: Mutex<SessionState>,
+    // Pack x and y into a single atomic
+    cursor_position: AtomicU64,
 }
 
 pub struct Session(Arc<SessionInner>);
@@ -237,6 +242,7 @@ impl Session {
     }
 
     // XXX Should only be called once
+    // TODO rename cursor_image_stream?
     pub fn cursor_stream(&self) -> Option<cursor_stream::CursorStream> {
         let Some((_, capture_session)) = &self.0.capture_cursor_session else {
             return None;
@@ -245,6 +251,13 @@ impl Session {
             capture_session,
             &self.0.wayland_helper,
         ))
+    }
+
+    pub fn cursor_position(&self) -> (i32, i32) {
+        let value = self.0.cursor_position.load(Ordering::Relaxed).to_ne_bytes();
+        let x = i32::from_ne_bytes(value[..3].try_into().unwrap());
+        let y = i32::from_ne_bytes(value[3..].try_into().unwrap());
+        (x, y)
     }
 }
 
@@ -426,6 +439,7 @@ impl WaylandHelper {
                 capture_cursor_session,
                 condvar: Condvar::new(),
                 state: Default::default(),
+                cursor_position: AtomicU64::new(0),
             }
         }))
     }
@@ -710,6 +724,14 @@ impl ScreencopyHandler for AppData {
         x: i32,
         y: i32,
     ) {
+        let data = session.data::<CursorCaptureSessionData>().unwrap();
+        if let Some(session) = data.session.upgrade() {
+            let mut value = [0; 8];
+            value[..3].copy_from_slice(&x.to_ne_bytes());
+            value[3..].copy_from_slice(&y.to_ne_bytes());
+            let value = u64::from_ne_bytes(value);
+            session.cursor_position.store(value, Ordering::Relaxed);
+        }
         dbg!(x, y);
     }
 }
