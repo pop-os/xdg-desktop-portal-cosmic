@@ -735,7 +735,16 @@ impl ScreencopyHandler for AppData {
             let value = u64::from_ne_bytes(value);
             session.cursor_position.store(value, Ordering::Relaxed);
         }
-        dbg!(x, y);
+    }
+
+    fn cursor_hotspot(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        session: &CaptureCursorSession,
+        x: i32,
+        y: i32,
+    ) {
     }
 }
 
