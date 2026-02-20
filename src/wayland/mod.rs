@@ -255,8 +255,8 @@ impl Session {
 
     pub fn cursor_position(&self) -> (i32, i32) {
         let value = self.0.cursor_position.load(Ordering::Relaxed).to_ne_bytes();
-        let x = i32::from_ne_bytes(value[..3].try_into().unwrap());
-        let y = i32::from_ne_bytes(value[3..].try_into().unwrap());
+        let x = i32::from_ne_bytes(value[..4].try_into().unwrap());
+        let y = i32::from_ne_bytes(value[4..].try_into().unwrap());
         (x, y)
     }
 }
