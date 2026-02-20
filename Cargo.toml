@@ -18,8 +18,8 @@ cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-feature
     "gvfs",
     "wayland",
 ] }
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "160b086" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "160b086" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "8a56662" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "8a56662" }
 futures = "0.3"
 image = "0.25"
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
@@ -90,3 +90,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 opt-level = 3
 lto = "thin"
 panic = "abort"
+
+[patch."https://github.com/pop-os/cosmic-protocols"]
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "8a56662" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "8a56662" }
