@@ -9,6 +9,6 @@ save-to = Sábháil chuig
 choose-folder = Roghnaigh fillteán
 share-screen = Comhroinn do scáileán
     .description = Teastaíonn ón gcóras ábhar do scáileáin a chomhroinnt le "{ $app_name }". Roghnaigh scáileán nó fuinneog le comhroinnt.
-unknown-application = Aip anaithnid
+unknown-application = Feidhmchlár anaithnid
 output = Aschur
 window = Fuinneog
