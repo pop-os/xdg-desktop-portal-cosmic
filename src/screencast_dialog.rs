@@ -377,7 +377,7 @@ fn toplevel_button(
         .selected(is_selected)
         .on_press(msg);
     let mut children = Vec::new();
-    children.push(icon.as_cosmic_icon().size(24).into());
+    children.push(icon.as_cosmic_icon().icon().size(24).into());
     children.push(button.into());
     // TODO
     if is_selected {

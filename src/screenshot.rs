@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
-use cosmic::cosmic_config::CosmicConfigEntry;
+use cosmic_config_bg::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::{Key, key::Named};
 use cosmic::iced::{Limits, window};
@@ -888,10 +888,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
     }
 
     // update output bg sources
-    if let Ok(c) = cosmic::cosmic_config::Config::new_state(
-        cosmic_bg_config::NAME,
-        cosmic_bg_config::state::State::version(),
-    ) {
+    if let Ok(c) = cosmic_bg_config::state::State::state() {
         let bg_state = match cosmic_bg_config::state::State::get_entry(&c) {
             Ok(state) => state,
             Err((err, s)) => {
