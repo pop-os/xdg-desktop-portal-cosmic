@@ -10,6 +10,7 @@ pub use cosmic_portal_config as config;
 
 mod access;
 mod app;
+mod app_chooser;
 mod buffer;
 mod documents;
 mod file_chooser;
