@@ -775,7 +775,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         Msg::Choice(c) => {
             let choice = (&c).into();
             // Only save config when drag is finished to avoid disk writes on every mouse motion
-            let should_save_config = !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
+            let should_save_config =
+                !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
             let last_rect = if let Choice::Rectangle(r, _) = &c {
                 portal.prev_rectangle = Some(*r);
                 Some(config::screenshot::Rect {
