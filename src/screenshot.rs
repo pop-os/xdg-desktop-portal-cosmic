@@ -235,14 +235,29 @@ impl Screenshot {
     pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
         let mut path = match location {
             ImageSaveLocation::Pictures => {
-                dirs::picture_dir().or_else(|| dirs::home_dir().map(|h| h.join("Pictures")))
+                // First check for XDG_SCREENSHOTS_DIR environment variable
+                std::env::var_os("XDG_SCREENSHOTS_DIR")
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute())
+                    .or_else(|| {
+                        // Fall back to XDG_PICTURES_DIR/Screenshots or ~/Pictures/Screenshots
+                        dirs::picture_dir()
+                            .or_else(|| dirs::home_dir().map(|h| h.join("Pictures")))
+                            .map(|p| p.join("Screenshots"))
+                    })
             }
             ImageSaveLocation::Documents => {
                 dirs::document_dir().or_else(|| dirs::home_dir().map(|h| h.join("Documents")))
             }
             ImageSaveLocation::Clipboard => None,
-            // ImageSaveLocation::Custom(path) => Some(path),
         }?;
+
+        // Ensure the directory exists
+        if let Err(err) = std::fs::create_dir_all(&path) {
+            log::error!("Failed to create screenshot directory {:?}: {}", path, err);
+            return None;
+        }
+
         let name = chrono::Local::now()
             .format("Screenshot_%Y-%m-%d_%H-%M-%S.png")
             .to_string();
