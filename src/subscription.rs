@@ -9,13 +9,14 @@ use zbus::{Connection, fdo, zvariant};
 
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
-    DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland,
+    DBUS_NAME, DBUS_PATH, Settings, access::Access, app_chooser::AppChooser, config,
+    file_chooser::FileChooser, screencast::ScreenCast, screenshot::Screenshot, wayland,
 };
 
 #[derive(Clone, Debug)]
 pub enum Event {
     Access(crate::access::AccessDialogArgs),
+    AppChooser(crate::app_chooser::AppChooserArgs),
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
@@ -86,6 +87,7 @@ pub(crate) async fn process_changes(
                     DBUS_PATH,
                     ScreenCast::new(wayland_helper.clone(), tx.clone()),
                 )?
+                .serve_at(DBUS_PATH, AppChooser::new(tx.clone()))?
                 .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
@@ -108,6 +110,11 @@ pub(crate) async fn process_changes(
                     Event::Access(args) => {
                         if let Err(err) = output.send(Event::Access(args)).await {
                             log::error!("Error sending access event: {:?}", err);
+                        };
+                    }
+                    Event::AppChooser(args) => {
+                        if let Err(err) = output.send(Event::AppChooser(args)).await {
+                            log::error!("Error sending app chooser event: {:?}", err);
                         };
                     }
                     Event::FileChooser(args) => {

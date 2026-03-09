@@ -7,6 +7,9 @@ save-to = Save to
     .pictures = { save-to } Pictures
     .documents = { save-to } Documents
 choose-folder = Choose folder
+open = Open
+open-with = Open with
+open-item-with = Open "{$name}" with
 
 share-screen = Share your screen
     .description = The system wants to share the contents of your screen with "{$app_name}". Select a screen or window to share.
