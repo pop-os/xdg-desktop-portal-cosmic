@@ -180,6 +180,7 @@ struct SessionInner {
     state: Mutex<SessionState>,
     // Pack x and y into a single atomic
     cursor_position: AtomicU64,
+    cursor_hotspot: AtomicU64,
 }
 
 pub struct Session(Arc<SessionInner>);
@@ -255,6 +256,13 @@ impl Session {
 
     pub fn cursor_position(&self) -> (i32, i32) {
         let value = self.0.cursor_position.load(Ordering::Relaxed).to_ne_bytes();
+        let x = i32::from_ne_bytes(value[..4].try_into().unwrap());
+        let y = i32::from_ne_bytes(value[4..].try_into().unwrap());
+        (x, y)
+    }
+
+    pub fn cursor_hotspot(&self) -> (i32, i32) {
+        let value = self.0.cursor_hotspot.load(Ordering::Relaxed).to_ne_bytes();
         let x = i32::from_ne_bytes(value[..4].try_into().unwrap());
         let y = i32::from_ne_bytes(value[4..].try_into().unwrap());
         (x, y)
@@ -443,6 +451,7 @@ impl WaylandHelper {
                 condvar: Condvar::new(),
                 state: Default::default(),
                 cursor_position: AtomicU64::new(0),
+                cursor_hotspot: AtomicU64::new(0),
             }
         }))
     }
@@ -696,6 +705,7 @@ impl ScreencopyHandler for AppData {
         screencopy_frame: &CaptureFrame,
         frame: Frame,
     ) {
+        // TODO apply hotspot if this is a cursor capture?
         if let Some(sender) = screencopy_frame
             .data::<FrameData>()
             .and_then(|data| data.sender.lock().unwrap().take())
@@ -737,6 +747,7 @@ impl ScreencopyHandler for AppData {
         }
     }
 
+    // XXX delay until ready event?
     fn cursor_hotspot(
         &mut self,
         _conn: &Connection,
@@ -745,6 +756,14 @@ impl ScreencopyHandler for AppData {
         x: i32,
         y: i32,
     ) {
+        let data = session.data::<CursorSessionData>().unwrap();
+        if let Some(session) = data.session.upgrade() {
+            let mut value = [0; 8];
+            value[..4].copy_from_slice(&x.to_ne_bytes());
+            value[4..].copy_from_slice(&y.to_ne_bytes());
+            let value = u64::from_ne_bytes(value);
+            session.cursor_hotspot.store(value, Ordering::Relaxed);
+        }
     }
 }
 
@@ -881,6 +900,8 @@ impl ScreencopySessionDataExt for CursorCaptureSessionData {
     }
 }
 
+// enum for cursor frames vs non cursor?
+// Surface, Cursor
 struct FrameData {
     frame_data: ScreencopyFrameData,
     #[allow(clippy::type_complexity)]
