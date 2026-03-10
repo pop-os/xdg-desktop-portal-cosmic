@@ -14,7 +14,7 @@ members = ["cosmic-portal-config"]
 [dependencies]
 anyhow = "1.0.100"
 ashpd = "0.12"
-cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
+cosmic-files = { git = "https://github.com/norepro/cosmic-files", branch= "handle-derived-mime-types", default-features = false, features = [
     "gvfs",
     "wayland",
 ] }
@@ -50,7 +50,7 @@ rust-embed = "8.7.2"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-freedesktop-desktop-entry = "0.7.19"
+freedesktop-desktop-entry = "0.8.1"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.23.0"
@@ -93,3 +93,4 @@ panic = "abort"
 [patch."https://github.com/pop-os/cosmic-protocols"]
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
+
