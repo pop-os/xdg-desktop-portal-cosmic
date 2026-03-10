@@ -51,8 +51,6 @@ cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
 freedesktop-desktop-entry = "0.8.1"
-# Unversioned cosmic-config for cosmic-bg-config compatibility (avoids CosmicConfigEntry trait mismatch)
-cosmic-config-bg = { package = "cosmic-config", git = "https://github.com/pop-os/libcosmic" }
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.23.0"
@@ -61,7 +59,6 @@ wayland-client = { version = "0.31.11" }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"
-rev = "384e8f6e219bb458720eafa5bb971b832c057f23"
 # TODO: a11y feature crashes file chooser dialog
 default-features = false
 features = [
@@ -76,7 +73,7 @@ features = [
 ]
 
 [workspace.dependencies]
-cosmic-config = { git = "https://github.com/pop-os/libcosmic", rev = "384e8f6e219bb458720eafa5bb971b832c057f23" }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
 log = "0.4.28"
 serde = "1.0.228"
 
@@ -96,7 +93,4 @@ panic = "abort"
 [patch."https://github.com/pop-os/cosmic-protocols"]
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
-
-[patch."https://github.com/norepro/cosmic-files"]
-cosmic-files = { path = "../cosmic-files" }
 

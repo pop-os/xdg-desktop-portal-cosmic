@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
-use cosmic_config_bg::CosmicConfigEntry;
+use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::{Key, key::Named};
 use cosmic::iced::{Limits, window};
