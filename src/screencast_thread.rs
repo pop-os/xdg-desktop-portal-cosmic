@@ -178,7 +178,6 @@ struct StreamData {
     formats: Formats,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
-    update_cursor: bool,
 }
 
 impl StreamData {
@@ -542,7 +541,6 @@ impl StreamData {
                         let position = self.session.cursor_position();
                         let hotspot = self.session.cursor_hotspot();
                         cursor.update(self.cursor_image.as_ref(), position, hotspot);
-                        self.update_cursor = false;
                     }
                 }
                 Err(err) => {
@@ -635,7 +633,6 @@ fn start_stream(
         modifier: None,
         node_id_tx: Some(node_id_tx),
         buffer_damage: HashMap::new(),
-        update_cursor: true,
     };
 
     let listener = stream
