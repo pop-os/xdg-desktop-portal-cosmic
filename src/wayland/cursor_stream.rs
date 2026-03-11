@@ -25,6 +25,7 @@ struct CursorStreamBuffer {
     wl_buffer: wl_buffer::WlBuffer,
     width: u32,
     height: u32,
+    is_new: bool,
 }
 
 // TODO wake stream when we get formats?
@@ -60,7 +61,6 @@ impl futures::stream::Stream for CursorStream {
 
         let mut buffer = self.buffer.lock().unwrap();
         let mut state = self.state.lock().unwrap();
-        let mut buffer_is_new = false;
 
         if let Some(formats) = &data.formats.lock().unwrap().clone() {
             // XXX test if res changed
@@ -82,8 +82,8 @@ impl futures::stream::Stream for CursorStream {
                     height,
                     fd,
                     wl_buffer,
+                    is_new: true,
                 });
-                buffer_is_new = true;
                 *state = State::WaitingForFormats; // XXX, well, not waiting
             }
         }
@@ -93,10 +93,15 @@ impl futures::stream::Stream for CursorStream {
                 Poll::Ready(Ok(frame)) => {
                     // TODO map buffer
                     let CursorStreamBuffer {
-                        width, height, fd, ..
-                    } = &buffer.as_ref().unwrap();
+                        width,
+                        height,
+                        fd,
+                        is_new,
+                        ..
+                    } = buffer.as_mut().unwrap();
+                    *is_new = false;
                     // XXX unwrap
-                    let mmap = unsafe { memmap2::Mmap::map(fd).unwrap() };
+                    let mmap = unsafe { memmap2::Mmap::map(&*fd).unwrap() };
                     let mut bytes = mmap.to_vec();
                     // Swap BGRA to RGBA
                     for pixel in bytes.chunks_mut(4) {
@@ -117,6 +122,7 @@ impl futures::stream::Stream for CursorStream {
             width,
             height,
             wl_buffer,
+            is_new,
             ..
         }) = &*buffer
         {
@@ -127,7 +133,7 @@ impl futures::stream::Stream for CursorStream {
                 width: *width as i32,
                 height: *height as i32,
             };
-            let damage = if buffer_is_new {
+            let damage = if *is_new {
                 std::slice::from_ref(&full_damage)
             } else {
                 &[]
