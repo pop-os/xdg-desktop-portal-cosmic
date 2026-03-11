@@ -54,8 +54,6 @@ impl futures::stream::Stream for CursorStream {
         let mut buffer = self.buffer.lock().unwrap();
         let mut state = self.state.lock().unwrap();
         let mut buffer_is_new = false;
-        let mut width = 0;
-        let mut height = 0;
 
         if let Some(formats) = &data.formats.lock().unwrap().clone() {
             // XXX test if res changed
@@ -63,7 +61,7 @@ impl futures::stream::Stream for CursorStream {
                 .as_ref()
                 .is_none_or(|(w, h, _, _)| (*w, *h) != formats.buffer_size)
             {
-                (width, height) = formats.buffer_size;
+                let (width, height) = formats.buffer_size;
                 let fd = buffer::create_memfd(width, height);
                 let wl_buffer = self.wayland_helper.create_shm_buffer(
                     &fd,
@@ -101,13 +99,13 @@ impl futures::stream::Stream for CursorStream {
             }
         }
 
-        if let Some((_, _, _, wl_buffer)) = &*buffer {
+        if let Some((width, height, _, wl_buffer)) = &*buffer {
             let (sender, receiver) = oneshot::channel();
             let full_damage = Rect {
                 x: 0,
                 y: 0,
-                width: width as i32,
-                height: height as i32,
+                width: *width as i32,
+                height: *height as i32,
             };
             let damage = if buffer_is_new {
                 std::slice::from_ref(&full_damage)
