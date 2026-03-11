@@ -54,7 +54,7 @@ freedesktop-desktop-entry = "0.7.19"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.23.0"
-tokio = { version = "1.47.1", features = ["macros", "net", "rt", "sync"] }
+tokio = { version = "1.47.1", features = ["macros", "net", "rt", "sync", "time"] }
 wayland-client = { version = "0.31.11" }
 
 [dependencies.libcosmic]
