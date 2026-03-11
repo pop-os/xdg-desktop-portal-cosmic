@@ -102,6 +102,7 @@ impl futures::stream::Stream for CursorStream {
             // WIP damage
             self.capture_session.capture(
                 wl_buffer,
+                // XXX Damage whole frame, or pass previous damage?
                 &[],
                 &self.wayland_helper.inner.qh,
                 FrameData {
