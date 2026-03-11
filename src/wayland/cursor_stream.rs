@@ -20,6 +20,13 @@ enum State {
     Capturing(oneshot::Receiver<Result<Frame, WEnum<FailureReason>>>),
 }
 
+struct CursorStreamBuffer {
+    fd: OwnedFd,
+    wl_buffer: wl_buffer::WlBuffer,
+    width: u32,
+    height: u32,
+}
+
 // TODO wake stream when we get formats?
 pub struct CursorStream {
     state: Mutex<State>,
@@ -27,7 +34,7 @@ pub struct CursorStream {
     capture_session: CaptureSession,
     wayland_helper: WaylandHelper,
     // XXX modify pin without mutex?
-    buffer: Mutex<Option<(u32, u32, OwnedFd, wl_buffer::WlBuffer)>>,
+    buffer: Mutex<Option<CursorStreamBuffer>>,
 }
 
 impl CursorStream {
@@ -59,7 +66,7 @@ impl futures::stream::Stream for CursorStream {
             // XXX test if res changed
             if buffer
                 .as_ref()
-                .is_none_or(|(w, h, _, _)| (*w, *h) != formats.buffer_size)
+                .is_none_or(|b| (b.width, b.height) != formats.buffer_size)
             {
                 let (width, height) = formats.buffer_size;
                 let fd = buffer::create_memfd(width, height);
@@ -70,7 +77,12 @@ impl futures::stream::Stream for CursorStream {
                     width * 4,
                     wl_shm::Format::Argb8888,
                 );
-                *buffer = Some((width, height, fd, wl_buffer));
+                *buffer = Some(CursorStreamBuffer {
+                    width,
+                    height,
+                    fd,
+                    wl_buffer,
+                });
                 buffer_is_new = true;
                 *state = State::WaitingForFormats; // XXX, well, not waiting
             }
@@ -80,7 +92,9 @@ impl futures::stream::Stream for CursorStream {
             match std::pin::Pin::new(receiver).poll(cx) {
                 Poll::Ready(Ok(frame)) => {
                     // TODO map buffer
-                    let (width, height, fd, _) = &buffer.as_ref().unwrap();
+                    let CursorStreamBuffer {
+                        width, height, fd, ..
+                    } = &buffer.as_ref().unwrap();
                     // XXX unwrap
                     let mmap = unsafe { memmap2::Mmap::map(fd).unwrap() };
                     let mut bytes = mmap.to_vec();
@@ -99,7 +113,13 @@ impl futures::stream::Stream for CursorStream {
             }
         }
 
-        if let Some((width, height, _, wl_buffer)) = &*buffer {
+        if let Some(CursorStreamBuffer {
+            width,
+            height,
+            wl_buffer,
+            ..
+        }) = &*buffer
+        {
             let (sender, receiver) = oneshot::channel();
             let full_damage = Rect {
                 x: 0,
