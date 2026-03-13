@@ -8,9 +8,9 @@ use tokio::sync::mpsc::Receiver;
 use zbus::{Connection, fdo, zvariant};
 
 use crate::{
-    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
-    DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland,
+    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, BUTTON_PLACEMENT_KEY, COLOR_SCHEME_KEY, CONTRAST_KEY,
+    ColorScheme, Contrast, DBUS_NAME, DBUS_PATH, Settings, access::Access, config,
+    file_chooser::FileChooser, screencast::ScreenCast, screenshot::Screenshot, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -23,6 +23,7 @@ pub enum Event {
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
+    ButtonPlacement((Vec<String>, Vec<String>)),
     Config(config::Config),
     Init(tokio::sync::mpsc::Sender<Event>),
     NameLost,
@@ -182,6 +183,21 @@ pub(crate) async fn process_changes(
                                 APPEARANCE_NAMESPACE,
                                 CONTRAST_KEY,
                                 zvariant::Value::from(iface.contrast as u32),
+                            )
+                            .await?;
+                    }
+                    Event::ButtonPlacement(placement_key) => {
+                        let object_server = conn.object_server();
+                        let iface_ref = object_server.interface::<_, Settings>(DBUS_PATH).await?;
+                        let mut iface = iface_ref.get_mut().await;
+                        iface.button_placement = placement_key;
+
+                        iface
+                            .setting_changed(
+                                iface_ref.signal_emitter(),
+                                APPEARANCE_NAMESPACE,
+                                BUTTON_PLACEMENT_KEY,
+                                iface.button_placement_key_to_value().into(),
                             )
                             .await?;
                     }
