@@ -50,7 +50,7 @@ rust-embed = "8.7.2"
 cosmic-config.workspace = true
 log.workspace = true
 serde.workspace = true
-freedesktop-desktop-entry = "0.7.19"
+freedesktop-desktop-entry = "0.8"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.23.0"
@@ -82,8 +82,9 @@ gst = { package = "gstreamer", version = "0.24.2" }
 clap = { version = "4.5.48", features = ["derive"] }
 
 # [patch."https://github.com/pop-os/libcosmic"]
-# libcosmic = { path = "../libcosmic" }
-# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//" }
+# iced_futures = { git = "https://github.com/pop-os/libcosmic//" }
 
 [profile.release]
 opt-level = 3

@@ -284,7 +284,12 @@ impl cosmic::Application for CosmicPortal {
         ];
         for (id, (_args, dialog)) in self.file_choosers.iter() {
             let id = *id;
-            subscriptions.push(dialog.subscription().map(move |x| Msg::FileChooser(id, x)));
+            subscriptions.push(
+                dialog
+                    .subscription()
+                    .with(id)
+                    .map(|(id, x)| Msg::FileChooser(id, x)),
+            );
         }
         Subscription::batch(subscriptions)
     }

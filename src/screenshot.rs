@@ -10,7 +10,7 @@ use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
 use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
-use cosmic::widget::horizontal_space;
+use cosmic::widget::space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use futures::stream::{FuturesUnordered, StreamExt};
 use image::RgbaImage;
@@ -585,14 +585,14 @@ impl Screenshot {
 
 pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_, Msg> {
     let Some((i, output)) = portal.outputs.iter().enumerate().find(|(i, o)| o.id == id) else {
-        return horizontal_space().width(Length::Fixed(1.0)).into();
+        return space::horizontal().width(Length::Fixed(1.0)).into();
     };
     let Some(args) = portal.screenshot_args.as_ref() else {
-        return horizontal_space().width(Length::Fixed(1.0)).into();
+        return space::horizontal().width(Length::Fixed(1.0)).into();
     };
 
     let Some(img) = args.output_images.get(&output.name) else {
-        return horizontal_space().width(Length::Fixed(1.0)).into();
+        return space::horizontal().width(Length::Fixed(1.0)).into();
     };
     let theme = portal.core.system_theme().cosmic();
     KeyboardWrapper::new(
@@ -790,7 +790,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         Msg::Choice(c) => {
             let choice = (&c).into();
             // Only save config when drag is finished to avoid disk writes on every mouse motion
-            let should_save_config = !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
+            let should_save_config =
+                !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
             let last_rect = if let Choice::Rectangle(r, _) = &c {
                 portal.prev_rectangle = Some(*r);
                 Some(config::screenshot::Rect {
