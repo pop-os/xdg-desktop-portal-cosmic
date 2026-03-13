@@ -286,8 +286,9 @@ impl cosmic::Application for CosmicPortal {
             let id = *id;
             subscriptions.push(
                 dialog
-                    .subscription(id)
-                    .map(move |x| Msg::FileChooser(id, x)),
+                    .subscription()
+                    .with(id)
+                    .map(|(id, x)| Msg::FileChooser(id, x)),
             );
         }
         Subscription::batch(subscriptions)
