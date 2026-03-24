@@ -72,8 +72,14 @@ impl ScreencastThread {
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
+        let thread_stop_tx_clone = thread_stop_tx.clone();
         std::thread::spawn(move || {
-            match start_stream(wayland_helper, capture_source, overlay_cursor) {
+            match start_stream(
+                wayland_helper,
+                capture_source,
+                overlay_cursor,
+                thread_stop_tx_clone,
+            ) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
@@ -115,6 +121,7 @@ struct StreamData {
     formats: Formats,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
+    thread_stop_tx: pipewire::channel::Sender<()>,
 }
 
 impl StreamData {
@@ -427,6 +434,11 @@ impl StreamData {
     }
 
     fn process(&mut self, stream: &Stream) {
+        if self.session.is_stopped() {
+            let _ = self.thread_stop_tx.send(());
+            // TODO: Causes segfault
+            // let _ = stream.disconnect();
+        }
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
@@ -483,6 +495,7 @@ fn start_stream(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
     overlay_cursor: bool,
+    thread_stop_tx: pipewire::channel::Sender<()>,
 ) -> anyhow::Result<(
     pipewire::main_loop::MainLoopRc,
     pipewire::stream::StreamRc,
@@ -538,6 +551,7 @@ fn start_stream(
         modifier: None,
         node_id_tx: Some(node_id_tx),
         buffer_damage: HashMap::new(),
+        thread_stop_tx,
     };
 
     let listener = stream
