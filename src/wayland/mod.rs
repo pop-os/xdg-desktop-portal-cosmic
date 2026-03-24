@@ -232,6 +232,10 @@ impl Session {
             .await
             .unwrap_or(Err(WEnum::Value(FailureReason::Stopped)))
     }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.state.lock().unwrap().stopped
+    }
 }
 
 impl WaylandHelper {
