@@ -1,12 +1,18 @@
 use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
 use cosmic::Task;
+use cosmic::iced::{Length, Limits};
 use cosmic::iced_core::event::wayland::OutputEvent;
+use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+    IcedMargin, SctkLayerSurfaceSettings,
+};
+use cosmic::iced_winit::commands::layer_surface::get_layer_surface;
 use cosmic::widget;
 use cosmic::{
     app, cosmic_config,
     iced::window,
     iced_futures::{Subscription, event::listen_with},
 };
+use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
 use wayland_client::protocol::wl_output::WlOutput;
 
@@ -44,6 +50,7 @@ pub struct CosmicPortal {
 
     pub outputs: Vec<OutputState>,
     pub active_output: Option<WlOutput>,
+    pub dummy_id: window::Id,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +109,7 @@ impl cosmic::Application for CosmicPortal {
     ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
         let wayland_conn = wayland_client::Connection::connect_to_env().unwrap();
         let wayland_helper = crate::wayland::WaylandHelper::new(wayland_conn);
+        let dummy_id = window::Id::unique();
         (
             Self {
                 core,
@@ -118,8 +126,21 @@ impl cosmic::Application for CosmicPortal {
                 active_output: Default::default(),
                 wayland_helper,
                 tx: None,
+                dummy_id,
             },
-            cosmic::iced::Task::none(),
+            get_layer_surface(SctkLayerSurfaceSettings {
+                id: dummy_id,
+                layer: wlr_layer::Layer::Bottom,
+                keyboard_interactivity: wlr_layer::KeyboardInteractivity::None,
+                input_zone: Some(Vec::new()),
+                anchor: wlr_layer::Anchor::empty(),
+                output: cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedOutput::Active,
+                namespace: "cosmic_portal_dummy".into(),
+                margin: IcedMargin::default(),
+                size: Some((Some(6), Some(6))),
+                exclusive_zone: -1,
+                size_limits: Limits::NONE,
+            }),
         )
     }
 
@@ -134,6 +155,11 @@ impl cosmic::Application for CosmicPortal {
             screencast_dialog::view(self).map(Msg::Screencast)
         } else if self.outputs.iter().any(|o| o.id == id) {
             screenshot::view(self, id).map(Msg::Screenshot)
+        } else if self.dummy_id == id {
+            widget::space::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else {
             file_chooser::view(self, id)
         }
