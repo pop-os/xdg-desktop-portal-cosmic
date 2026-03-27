@@ -4,8 +4,7 @@
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
-use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Rect};
-use futures::executor::block_on;
+use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Frame, Rect};
 use pipewire::{
     spa::{
         self,
@@ -15,8 +14,21 @@ use pipewire::{
     stream::{Stream, StreamState},
     sys::pw_buffer,
 };
-use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
-use tokio::sync::oneshot;
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    ffi::c_void,
+    io, iter,
+    os::fd::IntoRawFd,
+    pin::Pin,
+    ptr::{self, NonNull},
+    rc::Rc,
+    slice,
+    task::{Context, Poll, Waker},
+    thread_local,
+    time::{Duration, Instant},
+};
+use tokio::{sync::oneshot, time};
 use wayland_client::{
     WEnum,
     protocol::{wl_buffer, wl_output, wl_shm},
@@ -28,6 +40,7 @@ use crate::{
     wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
 };
 
+const USEC_PER_SEC: u64 = 1_000_000;
 static FORMAT_MAP: &[(gbm::Format, Id)] = &[
     (gbm::Format::Abgr8888, Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
     (gbm::Format::Argb8888, Id(spa_sys::SPA_VIDEO_FORMAT_BGRA)),
@@ -57,10 +70,738 @@ fn shm_format_to_gbm(format: wl_shm::Format) -> Option<gbm::Format> {
     }
 }
 
+#[derive(Debug)]
+enum StreamEvent {
+    MinFrameInterval(u64),
+    Streaming,
+    Paused,
+    Error,
+}
+
+struct PwBufferUserData {
+    wl_buffer: wl_buffer::WlBuffer,
+    is_attached_with_pw_buffer: Cell<bool>,
+}
+
+impl Drop for PwBufferUserData {
+    fn drop(&mut self) {
+        self.wl_buffer.destroy();
+    }
+}
+
+/// # Safety
+///
+/// `PwBuffer` is not guaranteed.
+/// The `raw_buffer` MUST eventually be queued back to the PipeWire stream via `queue_raw_buffer`,
+/// otherwise the buffer resource will leak and PipeWire may out of buffer.
+struct PwBuffer {
+    raw_buffer: NonNull<pw_buffer>,
+    user_data: Rc<PwBufferUserData>,
+    frame_size: (u32, u32),
+    timestamp: Instant,
+}
+
+impl PwBuffer {
+    /// # Safety
+    ///
+    /// `PwBuffer` is not guaranteed.
+    /// The `raw_buffer` MUST eventually be queued back to the PipeWire stream via `queue_raw_buffer`,
+    /// otherwise the buffer resource will leak and PipeWire may out of buffer.
+    pub unsafe fn from_raw_buffer(raw_buffer: NonNull<pw_buffer>, frame_size: (u32, u32)) -> Self {
+        let data = unsafe {
+            let frame_data_ptr = (raw_buffer.as_ref()).user_data as *const PwBufferUserData;
+            Rc::increment_strong_count(frame_data_ptr);
+            Rc::from_raw(frame_data_ptr)
+        };
+
+        Self {
+            raw_buffer,
+            user_data: data,
+            frame_size,
+            timestamp: Instant::now(),
+        }
+    }
+}
+
+struct BufferSlotInner {
+    buffer: Option<PwBuffer>,
+    waker: Option<Waker>,
+}
+
+struct BufferSlot {
+    inner: Rc<RefCell<BufferSlotInner>>,
+}
+
+impl BufferSlot {
+    pub fn new() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(BufferSlotInner {
+                buffer: None,
+                waker: None,
+            })),
+        }
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+
+    pub fn set(&self, buffer: PwBuffer) {
+        let mut inner = self.inner.borrow_mut();
+        inner.buffer = Some(buffer);
+        if let Some(waker) = inner.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+impl Future for BufferSlot {
+    type Output = PwBuffer;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.inner.borrow_mut();
+        match inner.buffer.take() {
+            Some(buffer) => Poll::Ready(buffer),
+            None => {
+                inner.waker = Some(_cx.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+}
+
+thread_local! {
+    static FRAME_CAPTURE_RESULT: Cell<*mut Option<(PwBuffer, Result<Frame, WEnum<FailureReason>>)>> = const { Cell::new(ptr::null_mut()) }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CapturerState {
+    Idle,
+    Capturing,
+    Paused,
+}
+
+struct FrameCapturer<'s> {
+    stream: Pin<Box<dyn Future<Output = ()> + 's>>,
+    buffer_slot: BufferSlot,
+    state: CapturerState,
+    restore_state: Option<CapturerState>,
+    is_enabled: bool,
+}
+
+impl<'s> FrameCapturer<'s> {
+    pub fn new(session: &'s Session) -> Self {
+        let buffer_slot = BufferSlot::new();
+        let buffer_slot_clone = buffer_slot.clone();
+        let capture_loop = async move {
+            fn send_tx(pw_buffer: PwBuffer, capture_res: Result<Frame, WEnum<FailureReason>>) {
+                FRAME_CAPTURE_RESULT.with(|v| {
+                    let ptr = v.get();
+                    if !ptr.is_null() {
+                        unsafe {
+                            *ptr = Some((pw_buffer, capture_res));
+                        }
+                    } else {
+                        log::error!("cannot send frame capture result because the pointer is null, the pointer shouldn't be null");
+                    }
+                })
+            }
+            loop {
+                let pw_buffer = buffer_slot.clone().await;
+
+                // XXX: Using full damage may be simpler than tracking partial damage regions.
+                // Using partial damage could reduce copy costs, but it would add overhead
+                // for tracking damage per buffer. Is the trade-off worth it?
+                let full_damage = &[Rect {
+                    x: 0,
+                    y: 0,
+                    width: pw_buffer.frame_size.0 as i32,
+                    height: pw_buffer.frame_size.1 as i32,
+                }];
+                let wl_buffer = &pw_buffer.user_data.wl_buffer;
+                let capture_res = session.capture_wl_buffer(wl_buffer, full_damage).await;
+                send_tx(pw_buffer, capture_res);
+            }
+        };
+        Self {
+            stream: Box::pin(capture_loop),
+            buffer_slot: buffer_slot_clone,
+            state: CapturerState::Idle,
+            restore_state: None,
+            is_enabled: true,
+        }
+    }
+
+    pub fn set_active(&mut self, active: bool) {
+        if self.is_enabled == active {
+            return;
+        }
+
+        self.is_enabled = active;
+        match active {
+            true => self.state = self.restore_state.take().unwrap_or(CapturerState::Idle),
+            false => {
+                self.restore_state = Some(self.state);
+                self.state = CapturerState::Paused;
+            }
+        }
+    }
+
+    #[inline]
+    pub fn state(&self) -> CapturerState {
+        self.state
+    }
+
+    /// Capture to a given PipeWire buffer
+    ///
+    /// # Safety
+    ///
+    /// Ensure that the capturer state is `Idle` before calling this method.
+    /// Otherwise, PipeWire buffers may be leaked.
+    pub unsafe fn capture(&mut self, pw_buffer: PwBuffer) {
+        self.buffer_slot.set(pw_buffer);
+        self.state = CapturerState::Capturing;
+    }
+}
+
+impl<'s> Future for FrameCapturer<'s> {
+    type Output = (PwBuffer, Result<Frame, WEnum<FailureReason>>);
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        if self.state() == CapturerState::Capturing {
+            let mut capture_res: Option<(PwBuffer, Result<Frame, WEnum<FailureReason>>)> = None;
+            FRAME_CAPTURE_RESULT.set(&mut capture_res);
+            let _poll_res = self.stream.as_mut().poll(cx);
+            FRAME_CAPTURE_RESULT.set(ptr::null_mut());
+
+            match capture_res {
+                Some(res) => {
+                    self.state = CapturerState::Idle;
+                    Poll::Ready(res)
+                }
+                None => Poll::Pending,
+            }
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+struct FrameTimer {
+    timer: Pin<Box<time::Sleep>>,
+    is_set: bool,
+}
+
+impl FrameTimer {
+    pub fn is_set(&self) -> bool {
+        self.is_set
+    }
+
+    pub fn set(&mut self, duration: Duration) {
+        if self.is_set() {
+            return;
+        }
+
+        self.timer
+            .as_mut()
+            .reset(tokio::time::Instant::now() + duration);
+        self.is_set = true;
+    }
+
+    pub fn clear(&mut self) {
+        self.is_set = false;
+    }
+}
+
+impl Default for FrameTimer {
+    fn default() -> Self {
+        Self {
+            timer: Box::pin(time::sleep(Duration::ZERO)),
+            is_set: false,
+        }
+    }
+}
+
+impl Future for FrameTimer {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        if self.is_set {
+            match self.timer.as_mut().poll(cx) {
+                Poll::Ready(res) => {
+                    self.is_set = false;
+                    Poll::Ready(res)
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+struct FramePacing {
+    last_frame: Option<Instant>,
+    retry_count: u32,
+    min_interval: Duration,
+}
+
+impl FramePacing {
+    #[inline]
+    pub fn time_until_next_frame(&self) -> Option<Duration> {
+        if self.min_interval == Duration::ZERO {
+            return None;
+        }
+
+        if let Some(last_frame_time) = self.last_frame {
+            let time_since_last_frame = last_frame_time.elapsed();
+            if time_since_last_frame < self.min_interval {
+                let timeout = self.min_interval - time_since_last_frame;
+                return Some(timeout);
+            }
+        }
+
+        None
+    }
+
+    #[inline]
+    pub fn retry_delay(&mut self) -> Duration {
+        self.retry_count += 1;
+        let retry_interval = Duration::from_millis(3) * self.retry_count;
+        retry_interval.min(self.min_interval)
+    }
+}
+
+impl Default for FramePacing {
+    fn default() -> Self {
+        Self {
+            last_frame: None,
+            retry_count: 0,
+            min_interval: Duration::ZERO,
+        }
+    }
+}
+
+struct PwBackend<'s> {
+    stream: pipewire::stream::StreamRc,
+    _stream_listener: pipewire::stream::StreamListener<Rc<RefCell<StreamData<'s>>>>,
+    _context: pipewire::context::ContextRc,
+    mainloop: pipewire::main_loop::MainLoopRc,
+    stream_data: Rc<RefCell<StreamData<'s>>>,
+}
+
+impl<'s> PwBackend<'s> {
+    pub async fn new(
+        wayland_helper: WaylandHelper,
+        session: &'s Session,
+        event_queue: &'s RefCell<VecDeque<StreamEvent>>,
+    ) -> anyhow::Result<Self> {
+        let mainloop = pipewire::main_loop::MainLoopRc::new(None)?;
+        let context = pipewire::context::ContextRc::new(&mainloop, None)?;
+        let core = context.connect_rc(None)?;
+
+        let name = "cosmic-screenshot".to_string(); // XXX randomize?
+
+        let stream = pipewire::stream::StreamRc::new(
+            core,
+            &name,
+            pipewire::properties::properties! {
+                "media.class" => "Video/Source",
+                "node.name" => "cosmic-screenshot", // XXX
+            },
+        )?;
+
+        let Some(formats) = session.wait_for_formats(|formats| formats.clone()).await else {
+            return Err(anyhow::anyhow!(
+                "failed to get formats for image copy; session stopped"
+            ));
+        };
+        let dmabuf_helper = wayland_helper.dmabuf();
+        let initial_params = format_params(dmabuf_helper.as_ref(), None, &formats);
+        let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
+
+        //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
+        let flags =
+            pipewire::stream::StreamFlags::ALLOC_BUFFERS | pipewire::stream::StreamFlags::DRIVER;
+        stream.connect(
+            spa::utils::Direction::Output,
+            None,
+            flags,
+            &mut initial_params,
+        )?;
+
+        // Hacky: Use a temporary listener to wait for the node ID to be assigned.
+        // Nothing important happens before the node ID is assigned, so we can safely ignore it.
+        let is_ready = Cell::new(None);
+        let mut _listener = stream
+            .add_local_listener_with_user_data(&is_ready)
+            .state_changed(|_stream, is_ready, old, new| {
+                log::info!("state-changed '{:?}' -> '{:?}'", old, new);
+                match new {
+                    StreamState::Paused => {
+                        is_ready.set(Some(Ok(())));
+                    }
+                    StreamState::Error(msg) => {
+                        is_ready.set(Some(Err(msg)));
+                    }
+                    _ => {}
+                }
+            })
+            .register()?;
+
+        let loop_ = mainloop.loop_();
+        // Time out after 60 seconds
+        let mut is_node_id_assigned = false;
+        for _ in 0..12 {
+            loop_.iterate(Duration::from_secs(5));
+            match is_ready.take() {
+                Some(res) => match res {
+                    Ok(_) => {
+                        log::info!("Created a new screencast with node ID {}", stream.node_id());
+                        is_node_id_assigned = true;
+                        // Node ID assigned successfully
+                        break;
+                    }
+                    Err(msg) => {
+                        return Err(anyhow::Error::msg(msg));
+                    }
+                },
+                None => {}
+            }
+        }
+        _listener.unregister();
+        if !is_node_id_assigned {
+            return Err(anyhow::Error::msg("Cannot get PipeWire stream node ID"));
+        }
+
+        let stream_data = Rc::new(RefCell::new(StreamData {
+            wayland_helper,
+            dmabuf_helper,
+            session,
+            formats,
+            format: gbm::Format::Abgr8888,
+            modifier: None,
+            event_queue,
+        }));
+
+        let stream_listener = stream
+            .add_local_listener_with_user_data(stream_data.clone())
+            .state_changed(|stream, data, old, new| {
+                data.borrow_mut().state_changed(stream, old, new)
+            })
+            .param_changed(|stream, data, id, pod| data.borrow_mut().param_changed(stream, id, pod))
+            .add_buffer(|stream, data, buffer| data.borrow_mut().add_buffer(stream, buffer))
+            .remove_buffer(|stream, data, buffer| data.borrow_mut().remove_buffer(stream, buffer))
+            .register()?;
+
+        Ok(Self {
+            stream,
+            _stream_listener: stream_listener,
+            _context: context,
+            mainloop,
+            stream_data,
+        })
+    }
+
+    pub fn node_id(&self) -> u32 {
+        self.stream.node_id()
+    }
+
+    pub unsafe fn dequeue_raw_buffer(&self) -> Option<NonNull<pw_buffer>> {
+        NonNull::new(unsafe { self.stream.dequeue_raw_buffer() })
+    }
+}
+
+struct ScreencastLoop<'s> {
+    pw_backend: PwBackend<'s>,
+    next_frame_timer: FrameTimer,
+    frame_capturer: FrameCapturer<'s>,
+    frame_pacing: FramePacing,
+    event_queue: &'s RefCell<VecDeque<StreamEvent>>,
+}
+
+impl<'s> ScreencastLoop<'s> {
+    pub fn new(
+        pw_backend: PwBackend<'s>,
+        session: &'s Session,
+        event_queue: &'s RefCell<VecDeque<StreamEvent>>,
+    ) -> Self {
+        Self {
+            pw_backend,
+            next_frame_timer: FrameTimer::default(),
+            frame_capturer: FrameCapturer::new(session),
+            frame_pacing: FramePacing::default(),
+            event_queue,
+        }
+    }
+
+    /// Run the screencast loop until the stop receiver is received.
+    pub async fn run_until(mut self, mut stop_rx: oneshot::Receiver<()>) {
+        let pw_loop = self.pw_backend.mainloop.loop_();
+        let Ok(pw_loop_fd) = tokio::io::unix::AsyncFd::new(pw_loop.fd()) else {
+            log::error!("failed to create AsyncFd for PipeWire loop");
+            return;
+        };
+
+        #[inline]
+        async fn capture_handler(
+            capture_res: (PwBuffer, Result<Frame, WEnum<FailureReason>>),
+            frame_pacing: &mut FramePacing,
+            next_frame_timer: &mut FrameTimer,
+            frame_capturer: &mut FrameCapturer<'_>,
+            pw_backend: &PwBackend<'_>,
+        ) {
+            let (pw_buffer, result) = capture_res;
+
+            frame_pacing.last_frame = Some(
+                Instant::now()
+                    - Duration::from_nanos_u128(
+                        pw_buffer
+                            .timestamp
+                            .elapsed()
+                            .min(frame_pacing.min_interval)
+                            .as_nanos()
+                            >> 1,
+                    ),
+            );
+            frame_pacing.retry_count = 0;
+
+            if !pw_buffer.user_data.is_attached_with_pw_buffer.get() {
+                // Buffer is invalid, so don't queue it to PipeWire stream.
+                schedule_next_capture(frame_pacing, next_frame_timer, frame_capturer, pw_backend);
+                return;
+            }
+
+            match result {
+                Ok(frame) => {
+                    if let Some(video_transform) = unsafe {
+                        buffer_find_meta_data::<spa_sys::spa_meta_videotransform>(
+                            pw_buffer.raw_buffer.as_ptr(),
+                            spa_sys::SPA_META_VideoTransform,
+                        )
+                    } {
+                        video_transform.transform = convert_transform(frame.transform);
+                    }
+
+                    if let Some(meta_damage) = unsafe {
+                        buffer_find_meta(
+                            pw_buffer.raw_buffer.as_ptr(),
+                            spa_sys::SPA_META_VideoDamage,
+                        )
+                    } {
+                        fn update_meta_region(
+                            meta_region: &mut spa_sys::spa_meta_region,
+                            x: i32,
+                            y: i32,
+                            width: u32,
+                            height: u32,
+                        ) {
+                            meta_region.region.position.x = x;
+                            meta_region.region.position.y = y;
+                            meta_region.region.size.width = width;
+                            meta_region.region.size.height = height;
+                        }
+
+                        let meta_region_len =
+                            meta_damage.size as usize / size_of::<spa_sys::spa_meta_region>();
+                        assert_eq!(
+                            meta_region_len * size_of::<spa_sys::spa_meta_region>(),
+                            meta_damage.size as usize
+                        );
+                        let frame_damage_len = frame.damage.len();
+
+                        // SAFETY:
+                        // The Video Damage metadata is initialized by PipeWire as a contiguous array
+                        // of `spa_meta_region`. The type is `#[repr(C)]` POD (C integers only),
+                        // and `meta_region_len` is bounded by the metadata size, so it is safe
+                        // to treat as `&mut [spa_meta_region]`.
+                        let meta_regions = unsafe {
+                            let ptr = meta_damage.data as *mut spa_sys::spa_meta_region;
+                            core::slice::from_raw_parts_mut(ptr, meta_region_len)
+                        };
+                        let mut meta_regions_iter = meta_regions.iter_mut();
+
+                        if meta_region_len < frame_damage_len {
+                            log::info!(
+                                "Not enough buffers ({}) to accommodate damaged regions ({})",
+                                meta_region_len,
+                                frame_damage_len
+                            );
+                            // TODO: Merge damage properly
+                            // SAFETY: We know that `meta_regions` is not empty because at least one buffer is allocated.
+                            let meta_region = meta_regions_iter.next().unwrap();
+                            update_meta_region(
+                                meta_region,
+                                0,
+                                0,
+                                pw_buffer.frame_size.0,
+                                pw_buffer.frame_size.1,
+                            );
+                        } else {
+                            frame.damage.iter().for_each(|rect| {
+                                // SAFETY: We know that `meta_regions` length is equal or less than `frame_damage` length.
+                                let meta_region = meta_regions_iter.next().unwrap();
+                                update_meta_region(
+                                    meta_region,
+                                    rect.x,
+                                    rect.y,
+                                    rect.width as _,
+                                    rect.height as _,
+                                );
+                            });
+                        }
+
+                        // Set invalid region to mark end of array
+                        if let Some(meta_region) = meta_regions_iter.next() {
+                            update_meta_region(meta_region, 0, 0, 0, 0);
+                        }
+                    }
+                }
+                Err(err) => {
+                    if err == WEnum::Value(FailureReason::BufferConstraints) {
+                        let changed = pw_backend
+                            .stream_data
+                            .borrow_mut()
+                            .update_formats(pw_backend.stream.as_ref())
+                            .await;
+
+                        match changed {
+                            true => {
+                                // Buffer is invalid, so don't queue it to PipeWire stream.
+                                pw_backend.mainloop.loop_().iterate(Duration::ZERO);
+                                // TODO: Improve performance
+                                // Performance degradation occurs during window resizing (when capturing a window).
+                                // Frequent resize events cause PipeWire to continuously renegotiate,
+                                // removing and re-allocating buffers rapidly.
+                                return;
+                            }
+                            false => log::error!(
+                                "screencopy buffer constraints error, but no new formats?"
+                            ),
+                        }
+                    } else {
+                        log::error!("screencopy failed: {:?}", err);
+                        // TODO terminate screencasting?
+                    }
+                }
+            }
+
+            unsafe {
+                pw_backend
+                    .stream
+                    .queue_raw_buffer(pw_buffer.raw_buffer.as_ptr())
+            }
+            schedule_next_capture(frame_pacing, next_frame_timer, frame_capturer, pw_backend);
+        }
+
+        #[inline]
+        fn schedule_next_capture(
+            frame_pacing: &mut FramePacing,
+            next_frame_timer: &mut FrameTimer,
+            frame_capturer: &mut FrameCapturer,
+            pw_backend: &PwBackend,
+        ) {
+            let timeout = frame_pacing.time_until_next_frame();
+            match timeout {
+                Some(duration) => next_frame_timer.set(duration),
+                None => try_capture_now(frame_pacing, next_frame_timer, frame_capturer, pw_backend),
+            }
+        }
+
+        #[inline]
+        fn try_capture_now(
+            frame_pacing: &mut FramePacing,
+            frame_timer: &mut FrameTimer,
+            frame_capturer: &mut FrameCapturer,
+            pw_backend: &PwBackend,
+        ) {
+            // If Frame Capturer state is not Idle, do nothing.
+            if frame_capturer.state() != CapturerState::Idle {
+                return;
+            }
+
+            match unsafe { pw_backend.dequeue_raw_buffer() } {
+                Some(raw_buffer) => {
+                    // SAFETY: The capturer state is Idle, so it is safe to call capture.
+                    unsafe {
+                        frame_capturer.capture(PwBuffer::from_raw_buffer(
+                            raw_buffer,
+                            pw_backend.stream_data.borrow().formats.buffer_size,
+                        ));
+                    }
+                }
+                // TODO
+                // If PipeWire runs out of buffers, schedule a retry after a short delay.
+                // Otherwise, the capture loop effectively stalls, as the next frame scheduling
+                // depends on the completion of the current one.
+
+                // It would be better and safer if we had a way to know exactly when the capture
+                // source has rendered a frame, and invoke this function immediately afterward.
+                None => frame_timer.set(frame_pacing.retry_delay()),
+            }
+        }
+
+        loop {
+            while let Some(event) = self.event_queue.borrow_mut().pop_front() {
+                match event {
+                    StreamEvent::MinFrameInterval(min_interval_us) => {
+                        self.frame_pacing.min_interval = Duration::from_micros(min_interval_us);
+                    }
+                    StreamEvent::Streaming => {
+                        self.frame_capturer.set_active(true);
+                        schedule_next_capture(
+                            &mut self.frame_pacing,
+                            &mut self.next_frame_timer,
+                            &mut self.frame_capturer,
+                            &self.pw_backend,
+                        )
+                    }
+                    StreamEvent::Paused => {
+                        self.frame_capturer.set_active(false);
+                        self.next_frame_timer.clear();
+                    }
+                    StreamEvent::Error => {
+                        log::info!("Exit the screencast by PipeWire stream error");
+                        break;
+                    }
+                }
+            }
+
+            tokio::select! {
+                biased;
+
+                Ok(mut guard) = pw_loop_fd.readable() => {
+                    pw_loop.iterate(Duration::ZERO);
+                    guard.clear_ready();
+                }
+
+                capture_res = &mut self.frame_capturer => {
+                    capture_handler(capture_res, &mut self.frame_pacing, &mut self.next_frame_timer, &mut self.frame_capturer, &self.pw_backend).await
+                }
+
+                _ = &mut self.next_frame_timer => {
+                    try_capture_now(&mut self.frame_pacing, &mut self.next_frame_timer, &mut self.frame_capturer, &self.pw_backend)
+                }
+
+                _ = &mut stop_rx => {
+                    log::info!("Exit the screencast by stopping the signal");
+                    break;
+                }
+            }
+        }
+
+        // Clean up resources before exiting
+        self.next_frame_timer.clear();
+        pw_loop.iterate(Duration::ZERO);
+    }
+}
+
 pub struct ScreencastThread {
     stream_props: StreamProps,
     node_id: u32,
-    thread_stop_tx: pipewire::channel::Sender<()>,
+    thread_stop_tx: oneshot::Sender<()>,
 }
 
 impl ScreencastThread {
@@ -71,24 +812,58 @@ impl ScreencastThread {
         stream_props: StreamProps,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
-        let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
+        let (thread_stop_tx, thread_stop_rx) = oneshot::channel::<()>();
         std::thread::spawn(move || {
-            match start_stream(wayland_helper, capture_source, overlay_cursor) {
-                Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
-                    tx.send(Ok(node_id_rx)).unwrap();
-                    let weak_loop = loop_.downgrade();
-                    let _receiver = thread_stop_rx.attach(loop_.loop_(), move |()| {
-                        weak_loop.upgrade().unwrap().quit();
-                    });
-                    loop_.run();
-                }
-                Err(err) => tx.send(Err(err)).unwrap(),
+            /// Sends a message back to the main thread or exits the current block.
+            macro_rules! tx_send_or_exit {
+                ($mess:expr, $context:expr) => {
+                    // If tx send fails, that means the main thread has already exited.
+                    // So we exit this thread too.
+                    if let Err(_) = tx.send($mess) {
+                        log::error!("failed to send message back. Context: {}", $context);
+                        return;
+                    }
+                };
             }
+
+            /// Returns the result of the expression or exits the current block.
+            macro_rules! unwrap_or_exit {
+                ($result:expr, $context:expr) => {
+                    match $result {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let err = anyhow::Error::from(e).context($context);
+                            tx_send_or_exit!(Err(err), $context);
+                            return;
+                        }
+                    }
+                };
+            }
+
+            let rt = unwrap_or_exit!(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_io()
+                    .enable_time()
+                    .build(),
+                "failed to build tokio runtime"
+            );
+            rt.block_on(async move {
+                let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
+                let event_queue = RefCell::new(VecDeque::with_capacity(5));
+                let pw_backend = unwrap_or_exit!(
+                    PwBackend::new(wayland_helper, &session, &event_queue).await,
+                    "failed to create Pipewire backend"
+                );
+                let node_id = pw_backend.node_id();
+                tx_send_or_exit!(Ok(node_id), "failed to send node ID");
+                let screencast_loop = ScreencastLoop::new(pw_backend, &session, &event_queue);
+                screencast_loop.run_until(thread_stop_rx).await;
+            });
         });
+
         Ok(Self {
             stream_props,
-            // XXX can second unwrap fail?
-            node_id: rx.await.unwrap()?.await.unwrap()?,
+            node_id: rx.await.unwrap()?,
             thread_stop_tx,
         })
     }
@@ -106,18 +881,17 @@ impl ScreencastThread {
     }
 }
 
-struct StreamData {
+struct StreamData<'s> {
     dmabuf_helper: Option<DmabufHelper>,
     wayland_helper: WaylandHelper,
     format: gbm::Format,
     modifier: Option<gbm::Modifier>,
-    session: Session,
+    session: &'s Session,
     formats: Formats,
-    node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
-    buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
+    event_queue: &'s RefCell<VecDeque<StreamEvent>>,
 }
 
-impl StreamData {
+impl<'s> StreamData<'s> {
     fn width(&self) -> u32 {
         self.formats.buffer_size.0
     }
@@ -197,8 +971,11 @@ impl StreamData {
     }
 
     // Handle changes to capture source size, etc.
-    fn update_formats(&mut self, stream: &Stream) -> bool {
-        let Some(formats) = block_on(self.session.wait_for_formats(|formats| formats.clone()))
+    async fn update_formats(&mut self, stream: &Stream) -> bool {
+        let Some(formats) = self
+            .session
+            .wait_for_formats(|formats| formats.clone())
+            .await
         else {
             return false;
         };
@@ -219,21 +996,15 @@ impl StreamData {
         true
     }
 
-    fn state_changed(&mut self, stream: &Stream, old: StreamState, new: StreamState) {
+    fn state_changed(&mut self, _stream: &Stream, old: StreamState, new: StreamState) {
         log::info!("state-changed '{:?}' -> '{:?}'", old, new);
         match new {
-            StreamState::Paused => {
-                if let Some(node_id_tx) = self.node_id_tx.take() {
-                    node_id_tx.send(Ok(stream.node_id())).unwrap();
-                }
-            }
-            StreamState::Error(msg) => {
-                if let Some(node_id_tx) = self.node_id_tx.take() {
-                    node_id_tx
-                        .send(Err(anyhow::anyhow!("stream error: {}", msg)))
-                        .unwrap();
-                }
-            }
+            StreamState::Streaming => self
+                .event_queue
+                .borrow_mut()
+                .push_back(StreamEvent::Streaming),
+            StreamState::Paused => self.event_queue.borrow_mut().push_back(StreamEvent::Paused),
+            StreamState::Error(_) => self.event_queue.borrow_mut().push_back(StreamEvent::Error),
             _ => {}
         }
     }
@@ -256,6 +1027,18 @@ impl StreamData {
         let mut pwr_format = spa::param::video::VideoInfoRaw::new();
         if let Err(err) = pwr_format.parse(pod) {
             log::error!("error parsing pipewire video info: {}", err);
+        }
+
+        if pwr_format.max_framerate().num > 0 {
+            let min_interval_us = USEC_PER_SEC * pwr_format.max_framerate().denom as u64
+                / pwr_format.max_framerate().num as u64;
+            self.event_queue
+                .borrow_mut()
+                .push_front(StreamEvent::MinFrameInterval(min_interval_us));
+        } else {
+            self.event_queue
+                .borrow_mut()
+                .push_front(StreamEvent::MinFrameInterval(0));
         }
 
         self.format = if let Some(gbm_format) = spa_format_to_gbm(Id(pwr_format.format().0)) {
@@ -407,7 +1190,10 @@ impl StreamData {
             chunk.stride = 4 * self.width() as i32;
         }
 
-        let user_data = Box::into_raw(Box::new(wl_buffer)) as *mut c_void;
+        let user_data = Rc::into_raw(Rc::new(PwBufferUserData {
+            wl_buffer,
+            is_attached_with_pw_buffer: Cell::new(true),
+        })) as *mut c_void;
         unsafe { (*buffer).user_data = user_data };
     }
 
@@ -420,136 +1206,10 @@ impl StreamData {
             data.fd = -1;
         }
 
-        let wl_buffer: Box<wl_buffer::WlBuffer> =
-            unsafe { Box::from_raw((*buffer).user_data as *mut _) };
-        self.buffer_damage.remove(&*wl_buffer);
-        wl_buffer.destroy();
+        let user_data: Rc<PwBufferUserData> =
+            unsafe { Rc::from_raw((*buffer).user_data as *mut _) };
+        user_data.is_attached_with_pw_buffer.set(false);
     }
-
-    fn process(&mut self, stream: &Stream) {
-        let buffer = unsafe { stream.dequeue_raw_buffer() };
-        if !buffer.is_null() {
-            let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
-            let full_damage = &[Rect {
-                x: 0,
-                y: 0,
-                width: self.width() as i32,
-                height: self.height() as i32,
-            }];
-            let damage = self
-                .buffer_damage
-                .get(wl_buffer)
-                .map(Vec::as_slice)
-                .unwrap_or(full_damage);
-            match block_on(self.session.capture_wl_buffer(wl_buffer, damage)) {
-                Ok(frame) => {
-                    self.buffer_damage
-                        .entry(wl_buffer.clone())
-                        .or_default()
-                        .clear();
-                    for (b, damage) in self.buffer_damage.iter_mut() {
-                        if b != wl_buffer {
-                            damage.extend_from_slice(&frame.damage);
-                        }
-                    }
-                    if let Some(video_transform) = unsafe {
-                        buffer_find_meta_data::<spa_sys::spa_meta_videotransform>(
-                            buffer,
-                            spa_sys::SPA_META_VideoTransform,
-                        )
-                    } {
-                        video_transform.transform = convert_transform(frame.transform);
-                    }
-                }
-                Err(err) => {
-                    if err == WEnum::Value(FailureReason::BufferConstraints) {
-                        let changed = self.update_formats(stream);
-                        if !changed {
-                            log::error!("screencopy buffer constraints error, but no new formats?");
-                        }
-                    } else {
-                        log::error!("screencopy failed: {:?}", err);
-                        // TODO terminate screencasting?
-                    }
-                }
-            }
-            unsafe { stream.queue_raw_buffer(buffer) };
-        }
-    }
-}
-
-#[allow(clippy::type_complexity)]
-fn start_stream(
-    wayland_helper: WaylandHelper,
-    capture_source: CaptureSource,
-    overlay_cursor: bool,
-) -> anyhow::Result<(
-    pipewire::main_loop::MainLoopRc,
-    pipewire::stream::StreamRc,
-    pipewire::stream::StreamListener<StreamData>,
-    pipewire::context::ContextRc,
-    oneshot::Receiver<anyhow::Result<u32>>,
-)> {
-    let loop_ = pipewire::main_loop::MainLoopRc::new(None)?;
-    let context = pipewire::context::ContextRc::new(&loop_, None)?;
-    let core = context.connect_rc(None)?;
-
-    let name = "cosmic-screenshot".to_string(); // XXX randomize?
-
-    let (node_id_tx, node_id_rx) = oneshot::channel();
-
-    let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
-
-    let Some(formats) = block_on(session.wait_for_formats(|formats| formats.clone())) else {
-        return Err(anyhow::anyhow!(
-            "failed to get formats for image copy; session stopped"
-        ));
-    };
-
-    let dmabuf_helper = wayland_helper.dmabuf();
-
-    let stream = pipewire::stream::StreamRc::new(
-        core,
-        &name,
-        pipewire::properties::properties! {
-            "media.class" => "Video/Source",
-            "node.name" => "cosmic-screenshot", // XXX
-        },
-    )?;
-
-    let initial_params = format_params(dmabuf_helper.as_ref(), None, &formats);
-    let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
-
-    //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
-    let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
-    stream.connect(
-        spa::utils::Direction::Output,
-        None,
-        flags,
-        &mut initial_params,
-    )?;
-
-    let data = StreamData {
-        wayland_helper,
-        dmabuf_helper,
-        session,
-        formats,
-        format: gbm::Format::Abgr8888,
-        modifier: None,
-        node_id_tx: Some(node_id_tx),
-        buffer_damage: HashMap::new(),
-    };
-
-    let listener = stream
-        .add_local_listener_with_user_data(data)
-        .state_changed(|stream, data, old, new| data.state_changed(stream, old, new))
-        .param_changed(|stream, data, id, pod| data.param_changed(stream, id, pod))
-        .add_buffer(|stream, data, buffer| data.add_buffer(stream, buffer))
-        .remove_buffer(|stream, data, buffer| data.remove_buffer(stream, buffer))
-        .process(|stream, data| data.process(stream))
-        .register()?;
-
-    Ok((loop_, stream, listener, context, node_id_rx))
 }
 
 fn convert_transform(transform: WEnum<wl_output::Transform>) -> u32 {
@@ -581,6 +1241,17 @@ unsafe fn buffer_find_meta_data<'a, T>(
     }
 }
 
+// SAFETY: buffer must be non-null, and valid as long as return value is used
+unsafe fn buffer_find_meta<'a>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+) -> Option<&'a mut spa_sys::spa_meta> {
+    unsafe {
+        let ptr = spa_sys::spa_buffer_find_meta((*buffer).buffer, type_);
+        (ptr as *mut spa_sys::spa_meta).as_mut()
+    }
+}
+
 struct OwnedPod(Vec<u8>);
 
 impl OwnedPod {
@@ -606,7 +1277,7 @@ impl std::ops::Deref for OwnedPod {
     }
 }
 
-fn meta() -> OwnedPod {
+fn transform_meta() -> OwnedPod {
     OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
         id: spa_sys::SPA_PARAM_Meta,
@@ -623,8 +1294,34 @@ fn meta() -> OwnedPod {
             },
         ],
     }))
-    // TODO: header, video damage
 }
+
+fn damage_meta() -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
+        type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa_sys::SPA_PARAM_Meta,
+        properties: vec![
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_type,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_VideoDamage)),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_size,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
+                    spa::utils::ChoiceFlags::empty(),
+                    spa::utils::ChoiceEnum::Range {
+                        default: (size_of::<spa_sys::spa_meta_region>() * 4) as _,
+                        min: size_of::<spa_sys::spa_meta_region>() as _,
+                        max: (size_of::<spa_sys::spa_meta_region>() * 32) as _,
+                    },
+                ))),
+            },
+        ],
+    }))
+}
+// TODO: header
 
 fn format_params(
     dmabuf: Option<&DmabufHelper>,
@@ -670,7 +1367,8 @@ fn format_params(
 fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<OwnedPod> {
     [
         Some(buffers(width, height, blocks, allow_dmabuf)),
-        Some(meta()),
+        Some(transform_meta()),
+        Some(damage_meta()),
     ]
     .into_iter()
     .flatten()
@@ -748,6 +1446,14 @@ fn format(
     fixated_modifier: Option<gbm::Modifier>,
     formats: &Formats,
 ) -> Option<OwnedPod> {
+    let default_framerate = spa_sys::spa_fraction { num: 60, denom: 1 };
+    let min_framerate = spa_sys::spa_fraction { num: 0, denom: 1 };
+    // Is there any way to get the maximum refresh rate?
+    let max_framerate = spa_sys::spa_fraction {
+        num: 1000,
+        denom: 1,
+    };
+
     let mut properties = vec![
         pod::Property {
             key: spa_sys::SPA_FORMAT_mediaType,
@@ -772,9 +1478,20 @@ fn format(
         pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_framerate,
             flags: pod::PropertyFlags::empty(),
-            value: pod::Value::Fraction(spa::utils::Fraction { num: 60, denom: 1 }),
+            value: pod::Value::Fraction(spa::utils::Fraction { num: 0, denom: 1 }),
         },
-        // TODO max framerate
+        pod::Property {
+            key: spa_sys::SPA_FORMAT_VIDEO_maxFramerate,
+            flags: pod::PropertyFlags::empty(),
+            value: pod::Value::Choice(pod::ChoiceValue::Fraction(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Range {
+                    default: default_framerate,
+                    min: min_framerate,
+                    max: max_framerate,
+                },
+            ))),
+        },
     ];
     if let Some(modifier) = fixated_modifier {
         properties.push(pod::Property {
