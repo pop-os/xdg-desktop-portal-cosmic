@@ -192,6 +192,19 @@ const COLOR_SCHEME_KEY: &str = "color-scheme";
 const ACCENT_COLOR_KEY: &str = "accent-color";
 const CONTRAST_KEY: &str = "contrast";
 
+const GNOME_DESKTOP_INTERFACE_NAMESPACE: &str = "org.gnome.desktop.interface";
+const TEXT_SCALING_FACTOR_KEY: &str = "text-scaling-factor";
+
+/// Matches a namespace pattern against a known namespace.
+/// Supports trailing '*' glob (e.g., "org.gnome.*" matches "org.gnome.desktop.interface").
+fn namespace_matches(pattern: &str, namespace: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        namespace.starts_with(prefix)
+    } else {
+        pattern == namespace
+    }
+}
+
 struct Settings {
     pub color_scheme: ColorScheme,
     pub contrast: Contrast,
@@ -225,38 +238,53 @@ impl Settings {
         self.read_one(namespace, key).await
     }
 
-    // TODO globs
     /// ReadAll method
     async fn read_all(
         &self,
-        mut namespaces: Vec<&str>,
+        namespaces: Vec<&str>,
     ) -> HashMap<String, HashMap<String, OwnedValue>> {
         let mut map = HashMap::new();
-        if namespaces.is_empty() {
-            namespaces = vec![APPEARANCE_NAMESPACE];
-        }
-        for ns in namespaces {
-            let mut inner = HashMap::new();
-            if ns != APPEARANCE_NAMESPACE {
-                map.insert(ns.to_string(), inner);
+
+        let all_namespaces: &[&str] = &[APPEARANCE_NAMESPACE, GNOME_DESKTOP_INTERFACE_NAMESPACE];
+
+        for &known_ns in all_namespaces {
+            let matched = namespaces.is_empty()
+                || namespaces
+                    .iter()
+                    .any(|pattern| namespace_matches(pattern, known_ns));
+            if !matched {
                 continue;
             }
-            inner.insert(
-                COLOR_SCHEME_KEY.to_string(),
-                OwnedValue::from(self.color_scheme as u32),
-            );
-            inner.insert(
-                CONTRAST_KEY.to_string(),
-                OwnedValue::from(self.contrast as u32),
-            );
-            if let Ok(value) = OwnedValue::try_from(Color {
-                red: self.accent.red,
-                green: self.accent.green,
-                blue: self.accent.blue,
-            }) {
-                inner.insert(ACCENT_COLOR_KEY.to_string(), value);
+            match known_ns {
+                APPEARANCE_NAMESPACE => {
+                    let mut inner = HashMap::new();
+                    inner.insert(
+                        COLOR_SCHEME_KEY.to_string(),
+                        OwnedValue::from(self.color_scheme as u32),
+                    );
+                    inner.insert(
+                        CONTRAST_KEY.to_string(),
+                        OwnedValue::from(self.contrast as u32),
+                    );
+                    if let Ok(value) = OwnedValue::try_from(Color {
+                        red: self.accent.red,
+                        green: self.accent.green,
+                        blue: self.accent.blue,
+                    }) {
+                        inner.insert(ACCENT_COLOR_KEY.to_string(), value);
+                    }
+                    map.insert(APPEARANCE_NAMESPACE.to_string(), inner);
+                }
+                GNOME_DESKTOP_INTERFACE_NAMESPACE => {
+                    let mut inner = HashMap::new();
+                    inner.insert(
+                        TEXT_SCALING_FACTOR_KEY.to_string(),
+                        OwnedValue::from(1.0_f64),
+                    );
+                    map.insert(GNOME_DESKTOP_INTERFACE_NAMESPACE.to_string(), inner);
+                }
+                _ => {}
             }
-            map.insert(APPEARANCE_NAMESPACE.to_string(), inner);
         }
         map
     }
@@ -274,6 +302,9 @@ impl Settings {
                 blue: self.accent.blue,
             })
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string())),
+            (GNOME_DESKTOP_INTERFACE_NAMESPACE, TEXT_SCALING_FACTOR_KEY) => {
+                Ok(OwnedValue::from(1.0_f64))
+            }
             _ => Err(zbus::fdo::Error::Failed(
                 "Unknown namespace or key".to_string(),
             )),
