@@ -225,7 +225,12 @@ impl Session {
         self.0.wayland_helper.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
-        receiver.await.unwrap()
+        // Assume stopped if frame is dropped without `ready` or `failed`
+        // - This can happen if the session object has already been destroyed
+        //   when the frame is created.
+        receiver
+            .await
+            .unwrap_or(Err(WEnum::Value(FailureReason::Stopped)))
     }
 }
 
