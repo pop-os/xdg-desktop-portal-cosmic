@@ -1,6 +1,6 @@
 allow = Разрешить
 cancel = Отмена
-capture = Сделать снимок
+capture = Снять
 save-to = Сохранить в
     .clipboard = { save-to } буфер обмена
     .pictures = { save-to } Изображения
