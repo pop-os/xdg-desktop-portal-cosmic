@@ -345,10 +345,6 @@ impl cosmic::Application for CosmicPortal {
         let old = self.core.system_theme().cosmic();
         let mut msgs = Vec::with_capacity(3);
 
-        if old.is_dark != new_theme.is_dark {
-            return Task::none();
-        }
-
         if old.accent_color() != new_theme.accent_color() {
             msgs.push(subscription::Event::Accent(new_theme.accent_color()));
         }
