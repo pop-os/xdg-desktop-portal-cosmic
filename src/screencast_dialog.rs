@@ -50,8 +50,9 @@ pub async fn show_screencast_prompt(
     app_id: String,
     multiple: bool,
     source_types: BitFlags<SourceType>,
+    show_cursor: bool,
     wayland_helper: &WaylandHelper,
-) -> Option<CaptureSources> {
+) -> Option<Selection> {
     let locales = get_languages_from_env();
     let desktop_entries = load_desktop_entries(&locales).await;
 
@@ -91,6 +92,7 @@ pub async fn show_screencast_prompt(
         toplevels,
         multiple,
         source_types,
+        show_cursor,
         app_name,
         tx,
         capture_sources: Default::default(),
@@ -140,16 +142,17 @@ pub struct Args {
     session_handle: zvariant::ObjectPath<'static>,
     multiple: bool,
     source_types: BitFlags<SourceType>,
+    show_cursor: bool,
     outputs: Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
     toplevels: Vec<(ToplevelInfo, Option<String>)>,
     app_name: Option<String>,
     // Should be oneshot, but need `Clone` bound
-    tx: mpsc::Sender<Option<CaptureSources>>,
+    tx: mpsc::Sender<Option<Selection>>,
     capture_sources: CaptureSources,
 }
 
 impl Args {
-    fn send_response(self, response: Option<CaptureSources>) {
+    fn send_response(self, response: Option<Selection>) {
         tokio::spawn(async move {
             if let Err(err) = self.tx.send(response).await {
                 log::error!("Failed to send screencast event: {}", err);
@@ -177,10 +180,17 @@ impl CaptureSources {
 }
 
 #[derive(Clone, Debug)]
+pub struct Selection {
+    pub capture_sources: CaptureSources,
+    pub show_cursor: bool,
+}
+
+#[derive(Clone, Debug)]
 pub enum Msg {
     ActivateTab(widget::segmented_button::Entity),
     SelectOutput(WlOutput),
     SelectToplevel(ExtForeignToplevelHandleV1),
+    ShowCursor(bool),
     Share,
     Cancel,
 }
@@ -228,9 +238,15 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 args.capture_sources.toplevels.push(toplevel);
             }
         }
+        Msg::ShowCursor(show_cursor) => {
+            args.show_cursor = show_cursor;
+        }
         Msg::Share => {
             if let Some(mut args) = portal.screencast_args.take() {
-                let response = mem::take(&mut args.capture_sources);
+                let response = Selection {
+                    capture_sources: mem::take(&mut args.capture_sources),
+                    show_cursor: args.show_cursor,
+                };
                 args.send_response(Some(response));
                 return destroy_layer_surface(*SCREENCAST_ID);
             }
@@ -447,7 +463,10 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let unknown = fl!("unknown-application");
     let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
-    let control = widget::column::with_children(vec![tabs.into(), list]).spacing(8);
+    let show_cursor = widget::settings::item::builder(fl!("show-cursor"))
+        .toggler(args.show_cursor, Msg::ShowCursor);
+    let control =
+        widget::column::with_children(vec![tabs.into(), list, show_cursor.into()]).spacing(8);
     autosize::autosize(
         KeyboardWrapper::new(
             widget::dialog()
