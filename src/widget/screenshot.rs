@@ -17,10 +17,11 @@ use wayland_client::protocol::wl_output::WlOutput;
 use crate::{
     app::OutputState,
     fl,
-    screenshot::{Choice, Rect, ScreenshotImage},
+    screenshot::{AnnotationShape, AnnotationState, AnnotationTool, Choice, Rect, ScreenshotImage},
 };
 
 use super::{
+    annotation_canvas::AnnotationCanvas,
     output_selection::OutputSelection,
     rectangle_selection::{DragState, RectangleSelection},
 };
@@ -60,6 +61,102 @@ impl<'a, Msg> ScreenshotSelection<'a, Msg>
 where
     Msg: 'static + Clone,
 {
+    pub fn new_annotation(
+        annotation: &AnnotationState,
+        on_capture: Msg,
+        on_cancel: Msg,
+        on_tool_change: impl Fn(AnnotationTool) -> Msg + 'static + Clone,
+        on_undo: Msg,
+        on_draft: impl Fn(Option<AnnotationShape>) -> Msg + 'static,
+        on_commit: impl Fn(AnnotationShape) -> Msg + 'static,
+        save_locations: &'a Vec<String>,
+        selected_save_location: usize,
+        dropdown_selected: impl Fn(usize) -> Msg + 'static + Clone,
+        spacing: Spacing,
+    ) -> Self {
+        let space_s = spacing.space_s;
+        let space_xs = spacing.space_xs;
+        let space_xxs = spacing.space_xxs;
+
+        let rectangle_button = button::custom(text(fl!("annotation-rectangle")))
+            .class(if annotation.tool == AnnotationTool::Rectangle {
+                cosmic::theme::Button::Suggested
+            } else {
+                cosmic::theme::Button::Standard
+            })
+            .on_press(on_tool_change(AnnotationTool::Rectangle));
+        let arrow_button = button::custom(text(fl!("annotation-arrow")))
+            .class(if annotation.tool == AnnotationTool::Arrow {
+                cosmic::theme::Button::Suggested
+            } else {
+                cosmic::theme::Button::Standard
+            })
+            .on_press(on_tool_change(AnnotationTool::Arrow));
+
+        Self {
+            id: cosmic::widget::Id::unique(),
+            choices: Vec::new(),
+            output_logical_geo: Vec::new(),
+            choice_labels: Vec::new(),
+            bg_element: image::Image::new(annotation.image.handle.clone())
+                .content_fit(ContentFit::Fill)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            fg_element: AnnotationCanvas::new(
+                annotation.annotations.clone(),
+                annotation.draft,
+                annotation.tool,
+                on_draft,
+                on_commit,
+            )
+            .into(),
+            menu_element: cosmic::widget::container(
+                row![
+                    rectangle_button,
+                    arrow_button,
+                    button::custom(text(fl!("undo")))
+                        .on_press_maybe((!annotation.annotations.is_empty()).then_some(on_undo)),
+                    vertical::light().height(Length::Fixed(64.0)),
+                    button::custom(text(fl!("capture"))).on_press(on_capture),
+                    vertical::light().height(Length::Fixed(64.0)),
+                    Element::from(dropdown(
+                        save_locations.as_slice(),
+                        Some(selected_save_location),
+                        |i| i
+                    ))
+                    .map(dropdown_selected),
+                    vertical::light().height(Length::Fixed(64.0)),
+                    button::custom(
+                        icon::Icon::from(icon::from_name("window-close-symbolic").size(63))
+                            .width(Length::Fixed(40.0))
+                            .height(Length::Fixed(40.0))
+                    )
+                    .class(cosmic::theme::Button::Icon)
+                    .on_press(on_cancel),
+                ]
+                .align_y(cosmic::iced_core::Alignment::Center)
+                .spacing(space_s)
+                .padding([space_xxs, space_s, space_xxs, space_s]),
+            )
+            .class(cosmic::theme::Container::Custom(Box::new(|theme| {
+                let theme = theme.cosmic();
+                cosmic::iced::widget::container::Style {
+                    background: Some(Background::Color(theme.background.component.base.into())),
+                    text_color: Some(theme.background.component.on.into()),
+                    border: Border {
+                        radius: theme.corner_radii.radius_s.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            })))
+            .padding(space_xs)
+            .into(),
+            choice: Choice::Output(annotation.output_name.clone()),
+        }
+    }
+
     pub fn new(
         choice: Choice,
         image: &ScreenshotImage,

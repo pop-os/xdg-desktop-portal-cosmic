@@ -13,7 +13,7 @@ use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_lay
 use cosmic::widget::space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use futures::stream::{FuturesUnordered, StreamExt};
-use image::RgbaImage;
+use image::{Rgba, RgbaImage};
 use rustix::fd::AsFd;
 use std::borrow::Cow;
 use std::num::NonZeroU32;
@@ -40,14 +40,18 @@ pub struct ScreenshotImage {
 }
 
 impl ScreenshotImage {
-    fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
-        let rgba = img.image_transformed()?;
+    fn from_rgba(rgba: RgbaImage) -> Self {
         let handle = cosmic::widget::image::Handle::from_rgba(
             rgba.width(),
             rgba.height(),
             rgba.clone().into_vec(),
         );
-        Ok(Self { rgba, handle })
+        Self { rgba, handle }
+    }
+
+    fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
+        let rgba = img.image_transformed()?;
+        Ok(Self::from_rgba(rgba))
     }
 
     pub fn width(&self) -> u32 {
@@ -157,6 +161,72 @@ impl Rect {
 pub struct RectDimension {
     width: NonZeroU32,
     height: NonZeroU32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationTool {
+    Rectangle,
+    Arrow,
+}
+
+impl Default for AnnotationTool {
+    fn default() -> Self {
+        Self::Rectangle
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnnotationPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl AnnotationPoint {
+    pub fn distance(self, other: Self) -> f32 {
+        (self.x - other.x).hypot(self.y - other.y)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AnnotationShape {
+    Rectangle {
+        start: AnnotationPoint,
+        end: AnnotationPoint,
+    },
+    Arrow {
+        start: AnnotationPoint,
+        end: AnnotationPoint,
+    },
+}
+
+impl AnnotationShape {
+    pub fn new(tool: AnnotationTool, start: AnnotationPoint, end: AnnotationPoint) -> Self {
+        match tool {
+            AnnotationTool::Rectangle => Self::Rectangle { start, end },
+            AnnotationTool::Arrow => Self::Arrow { start, end },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AnnotationState {
+    pub image: ScreenshotImage,
+    pub output_name: String,
+    pub tool: AnnotationTool,
+    pub annotations: Vec<AnnotationShape>,
+    pub draft: Option<AnnotationShape>,
+}
+
+impl AnnotationState {
+    fn new(image: RgbaImage, output_name: String) -> Self {
+        Self {
+            image: ScreenshotImage::from_rgba(image),
+            output_name,
+            tool: AnnotationTool::default(),
+            annotations: Vec::new(),
+            draft: None,
+        }
+    }
 }
 
 pub struct Screenshot {
@@ -379,6 +449,10 @@ pub enum Msg {
     CaptureWithLocation(ImageSaveLocation),
     Cancel,
     Choice(Choice),
+    AnnotationDraft(Option<AnnotationShape>),
+    AnnotationCommit(AnnotationShape),
+    AnnotationTool(AnnotationTool),
+    AnnotationUndo,
     OutputChanged(WlOutput),
     WindowChosen(String, usize),
     Location(usize),
@@ -425,6 +499,7 @@ pub struct Args {
     pub choice: Choice,
     pub location: ImageSaveLocation,
     pub action: Action,
+    pub annotation: Option<AnnotationState>,
 }
 
 struct Output {
@@ -537,6 +612,7 @@ impl Screenshot {
                     location: config.save_location,
                     // TODO cover all outputs at start of rectangle?
                     choice,
+                    annotation: None,
                     // will be updated
                 }))
                 .await
@@ -590,6 +666,60 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
     let Some(args) = portal.screenshot_args.as_ref() else {
         return space::horizontal().width(Length::Fixed(1.0)).into();
     };
+    if let Some(annotation) = &args.annotation {
+        if annotation.output_name != output.name.as_str() {
+            return space::horizontal().width(Length::Fixed(1.0)).into();
+        }
+
+        let theme = portal.core.system_theme().cosmic();
+        return KeyboardWrapper::new(
+            crate::widget::screenshot::ScreenshotSelection::new_annotation(
+                annotation,
+                Msg::Capture,
+                Msg::Cancel,
+                Msg::AnnotationTool,
+                Msg::AnnotationUndo,
+                Msg::AnnotationDraft,
+                Msg::AnnotationCommit,
+                &portal.location_options,
+                args.location as usize,
+                Msg::Location,
+                theme.spacing,
+            ),
+            |key, modifiers| {
+                if modifiers.control() {
+                    match key {
+                        Key::Named(Named::Copy) => {
+                            return Some(Msg::CaptureWithLocation(ImageSaveLocation::Clipboard));
+                        }
+                        Key::Named(Named::Save) => {
+                            return Some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures));
+                        }
+                        Key::Character(ref value) => {
+                            let value = value.as_str();
+                            if value.eq_ignore_ascii_case("c") {
+                                return Some(Msg::CaptureWithLocation(
+                                    ImageSaveLocation::Clipboard,
+                                ));
+                            } else if value.eq_ignore_ascii_case("s") {
+                                return Some(Msg::CaptureWithLocation(ImageSaveLocation::Pictures));
+                            } else if value.eq_ignore_ascii_case("z") {
+                                return Some(Msg::AnnotationUndo);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                match key {
+                    Key::Named(Named::Enter) => Some(Msg::Capture),
+                    Key::Named(Named::Escape) => Some(Msg::Cancel),
+                    _ => None,
+                }
+            },
+        )
+        .into();
+    }
 
     let Some(img) = args.output_images.get(&output.name) else {
         return space::horizontal().width(Length::Fixed(1.0)).into();
@@ -647,121 +777,15 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
     match msg {
         Msg::Capture => {
-            let mut cmds: Vec<cosmic::Task<crate::app::Msg>> = portal
-                .outputs
-                .iter()
-                .map(|o| destroy_layer_surface(o.id))
-                .collect();
-            let Some(args) = portal.screenshot_args.take() else {
-                log::error!("Failed to find screenshot Args for Capture message.");
-                return cosmic::Task::batch(cmds);
-            };
-            let outputs = portal.outputs.clone();
-            let Args {
-                tx,
-                choice,
-                output_images: mut images,
-                location,
-                ..
-            } = args;
-
-            let mut success = true;
-            let image_path = Screenshot::get_img_path(location);
-
-            match choice {
-                Choice::Output(name) => {
-                    if let Some(img) = images.remove(&name) {
-                        if let Ok(buffer) = Screenshot::save_rgba(&img.rgba, image_path.as_deref())
-                            .inspect_err(|err| {
-                                log::error!("Failed to capture screenshot: {:?}", err);
-                                success = false;
-                            })
-                        {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
-                        }
-                    } else {
-                        log::error!("Failed to find output {}", name);
-                        success = false;
-                    }
-                }
-                Choice::Rectangle(r, s) => {
-                    if let Some(RectDimension { width, height }) = r.dimensions() {
-                        // Construct Rgba image with size of rect
-                        // then overlay the part of each image that intersects with the rect
-                        //let mut img = RgbaImage::new(width.get(), height.get());
-
-                        let frames = images
-                            .into_iter()
-                            .filter_map(|(name, raw_img)| {
-                                let output = outputs.iter().find(|o| o.name == name)?;
-                                let pos = output.logical_pos;
-                                let output_rect = Rect {
-                                    left: pos.0,
-                                    top: pos.1,
-                                    right: pos.0 + output.logical_size.0 as i32,
-                                    bottom: pos.1 + output.logical_size.1 as i32,
-                                };
-
-                                let intersect = r.intersect(output_rect)?;
-
-                                Some((raw_img.rgba, output_rect))
-                            })
-                            .collect::<Vec<_>>();
-                        let img = combined_image(r, frames);
-
-                        if let Ok(buffer) = Screenshot::save_rgba(&img, image_path.as_deref())
-                            .inspect_err(|err| {
-                                log::error!("Failed to capture screenshot: {:?}", err);
-                                success = false;
-                            })
-                        {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
-                        }
-                    } else {
-                        success = false;
-                    }
-                }
-                Choice::Window(output, Some(window_i)) => {
-                    if let Some(img) = args
-                        .toplevel_images
-                        .get(&output)
-                        .and_then(|imgs| imgs.get(window_i))
-                    {
-                        if let Ok(buffer) = Screenshot::save_rgba(&img.rgba, image_path.as_deref())
-                            .inspect_err(|err| {
-                                log::error!("Failed to capture screenshot: {:?}", err);
-                                success = false;
-                            })
-                        {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
-                        }
-                    } else {
-                        success = false;
-                    }
-                }
-                _ => {
-                    success = false;
-                }
-            }
-
-            let response = if success && image_path.is_some() {
-                PortalResponse::Success(ScreenshotResult {
-                    uri: format!("file:///{}", image_path.unwrap().display()),
-                })
-            } else if success && image_path.is_none() {
-                PortalResponse::Success(ScreenshotResult {
-                    uri: "clipboard:///".to_string(),
-                })
+            if portal
+                .screenshot_args
+                .as_ref()
+                .is_some_and(|args| args.annotation.is_none())
+            {
+                start_annotation(portal)
             } else {
-                PortalResponse::Other
-            };
-
-            tokio::spawn(async move {
-                if let Err(err) = tx.send(response).await {
-                    log::error!("Failed to send screenshot event");
-                }
-            });
-            cosmic::Task::batch(cmds)
+                finish_capture(portal)
+            }
         }
         Msg::CaptureWithLocation(location) => {
             if let Some(args) = portal.screenshot_args.as_mut() {
@@ -786,6 +810,49 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             });
 
             cosmic::Task::batch(cmds)
+        }
+        Msg::AnnotationDraft(draft) => {
+            if let Some(annotation) = portal
+                .screenshot_args
+                .as_mut()
+                .and_then(|args| args.annotation.as_mut())
+            {
+                annotation.draft = draft;
+            }
+            cosmic::Task::none()
+        }
+        Msg::AnnotationCommit(shape) => {
+            if let Some(annotation) = portal
+                .screenshot_args
+                .as_mut()
+                .and_then(|args| args.annotation.as_mut())
+            {
+                annotation.annotations.push(shape);
+                annotation.draft = None;
+            }
+            cosmic::Task::none()
+        }
+        Msg::AnnotationTool(tool) => {
+            if let Some(annotation) = portal
+                .screenshot_args
+                .as_mut()
+                .and_then(|args| args.annotation.as_mut())
+            {
+                annotation.tool = tool;
+                annotation.draft = None;
+            }
+            cosmic::Task::none()
+        }
+        Msg::AnnotationUndo => {
+            if let Some(annotation) = portal
+                .screenshot_args
+                .as_mut()
+                .and_then(|args| args.annotation.as_mut())
+            {
+                annotation.annotations.pop();
+                annotation.draft = None;
+            }
+            cosmic::Task::none()
         }
         Msg::Choice(c) => {
             let choice = (&c).into();
@@ -878,6 +945,253 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
     }
 }
 
+fn start_annotation(portal: &mut CosmicPortal) -> cosmic::Task<crate::app::Msg> {
+    let Some(args) = portal.screenshot_args.as_mut() else {
+        log::error!("Failed to find screenshot Args for annotation.");
+        return cosmic::Task::none();
+    };
+
+    match selected_image(
+        &args.choice,
+        &args.output_images,
+        &args.toplevel_images,
+        &portal.outputs,
+    ) {
+        Some((image, output_name)) => {
+            args.annotation = Some(AnnotationState::new(image, output_name));
+        }
+        None => {
+            log::error!("Failed to prepare screenshot annotation image.");
+        }
+    }
+
+    cosmic::Task::none()
+}
+
+fn finish_capture(portal: &mut CosmicPortal) -> cosmic::Task<crate::app::Msg> {
+    let mut cmds: Vec<cosmic::Task<crate::app::Msg>> = portal
+        .outputs
+        .iter()
+        .map(|o| destroy_layer_surface(o.id))
+        .collect();
+    let Some(args) = portal.screenshot_args.take() else {
+        log::error!("Failed to find screenshot Args for Capture message.");
+        return cosmic::Task::batch(cmds);
+    };
+    let outputs = portal.outputs.clone();
+    let image = args
+        .annotation
+        .as_ref()
+        .map(render_annotations)
+        .or_else(|| {
+            selected_image(
+                &args.choice,
+                &args.output_images,
+                &args.toplevel_images,
+                &outputs,
+            )
+            .map(|(image, _)| image)
+        });
+
+    let Args { tx, location, .. } = args;
+    let image_path = Screenshot::get_img_path(location);
+    let mut success = true;
+
+    if let Some(image) = image {
+        if let Ok(buffer) =
+            Screenshot::save_rgba(&image, image_path.as_deref()).inspect_err(|err| {
+                log::error!("Failed to capture screenshot: {:?}", err);
+                success = false;
+            })
+        {
+            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+        }
+    } else {
+        success = false;
+    }
+
+    let response = if success {
+        match image_path {
+            Some(image_path) => PortalResponse::Success(ScreenshotResult {
+                uri: format!("file:///{}", image_path.display()),
+            }),
+            None => PortalResponse::Success(ScreenshotResult {
+                uri: "clipboard:///".to_string(),
+            }),
+        }
+    } else {
+        PortalResponse::Other
+    };
+
+    tokio::spawn(async move {
+        if let Err(err) = tx.send(response).await {
+            log::error!("Failed to send screenshot event: {err}");
+        }
+    });
+    cosmic::Task::batch(cmds)
+}
+
+fn selected_image(
+    choice: &Choice,
+    images: &HashMap<String, ScreenshotImage>,
+    toplevel_images: &HashMap<String, Vec<ScreenshotImage>>,
+    outputs: &[OutputState],
+) -> Option<(RgbaImage, String)> {
+    match choice {
+        Choice::Output(name) => images.get(name).map(|img| (img.rgba.clone(), name.clone())),
+        Choice::Rectangle(r, _) => {
+            r.dimensions()?;
+            let frames = images
+                .iter()
+                .filter_map(|(name, raw_img)| {
+                    let output = outputs.iter().find(|o| o.name == *name)?;
+                    let pos = output.logical_pos;
+                    let output_rect = Rect {
+                        left: pos.0,
+                        top: pos.1,
+                        right: pos.0 + output.logical_size.0 as i32,
+                        bottom: pos.1 + output.logical_size.1 as i32,
+                    };
+
+                    r.intersect(output_rect)?;
+
+                    Some((raw_img.rgba.clone(), output_rect))
+                })
+                .collect::<Vec<_>>();
+            let output_name = output_for_rect(*r, outputs)?;
+            Some((combined_image(*r, frames), output_name))
+        }
+        Choice::Window(output, Some(window_i)) => toplevel_images
+            .get(output)
+            .and_then(|imgs| imgs.get(*window_i))
+            .map(|img| (img.rgba.clone(), output.clone())),
+        _ => None,
+    }
+}
+
+fn output_for_rect(rect: Rect, outputs: &[OutputState]) -> Option<String> {
+    let center_x = rect.left + rect.width() / 2;
+    let center_y = rect.top + rect.height() / 2;
+
+    outputs
+        .iter()
+        .find(|output| {
+            let left = output.logical_pos.0;
+            let top = output.logical_pos.1;
+            let right = left + output.logical_size.0 as i32;
+            let bottom = top + output.logical_size.1 as i32;
+            center_x >= left && center_x <= right && center_y >= top && center_y <= bottom
+        })
+        .or_else(|| outputs.first())
+        .map(|output| output.name.clone())
+}
+
+fn render_annotations(annotation: &AnnotationState) -> RgbaImage {
+    let mut image = annotation.image.rgba.clone();
+    let color = Rgba([255, 80, 64, 255]);
+    let thickness = ((image.width().max(image.height()) as f32 / 360.0).round() as i32).max(3);
+
+    for shape in &annotation.annotations {
+        match *shape {
+            AnnotationShape::Rectangle { start, end } => {
+                let start = image_point(start, &image);
+                let end = image_point(end, &image);
+                draw_rect(&mut image, start, end, color, thickness);
+            }
+            AnnotationShape::Arrow { start, end } => {
+                let start = image_point(start, &image);
+                let end = image_point(end, &image);
+                draw_arrow(&mut image, start, end, color, thickness);
+            }
+        }
+    }
+
+    image
+}
+
+fn image_point(point: AnnotationPoint, image: &RgbaImage) -> (i32, i32) {
+    (
+        (point.x.clamp(0.0, 1.0) * image.width().saturating_sub(1) as f32).round() as i32,
+        (point.y.clamp(0.0, 1.0) * image.height().saturating_sub(1) as f32).round() as i32,
+    )
+}
+
+fn draw_rect(
+    image: &mut RgbaImage,
+    start: (i32, i32),
+    end: (i32, i32),
+    color: Rgba<u8>,
+    thickness: i32,
+) {
+    let left = start.0.min(end.0);
+    let right = start.0.max(end.0);
+    let top = start.1.min(end.1);
+    let bottom = start.1.max(end.1);
+
+    draw_line(image, (left, top), (right, top), color, thickness);
+    draw_line(image, (right, top), (right, bottom), color, thickness);
+    draw_line(image, (right, bottom), (left, bottom), color, thickness);
+    draw_line(image, (left, bottom), (left, top), color, thickness);
+}
+
+fn draw_arrow(
+    image: &mut RgbaImage,
+    start: (i32, i32),
+    end: (i32, i32),
+    color: Rgba<u8>,
+    thickness: i32,
+) {
+    draw_line(image, start, end, color, thickness);
+
+    let dx = (end.0 - start.0) as f32;
+    let dy = (end.1 - start.1) as f32;
+    let angle = dy.atan2(dx);
+    let head_len = (thickness as f32 * 7.0).max(18.0);
+    let spread = 0.55;
+
+    for head_angle in [
+        angle + std::f32::consts::PI - spread,
+        angle + std::f32::consts::PI + spread,
+    ] {
+        let head = (
+            (end.0 as f32 + head_len * head_angle.cos()).round() as i32,
+            (end.1 as f32 + head_len * head_angle.sin()).round() as i32,
+        );
+        draw_line(image, end, head, color, thickness);
+    }
+}
+
+fn draw_line(
+    image: &mut RgbaImage,
+    start: (i32, i32),
+    end: (i32, i32),
+    color: Rgba<u8>,
+    thickness: i32,
+) {
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let steps = dx.abs().max(dy.abs()).max(1);
+
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let x = (start.0 as f32 + dx as f32 * t).round() as i32;
+        let y = (start.1 as f32 + dy as f32 * t).round() as i32;
+        draw_dot(image, x, y, color, thickness);
+    }
+}
+
+fn draw_dot(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>, thickness: i32) {
+    let radius = thickness / 2;
+    for yy in y - radius..=y + radius {
+        for xx in x - radius..=x + radius {
+            if xx < 0 || yy < 0 || xx >= image.width() as i32 || yy >= image.height() as i32 {
+                continue;
+            }
+            image.put_pixel(xx as u32, yy as u32, color);
+        }
+    }
+}
+
 pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate::app::Msg> {
     let Args {
         handle,
@@ -890,6 +1204,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
         action,
         location,
         toplevel_images,
+        annotation: _,
     } = &args;
 
     if portal.outputs.len() != images.len() {

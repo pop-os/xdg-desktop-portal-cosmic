@@ -1,6 +1,9 @@
 allow = Allow
 cancel = Cancel
 capture = Capture
+annotation-arrow = Arrow
+annotation-rectangle = Rectangle
+undo = Undo
 share = Share
 save-to = Save to
     .clipboard = { save-to } Clipboard

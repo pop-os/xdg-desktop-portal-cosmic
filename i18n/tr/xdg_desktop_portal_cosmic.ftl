@@ -1,6 +1,9 @@
 allow = İzin ver
 cancel = Vazgeç
 capture = Yakala
+annotation-arrow = Ok
+annotation-rectangle = Dikdörtgen
+undo = Geri al
 share = Paylaş
 save-to = Kaydet
     .clipboard = { save-to } Panoya
