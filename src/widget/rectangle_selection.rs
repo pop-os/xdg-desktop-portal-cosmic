@@ -7,10 +7,11 @@ use cosmic::{
             mime::{AllowedMimeTypes, AsMimeTypes},
         },
         mouse,
+        Pixels,
     },
     iced_core::{
         self, Border, Color, Length, Point, Rectangle, Renderer, Shadow, Size,
-        clipboard::DndSource, layout::Node, renderer::Quad,
+        clipboard::DndSource, layout::Node, renderer::Quad, Text, text::Renderer as _,
     },
     widget::{self, Widget},
 };
@@ -600,6 +601,57 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                 snap: true,
             };
             renderer.fill_quad(quad, accent);
+        }
+
+        // We calculates Height and Width in the center of the rectangle screenshot selection
+        // We only show this when dragging
+        if self.drag_state != DragState::None {
+            const LABEL_W: f32 = 105.0;
+            const LABEL_H: f32 = 32.0;
+            let label_x = translated_clipped_inner_rect.x
+                + (translated_clipped_inner_rect.width - LABEL_W) / 2.0;
+            let label_y = translated_clipped_inner_rect.y
+                + (translated_clipped_inner_rect.height - LABEL_H) / 2.0;
+
+            let label_bounds =
+                Rectangle::new(Point::new(label_x, label_y), Size::new(LABEL_W, LABEL_H));
+
+            renderer.fill_quad(
+                Quad {
+                    bounds: label_bounds,
+                    border: Border {
+                        radius: cosmic.radius_m().into(),
+                        width: 0.0,
+                        color: cosmic.accent_color().into(),
+                    },
+                    shadow: Shadow::default(),
+                    snap: true,
+                },
+                Color::from_rgba(0.05, 0.05, 0.05, 0.82),
+            );
+
+            let dimensions = format!(
+                "{} x {}",
+                inner_rect.width.round() as i32,
+                inner_rect.height.round() as i32
+            );
+            renderer.fill_text(
+                Text {
+                    content: dimensions,
+                    bounds: Size::new(LABEL_W, LABEL_H),
+                    size: Pixels(14.0),
+                    line_height: cosmic::iced_core::text::LineHeight::default(),
+                    font: cosmic::iced_core::Font::MONOSPACE,
+                    shaping: cosmic::iced_core::text::Shaping::Basic,
+                    wrapping: cosmic::iced_core::text::Wrapping::None,
+                    align_x: cosmic::iced_core::text::Alignment::Center,
+                    align_y: cosmic::iced_core::alignment::Vertical::Center,
+                    ellipsize: cosmic::iced_core::text::Ellipsize::None,
+                },
+                label_bounds.center(),
+                Color::WHITE,
+                label_bounds,
+            )
         }
     }
 
