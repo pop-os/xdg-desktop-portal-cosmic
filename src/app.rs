@@ -1,4 +1,6 @@
-use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
+use crate::{
+    access, color_picker, config, file_chooser, screencast_dialog, screenshot, subscription,
+};
 use cosmic::Task;
 use cosmic::iced::{Length, Limits};
 use cosmic::iced_core::event::wayland::OutputEvent;
@@ -41,6 +43,7 @@ pub struct CosmicPortal {
     pub file_choosers: HashMap<window::Id, (file_chooser::Args, file_chooser::Dialog)>,
 
     pub screenshot_args: Option<screenshot::Args>,
+    pub color_picker_args: Option<color_picker::Args>,
     pub screencast_args: Option<screencast_dialog::Args>,
     pub screencast_tab_model:
         widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
@@ -69,6 +72,7 @@ pub enum Msg {
     Access(access::Msg),
     FileChooser(window::Id, file_chooser::Msg),
     Screenshot(screenshot::Msg),
+    ColorPicker(color_picker::Msg),
     Screencast(screencast_dialog::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
@@ -118,6 +122,7 @@ impl cosmic::Application for CosmicPortal {
                 access_args: Default::default(),
                 file_choosers: Default::default(),
                 screenshot_args: Default::default(),
+                color_picker_args: Default::default(),
                 screencast_args: Default::default(),
                 screencast_tab_model: Default::default(),
                 location_options: Vec::new(),
@@ -154,7 +159,11 @@ impl cosmic::Application for CosmicPortal {
         } else if id == *screencast_dialog::SCREENCAST_ID {
             screencast_dialog::view(self).map(Msg::Screencast)
         } else if self.outputs.iter().any(|o| o.id == id) {
-            screenshot::view(self, id).map(Msg::Screenshot)
+            if self.color_picker_args.is_some() {
+                color_picker::view(self, id).map(Msg::ColorPicker)
+            } else {
+                screenshot::view(self, id).map(Msg::Screenshot)
+            }
         } else if self.dummy_id == id {
             widget::space::Space::new()
                 .width(Length::Fill)
@@ -180,6 +189,9 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Screenshot(args) => {
                     screenshot::update_args(self, args).map(cosmic::Action::App)
                 }
+                subscription::Event::ColorPicker(args) => {
+                    color_picker::update_args(self, args).map(cosmic::Action::App)
+                }
                 subscription::Event::Screencast(args) => {
                     screencast_dialog::update_args(self, args).map(cosmic::Action::App)
                 }
@@ -200,6 +212,7 @@ impl cosmic::Application for CosmicPortal {
                 }
             },
             Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::Action::App),
+            Msg::ColorPicker(m) => color_picker::update_msg(self, m).map(cosmic::Action::App),
             Msg::Screencast(m) => screencast_dialog::update_msg(self, m).map(cosmic::Action::App),
             Msg::Output(o_event, wl_output) => {
                 match o_event {

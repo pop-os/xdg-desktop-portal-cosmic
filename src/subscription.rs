@@ -9,8 +9,8 @@ use zbus::{Connection, fdo, zvariant};
 
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
-    DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland,
+    DBUS_NAME, DBUS_PATH, Settings, access::Access, color_picker, config,
+    file_chooser::FileChooser, screencast::ScreenCast, screenshot::Screenshot, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -18,6 +18,7 @@ pub enum Event {
     Access(crate::access::AccessDialogArgs),
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
+    ColorPicker(color_picker::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
     Accent(Srgba),
@@ -125,6 +126,11 @@ pub(crate) async fn process_changes(
                     Event::Screenshot(args) => {
                         if let Err(err) = output.send(Event::Screenshot(args)).await {
                             log::error!("Error sending screenshot event: {:?}", err);
+                        };
+                    }
+                    Event::ColorPicker(args) => {
+                        if let Err(err) = output.send(Event::ColorPicker(args)).await {
+                            log::error!("Error sending color picker event: {:?}", err);
                         };
                     }
                     Event::Screencast(args) => {
