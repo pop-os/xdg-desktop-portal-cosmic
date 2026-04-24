@@ -11,6 +11,7 @@ pub use cosmic_portal_config as config;
 mod access;
 mod app;
 mod buffer;
+mod color_picker;
 mod documents;
 mod file_chooser;
 mod localize;

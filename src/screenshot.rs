@@ -96,12 +96,6 @@ impl AsMimeTypes for ScreenshotBytes {
     }
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
-struct PickColorResult {
-    color: (f64, f64, f64), // (ddd)
-}
-
 /// Logical Size and Position of a rectangle
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rect {
@@ -567,14 +561,30 @@ impl Screenshot {
 
     async fn pick_color(
         &self,
+        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
-        option: HashMap<String, zvariant::Value<'_>>,
-    ) -> PortalResponse<PickColorResult> {
-        // TODO create handle
-        // XXX implement
-        PortalResponse::Other
+        _option: HashMap<String, zvariant::Value<'_>>,
+    ) -> PortalResponse<crate::color_picker::PickColorResult> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        if let Err(err) = self
+            .tx
+            .send(subscription::Event::ColorPicker(
+                crate::color_picker::Args::new(
+                    handle.to_owned(),
+                    app_id.to_string(),
+                    parent_window.to_string(),
+                    tx,
+                    connection.clone(),
+                ),
+            ))
+            .await
+        {
+            log::error!("Failed to send color picker event: {err}");
+            return PortalResponse::Other;
+        }
+        rx.recv().await.unwrap_or(PortalResponse::Cancelled)
     }
 
     #[zbus(property, name = "version")]
