@@ -1,27 +1,25 @@
 #![allow(dead_code, unused_variables)]
 
+use cosmic::iced::keyboard::Key;
+use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     destroy_layer_surface, get_layer_surface,
 };
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced::{
-    Alignment,
-    keyboard::{Key, key::Named},
-    widget::{column, row},
-    window,
-};
+use cosmic::iced::widget::{column, row};
+use cosmic::iced::{Alignment, window};
 use cosmic::widget::autosize::autosize;
 use cosmic::widget::{self, Column, Id, button, dropdown, icon, text};
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
+use crate::app::CosmicPortal;
 use crate::wayland::WaylandHelper;
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
-use crate::{PortalResponse, subscription};
-use crate::{app::CosmicPortal, fl};
+use crate::{PortalResponse, fl, subscription};
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Debug, Clone)]
 #[zvariant(signature = "a{sv}")]

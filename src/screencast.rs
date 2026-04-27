@@ -1,16 +1,17 @@
 #![allow(dead_code, unused_variables)]
 
-use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
+use ashpd::desktop::screencast::SourceType;
+use ashpd::enumflags2::BitFlags;
 use futures::stream::{FuturesOrdered, StreamExt};
-use std::{collections::HashMap, mem};
+use std::collections::HashMap;
+use std::mem;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
 use crate::screencast_dialog::{self, CaptureSources};
 use crate::screencast_thread::ScreencastThread;
-use crate::subscription;
 use crate::wayland::{CaptureSource, WaylandHelper};
-use crate::{PortalResponse, Request};
+use crate::{PortalResponse, Request, subscription};
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
 const CURSOR_MODE_EMBEDDED: u32 = 2;

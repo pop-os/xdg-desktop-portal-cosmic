@@ -1,30 +1,28 @@
-use std::{borrow::Cow, collections::HashMap, rc::Rc};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::rc::Rc;
 
-use cosmic::{
-    Element,
-    cosmic_theme::Spacing,
-    iced::core::{
-        Alignment, Background, Border, ContentFit, Degrees, Layout, Length, Point, Size,
-        gradient::Linear, layout, overlay, widget::Tree,
-    },
-    iced::{self, window},
-    widget::{
-        self, button, divider, dropdown, icon, image, layer_container, row, space, svg, text,
-    },
+use cosmic::Element;
+use cosmic::cosmic_theme::Spacing;
+use cosmic::iced::core::gradient::Linear;
+use cosmic::iced::core::widget::Tree;
+use cosmic::iced::core::{
+    Alignment, Background, Border, ContentFit, Degrees, Layout, Length, Point, Size, layout,
+    overlay,
+};
+use cosmic::iced::{self, window};
+use cosmic::widget::{
+    self, button, divider, dropdown, icon, image, layer_container, row, space, svg, text,
 };
 use cosmic_bg_config::Source;
 use wayland_client::protocol::wl_output::WlOutput;
 
-use crate::{
-    app::OutputState,
-    fl,
-    screenshot::{Choice, Rect, ScreenshotImage},
-};
+use crate::app::OutputState;
+use crate::fl;
+use crate::screenshot::{Choice, Rect, ScreenshotImage};
 
-use super::{
-    output_selection::OutputSelection,
-    rectangle_selection::{DragState, RectangleSelection},
-};
+use super::output_selection::OutputSelection;
+use super::rectangle_selection::{DragState, RectangleSelection};
 
 pub struct ScreenshotSelection<'a, Msg> {
     id: cosmic::widget::Id,

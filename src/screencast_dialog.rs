@@ -2,13 +2,12 @@ use crate::app::CosmicPortal;
 use crate::fl;
 use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
-use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
+use ashpd::desktop::screencast::SourceType;
+use ashpd::enumflags2::BitFlags;
 use cosmic::desktop::IconSourceExt;
-use cosmic::iced::{
-    self,
-    keyboard::{Key, key::Named},
-    window,
-};
+use cosmic::iced::keyboard::Key;
+use cosmic::iced::keyboard::key::Named;
+use cosmic::iced::{self, window};
 use fde::IconSource;
 
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{

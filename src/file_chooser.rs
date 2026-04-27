@@ -1,17 +1,17 @@
-use cosmic::{action, iced::window, widget};
+use cosmic::iced::window;
+use cosmic::{action, widget};
 use cosmic_files::dialog::{
     DialogChoice, DialogChoiceOption, DialogFilter, DialogFilterPattern, DialogKind, DialogMessage,
     DialogResult, DialogSettings,
 };
-use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
-use crate::{
-    PortalResponse,
-    app::{CosmicPortal, Msg as AppMsg},
-    subscription,
-};
+use crate::app::{CosmicPortal, Msg as AppMsg};
+use crate::{PortalResponse, subscription};
 
 pub(crate) type Dialog = cosmic_files::dialog::Dialog<Msg>;
 

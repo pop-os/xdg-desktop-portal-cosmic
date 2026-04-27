@@ -1,17 +1,10 @@
-use cosmic::{
-    iced::Limits,
-    iced::core::{
-        Background, Border, Color, Length, Renderer, Shadow, Size,
-        layout::Node,
-        mouse,
-        renderer::Quad,
-        widget::{
-            Tree,
-            tree::{self, State},
-        },
-    },
-    widget::Widget,
-};
+use cosmic::iced::Limits;
+use cosmic::iced::core::layout::Node;
+use cosmic::iced::core::renderer::Quad;
+use cosmic::iced::core::widget::Tree;
+use cosmic::iced::core::widget::tree::{self, State};
+use cosmic::iced::core::{Background, Border, Color, Length, Renderer, Shadow, Size, mouse};
+use cosmic::widget::Widget;
 
 pub struct OutputSelection<Msg> {
     on_enter: Msg,

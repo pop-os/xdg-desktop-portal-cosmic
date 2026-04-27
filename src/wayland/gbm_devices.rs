@@ -1,9 +1,7 @@
-use std::{
-    collections::hash_map::{self, HashMap},
-    fs, io,
-    os::unix::fs::MetadataExt,
-    path::{Path, PathBuf},
-};
+use std::collections::hash_map::{self, HashMap};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 // TODO Purge gbm devices that are no longer needed/valid?
 #[derive(Default)]
