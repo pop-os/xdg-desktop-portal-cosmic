@@ -135,13 +135,12 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
             shell.publish(self.on_press.clone());
             shell.capture_event();
         }
-        if changed {
-            if let cosmic::iced::core::Event::Mouse(mouse::Event::CursorMoved { .. })
+        if changed
+            && let cosmic::iced::core::Event::Mouse(mouse::Event::CursorMoved { .. })
             | cosmic::iced::core::Event::Mouse(mouse::Event::CursorEntered) = event
-            {
-                shell.publish(self.on_enter.clone());
-                shell.capture_event();
-            }
+        {
+            shell.publish(self.on_enter.clone());
+            shell.capture_event();
         }
     }
 }

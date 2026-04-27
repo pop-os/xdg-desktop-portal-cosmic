@@ -745,9 +745,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 }
             }
 
-            let response = if success && image_path.is_some() {
+            let response = if success && let Some(image_path) = image_path {
                 PortalResponse::Success(ScreenshotResult {
-                    uri: format!("file:///{}", image_path.unwrap().display()),
+                    uri: format!("file:///{}", image_path.display()),
                 })
             } else if success && image_path.is_none() {
                 PortalResponse::Success(ScreenshotResult {

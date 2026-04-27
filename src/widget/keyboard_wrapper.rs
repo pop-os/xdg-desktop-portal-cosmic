@@ -1,6 +1,6 @@
 use cosmic::iced::core::{
     Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
-    event::{self, Event},
+    event::Event,
     keyboard, layout, mouse, overlay, renderer,
     widget::{Operation, Tree},
 };
