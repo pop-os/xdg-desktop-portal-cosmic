@@ -1,17 +1,13 @@
 use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
 use cosmic::Task;
-use cosmic::iced::{Length, Limits};
-use cosmic::iced_core::event::wayland::OutputEvent;
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+use cosmic::iced::core::event::wayland::OutputEvent;
+use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
+use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedMargin, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::get_layer_surface;
+use cosmic::iced::{Event, Length, Limits, Subscription, event};
 use cosmic::widget;
-use cosmic::{
-    app, cosmic_config,
-    iced::window,
-    iced_futures::{Subscription, event::listen_with},
-};
+use cosmic::{app, cosmic_config, iced::window};
 use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -134,7 +130,7 @@ impl cosmic::Application for CosmicPortal {
                 keyboard_interactivity: wlr_layer::KeyboardInteractivity::None,
                 input_zone: Some(Vec::new()),
                 anchor: wlr_layer::Anchor::empty(),
-                output: cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedOutput::Active,
+                output: cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedOutput::Active,
                 namespace: "cosmic_portal_dummy".into(),
                 margin: IcedMargin::default(),
                 size: Some((Some(6), Some(6))),
@@ -293,14 +289,12 @@ impl cosmic::Application for CosmicPortal {
     }
 
     #[allow(clippy::collapsible_match)]
-    fn subscription(&self) -> cosmic::iced_futures::Subscription<Self::Message> {
+    fn subscription(&self) -> Subscription<Self::Message> {
         let mut subscriptions = vec![
             subscription::portal_subscription(self.wayland_helper.clone()).map(Msg::Portal),
-            listen_with(|e, _, _| match e {
-                cosmic::iced_core::Event::PlatformSpecific(
-                    cosmic::iced_core::event::PlatformSpecific::Wayland(w_e),
-                ) => match w_e {
-                    cosmic::iced_core::event::wayland::Event::Output(o_event, wl_output) => {
+            event::listen_with(|e, _, _| match e {
+                Event::PlatformSpecific(event::PlatformSpecific::Wayland(w_e)) => match w_e {
+                    event::wayland::Event::Output(o_event, wl_output) => {
                         Some(Msg::Output(o_event, wl_output))
                     }
                     _ => None,

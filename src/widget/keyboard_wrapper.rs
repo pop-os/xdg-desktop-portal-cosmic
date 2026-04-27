@@ -1,4 +1,4 @@
-use cosmic::iced_core::{
+use cosmic::iced::core::{
     Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
     event::{self, Event},
     keyboard, layout, mouse, overlay, renderer,
@@ -169,7 +169,7 @@ where
         state: &Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
-        dnd_rectangles: &mut cosmic::iced_core::clipboard::DndDestinationRectangles,
+        dnd_rectangles: &mut cosmic::iced::core::clipboard::DndDestinationRectangles,
     ) {
         if let Some(state) = state.children.first() {
             self.content

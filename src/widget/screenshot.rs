@@ -3,13 +3,14 @@ use std::{borrow::Cow, collections::HashMap, rc::Rc};
 use cosmic::{
     Element,
     cosmic_theme::Spacing,
-    iced::{self, window},
-    iced_core::{
-        Background, Border, ContentFit, Degrees, Layout, Length, Point, Size, alignment,
+    iced::core::{
+        Alignment, Background, Border, ContentFit, Degrees, Layout, Length, Point, Size,
         gradient::Linear, layout, overlay, widget::Tree,
     },
-    iced_widget::row,
-    widget::{Row, button, divider::vertical, dropdown, icon, image, layer_container, space, text},
+    iced::{self, window},
+    widget::{
+        self, button, divider, dropdown, icon, image, layer_container, row, space, svg, text,
+    },
 };
 use cosmic_bg_config::Source;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -122,20 +123,20 @@ where
                         .on_press(toplevel_chosen(output.name.clone(), i))
                         .class(cosmic::theme::Button::Image),
                     )
-                    .align_x(alignment::Alignment::Center)
+                    .align_x(Alignment::Center)
                     .width(Length::FillPortion(portion as u16))
                     .height(Length::Shrink)
                     .into()
                 });
                 layer_container(
-                    Row::with_children(img_buttons)
+                    row::with_children(img_buttons)
                         .spacing(space_l)
                         .width(Length::Fill)
-                        .align_y(alignment::Alignment::Center)
+                        .align_y(Alignment::Center)
                         .padding(space_l),
                 )
-                .align_x(alignment::Alignment::Center)
-                .align_y(alignment::Alignment::Center)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -159,7 +160,7 @@ where
                         .height(Length::Fill)
                         .class(cosmic::theme::Container::Custom(Box::new(move |_| {
                             let color = color.clone();
-                            cosmic::iced_widget::container::Style {
+                            widget::container::Style {
                                 background: Some(match color {
                                     cosmic_bg_config::Color::Single(c) => Background::Color(
                                         cosmic::iced::Color::from_rgba(c[0], c[1], c[2], 1.0),
@@ -180,7 +181,7 @@ where
                                             stop += stop_increment;
                                         }
 
-                                        Background::Gradient(cosmic::iced_core::Gradient::Linear(
+                                        Background::Gradient(cosmic::iced::core::Gradient::Linear(
                                             linear,
                                         ))
                                     }
@@ -199,10 +200,9 @@ where
                 .into(),
             },
         };
-        let active_icon =
-            cosmic::theme::Svg::Custom(Rc::new(|t| cosmic::iced_widget::svg::Style {
-                color: Some(t.cosmic().accent_color().into()),
-            }));
+        let active_icon = cosmic::theme::Svg::Custom(Rc::new(|t| svg::Style {
+            color: Some(t.cosmic().accent_color().into()),
+        }));
         Self {
             id: cosmic::widget::Id::unique(),
             choices: Vec::new(),
@@ -270,8 +270,8 @@ where
                         .padding(space_xs)
                     ]
                     .spacing(space_s)
-                    .align_y(cosmic::iced_core::Alignment::Center),
-                    vertical::light().height(Length::Fixed(64.0)),
+                    .align_y(Alignment::Center),
+                    divider::vertical::light().height(Length::Fixed(64.0)),
                     button::custom(text(fl!("capture"))).on_press_maybe(
                         if let Choice::Rectangle(r, ..) = choice {
                             // Disable button on empty selection
@@ -280,14 +280,14 @@ where
                             Some(on_capture)
                         }
                     ),
-                    vertical::light().height(Length::Fixed(64.0)),
+                    divider::vertical::light().height(Length::Fixed(64.0)),
                     Element::from(dropdown(
                         save_locations.as_slice(),
                         Some(selected_save_location),
                         |i| i
                     ))
                     .map(dropdown_selected),
-                    vertical::light().height(Length::Fixed(64.0)),
+                    divider::vertical::light().height(Length::Fixed(64.0)),
                     button::custom(
                         icon::Icon::from(icon::from_name("window-close-symbolic").size(63))
                             .width(Length::Fixed(40.0))
@@ -296,7 +296,7 @@ where
                     .class(cosmic::theme::Button::Icon)
                     .on_press(on_cancel),
                 ]
-                .align_y(cosmic::iced_core::Alignment::Center)
+                .align_y(Alignment::Center)
                 .spacing(space_s)
                 .padding([space_xxs, space_s, space_xxs, space_s]),
             )
@@ -321,7 +321,7 @@ where
 impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
     for ScreenshotSelection<'a, Msg>
 {
-    fn children(&self) -> Vec<cosmic::iced_core::widget::Tree> {
+    fn children(&self) -> Vec<cosmic::iced::core::widget::Tree> {
         vec![
             Tree::new(&self.bg_element),
             Tree::new(&self.fg_element),
@@ -329,7 +329,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         ]
     }
 
-    fn diff(&mut self, tree: &mut cosmic::iced_core::widget::Tree) {
+    fn diff(&mut self, tree: &mut cosmic::iced::core::widget::Tree) {
         tree.diff_children(&mut [
             &mut self.bg_element,
             &mut self.fg_element,
@@ -342,9 +342,9 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         state: &'b mut Tree,
         layout: Layout<'b>,
         renderer: &cosmic::Renderer,
-        viewport: &cosmic::iced_core::Rectangle,
+        viewport: &cosmic::iced::core::Rectangle,
         translation: iced::Vector,
-    ) -> Option<cosmic::iced_core::overlay::Element<'b, Msg, cosmic::Theme, cosmic::Renderer>> {
+    ) -> Option<overlay::Element<'b, Msg, cosmic::Theme, cosmic::Renderer>> {
         let children = [
             &mut self.bg_element,
             &mut self.fg_element,
@@ -365,14 +365,14 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
     fn update(
         &mut self,
-        tree: &mut cosmic::iced_core::widget::Tree,
-        event: &cosmic::iced_core::Event,
+        tree: &mut cosmic::iced::core::widget::Tree,
+        event: &cosmic::iced::core::Event,
         layout: Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
+        cursor: cosmic::iced::core::mouse::Cursor,
         renderer: &cosmic::Renderer,
-        clipboard: &mut dyn cosmic::iced_core::Clipboard,
-        shell: &mut cosmic::iced_core::Shell<'_, Msg>,
-        viewport: &cosmic::iced_core::Rectangle,
+        clipboard: &mut dyn cosmic::iced::core::Clipboard,
+        shell: &mut cosmic::iced::core::Shell<'_, Msg>,
+        viewport: &cosmic::iced::core::Rectangle,
     ) {
         let children = [
             &mut self.bg_element,
@@ -403,10 +403,10 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
         &self,
         state: &Tree,
         layout: Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
-        viewport: &cosmic::iced_core::Rectangle,
+        cursor: cosmic::iced::core::mouse::Cursor,
+        viewport: &cosmic::iced::core::Rectangle,
         renderer: &cosmic::Renderer,
-    ) -> cosmic::iced_core::mouse::Interaction {
+    ) -> cosmic::iced::core::mouse::Interaction {
         let children = [&self.bg_element, &self.fg_element, &self.menu_element];
         let layout = layout.children().collect::<Vec<_>>();
         for (i, (layout, child)) in layout
@@ -423,12 +423,12 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
                 return interaction;
             }
         }
-        cosmic::iced_core::mouse::Interaction::default()
+        cosmic::iced::core::mouse::Interaction::default()
     }
 
     fn operate(
         &mut self,
-        tree: &mut cosmic::iced_core::widget::Tree,
+        tree: &mut cosmic::iced::core::widget::Tree,
         layout: Layout<'_>,
         renderer: &cosmic::Renderer,
         operation: &mut dyn cosmic::widget::Operation<()>,
@@ -466,10 +466,10 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
     fn layout(
         &mut self,
-        tree: &mut cosmic::iced_core::widget::Tree,
+        tree: &mut cosmic::iced::core::widget::Tree,
         renderer: &cosmic::Renderer,
-        limits: &cosmic::iced_core::layout::Limits,
-    ) -> cosmic::iced_core::layout::Node {
+        limits: &cosmic::iced::core::layout::Limits,
+    ) -> cosmic::iced::core::layout::Node {
         let children = &mut tree.children;
         let bg_image = &mut children[0];
         let bg_node = self
@@ -498,15 +498,15 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
     fn draw(
         &self,
-        tree: &cosmic::iced_core::widget::Tree,
+        tree: &cosmic::iced::core::widget::Tree,
         renderer: &mut cosmic::Renderer,
         theme: &cosmic::Theme,
-        style: &cosmic::iced_core::renderer::Style,
-        layout: cosmic::iced_core::Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
-        viewport: &cosmic::iced_core::Rectangle,
+        style: &cosmic::iced::core::renderer::Style,
+        layout: cosmic::iced::core::Layout<'_>,
+        cursor: cosmic::iced::core::mouse::Cursor,
+        viewport: &cosmic::iced::core::Rectangle,
     ) {
-        use cosmic::iced_core::Renderer;
+        use cosmic::iced::core::Renderer;
         let children = &[&self.bg_element, &self.fg_element, &self.menu_element];
         let mut children = layout.children().zip(children).enumerate();
         {
@@ -530,10 +530,10 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
     fn drag_destinations(
         &self,
-        state: &cosmic::iced_core::widget::Tree,
-        layout: cosmic::iced_core::Layout<'_>,
+        state: &cosmic::iced::core::widget::Tree,
+        layout: cosmic::iced::core::Layout<'_>,
         renderer: &cosmic::Renderer,
-        dnd_rectangles: &mut cosmic::iced_core::clipboard::DndDestinationRectangles,
+        dnd_rectangles: &mut cosmic::iced::core::clipboard::DndDestinationRectangles,
     ) {
         let children = &[&self.bg_element, &self.fg_element, &self.menu_element];
         for (i, (layout, child)) in layout.children().zip(children).enumerate() {

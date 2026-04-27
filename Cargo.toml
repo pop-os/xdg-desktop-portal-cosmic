@@ -12,19 +12,19 @@ wgpu = ["libcosmic/wgpu"]
 members = ["cosmic-portal-config"]
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 ashpd = "0.12"
 cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
     "gvfs",
     "wayland",
 ] }
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "d0e95be" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "d0e95be" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "160b086" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "160b086" }
 futures = "0.3"
 image = "0.25"
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
 cosmic-portal-config = { path = "./cosmic-portal-config" }
-memmap2 = "0.9.8"
+memmap2 = "0.9.10"
 # pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
 pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", features = [
     "v0_3_33",
@@ -32,12 +32,12 @@ pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", featur
 png = "0.18"
 rustix = { version = "1.1", features = ["fs"] }
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
-zbus = { version = "5.11.0", default-features = false, features = ["tokio"] }
+zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"
-wayland-protocols = "0.32.9"
-env_logger = "0.11.8"
+wayland-protocols = "0.32.12"
+env_logger = "0.11.10"
 dirs = "6.0.0"
-chrono = "0.4"
+jiff = "0.2"
 url = "2.5"
 # i18n
 i18n-embed = { version = "0.16", features = [
@@ -45,7 +45,7 @@ i18n-embed = { version = "0.16", features = [
     "desktop-requester",
 ] }
 i18n-embed-fl = "0.10"
-rust-embed = "8.7.2"
+rust-embed = "8.11.0"
 # Workspace
 cosmic-config.workspace = true
 log.workspace = true
@@ -53,8 +53,8 @@ serde.workspace = true
 freedesktop-desktop-entry = "0.8"
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
-tempfile = "3.23.0"
-tokio = { version = "1.47.1", features = ["macros", "net", "rt", "sync"] }
+tempfile = "3.27.0"
+tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.14" }
 
 [dependencies.libcosmic]
@@ -74,12 +74,12 @@ features = [
 
 [workspace.dependencies]
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
-log = "0.4.28"
+log = "0.4.29"
 serde = "1.0.228"
 
 [dev-dependencies]
-gst = { package = "gstreamer", version = "0.24.2" }
-clap = { version = "4.5.48", features = ["derive"] }
+gst = { package = "gstreamer", version = "0.25.1" }
+clap = { version = "4.6.1", features = ["derive"] }
 
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { git = "https://github.com/pop-os/libcosmic//" }
@@ -90,7 +90,3 @@ clap = { version = "4.5.48", features = ["derive"] }
 opt-level = 3
 lto = "thin"
 panic = "abort"
-
-[patch."https://github.com/pop-os/cosmic-protocols"]
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", branch = "main" }

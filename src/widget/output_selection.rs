@@ -1,6 +1,6 @@
 use cosmic::{
     iced::Limits,
-    iced_core::{
+    iced::core::{
         Background, Border, Color, Length, Renderer, Shadow, Size,
         layout::Node,
         mouse,
@@ -29,11 +29,11 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         Size::new(Length::Fill, Length::Fill)
     }
 
-    fn state(&self) -> cosmic::iced_core::widget::tree::State {
+    fn state(&self) -> cosmic::iced::core::widget::tree::State {
         State::new(MyState::default())
     }
 
-    fn tag(&self) -> cosmic::iced_core::widget::tree::Tag {
+    fn tag(&self) -> cosmic::iced::core::widget::tree::Tag {
         tree::Tag::of::<MyState>()
     }
 
@@ -47,10 +47,10 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         tree: &Tree,
         renderer: &mut cosmic::Renderer,
         theme: &cosmic::Theme,
-        _style: &cosmic::iced_core::renderer::Style,
-        layout: cosmic::iced_core::Layout<'_>,
-        _cursor: cosmic::iced_core::mouse::Cursor,
-        _viewport: &cosmic::iced_core::Rectangle,
+        _style: &cosmic::iced::core::renderer::Style,
+        layout: cosmic::iced::core::Layout<'_>,
+        _cursor: cosmic::iced::core::mouse::Cursor,
+        _viewport: &cosmic::iced::core::Rectangle,
     ) {
         let cosmic = theme.cosmic();
         let radius_s = cosmic.radius_s();
@@ -100,28 +100,28 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
     fn mouse_interaction(
         &self,
         _state: &Tree,
-        layout: cosmic::iced_core::Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
-        _viewport: &cosmic::iced_core::Rectangle,
+        layout: cosmic::iced::core::Layout<'_>,
+        cursor: cosmic::iced::core::mouse::Cursor,
+        _viewport: &cosmic::iced::core::Rectangle,
         _renderer: &cosmic::Renderer,
-    ) -> cosmic::iced_core::mouse::Interaction {
+    ) -> cosmic::iced::core::mouse::Interaction {
         if cursor.is_over(layout.bounds()) {
-            cosmic::iced_core::mouse::Interaction::Pointer
+            cosmic::iced::core::mouse::Interaction::Pointer
         } else {
-            cosmic::iced_core::mouse::Interaction::default()
+            cosmic::iced::core::mouse::Interaction::default()
         }
     }
 
     fn update(
         &mut self,
         state: &mut Tree,
-        event: &cosmic::iced_core::Event,
-        layout: cosmic::iced_core::Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
+        event: &cosmic::iced::core::Event,
+        layout: cosmic::iced::core::Layout<'_>,
+        cursor: cosmic::iced::core::mouse::Cursor,
         _renderer: &cosmic::Renderer,
-        _clipboard: &mut dyn cosmic::iced_core::Clipboard,
-        shell: &mut cosmic::iced_core::Shell<'_, Msg>,
-        _viewport: &cosmic::iced_core::Rectangle,
+        _clipboard: &mut dyn cosmic::iced::core::Clipboard,
+        shell: &mut cosmic::iced::core::Shell<'_, Msg>,
+        _viewport: &cosmic::iced::core::Rectangle,
     ) {
         // update hover state
         let my_state = state.state.downcast_mut::<MyState>();
@@ -129,15 +129,15 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         let changed = my_state.hovered != hovered;
         my_state.hovered = hovered;
 
-        if let cosmic::iced_core::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) =
+        if let cosmic::iced::core::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) =
             event
         {
             shell.publish(self.on_press.clone());
             shell.capture_event();
         }
         if changed {
-            if let cosmic::iced_core::Event::Mouse(mouse::Event::CursorMoved { .. })
-            | cosmic::iced_core::Event::Mouse(mouse::Event::CursorEntered) = event
+            if let cosmic::iced::core::Event::Mouse(mouse::Event::CursorMoved { .. })
+            | cosmic::iced::core::Event::Mouse(mouse::Event::CursorEntered) = event
             {
                 shell.publish(self.on_enter.clone());
                 shell.capture_event();
