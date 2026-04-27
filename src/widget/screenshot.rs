@@ -382,12 +382,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
 
         let layout = layout.children().collect::<Vec<_>>();
         // draw children in order
-        for (i, (layout, child)) in layout
-            .into_iter()
-            .zip(children.into_iter())
-            .enumerate()
-            .rev()
-        {
+        for (i, (layout, child)) in layout.into_iter().zip(children).enumerate().rev() {
             let tree = &mut tree.children[i];
 
             child.as_widget_mut().update(
@@ -409,12 +404,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
     ) -> cosmic::iced::core::mouse::Interaction {
         let children = [&self.bg_element, &self.fg_element, &self.menu_element];
         let layout = layout.children().collect::<Vec<_>>();
-        for (i, (layout, child)) in layout
-            .into_iter()
-            .zip(children.into_iter())
-            .enumerate()
-            .rev()
-        {
+        for (i, (layout, child)) in layout.into_iter().zip(children).enumerate().rev() {
             let tree = &state.children[i];
             let interaction = child
                 .as_widget()
@@ -439,12 +429,7 @@ impl<'a, Msg> cosmic::widget::Widget<Msg, cosmic::Theme, cosmic::Renderer>
             &mut self.fg_element,
             &mut self.menu_element,
         ];
-        for (i, (layout, child)) in layout
-            .into_iter()
-            .zip(children.into_iter())
-            .enumerate()
-            .rev()
-        {
+        for (i, (layout, child)) in layout.into_iter().zip(children).enumerate().rev() {
             let tree = &mut tree.children[i];
             child
                 .as_widget_mut()

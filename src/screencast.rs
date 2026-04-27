@@ -331,7 +331,7 @@ impl ScreenCast {
                     overlay_cursor,
                     StreamProps {
                         position: None,
-                        size: size,
+                        size,
                         source_type: SOURCE_TYPE_WINDOW,
                         mapping_id: None,
                     },
