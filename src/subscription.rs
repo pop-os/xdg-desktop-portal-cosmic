@@ -48,7 +48,7 @@ pub(crate) fn portal_subscription(
     Subscription::batch([
         Subscription::run_with(Wrapper { helper }, |Wrapper { helper }| {
             let helper = helper.clone();
-            cosmic::iced_futures::stream::channel(10, |mut output| async move {
+            cosmic::iced::stream::channel(10, |mut output| async move {
                 let mut state = State::Init;
                 loop {
                     if let Err(err) = process_changes(&mut state, &mut output, &helper).await {

@@ -1,19 +1,19 @@
 #![allow(dead_code, unused_variables)]
 
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+    destroy_layer_surface, get_layer_surface,
+};
+use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced::{
+    Alignment,
+    keyboard::{Key, key::Named},
+    widget::{column, row},
+    window,
+};
 use cosmic::widget::autosize::autosize;
 use cosmic::widget::{self, Column, Id, button, dropdown, icon, text};
-use cosmic::{
-    iced::{
-        keyboard::{Key, key::Named},
-        widget::{column, row},
-        window,
-    },
-    iced_core::Alignment,
-};
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;

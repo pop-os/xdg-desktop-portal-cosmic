@@ -3,13 +3,14 @@
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::{Key, key::Named};
-use cosmic::iced::{Limits, window};
-use cosmic::iced_core::Length;
-use cosmic::iced_runtime::clipboard;
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+    destroy_layer_surface, get_layer_surface,
+};
+use cosmic::iced::runtime::clipboard;
+use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced::{Length, Limits, window};
 use cosmic::widget::space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -258,8 +259,8 @@ impl Screenshot {
             return None;
         }
 
-        let name = chrono::Local::now()
-            .format("Screenshot_%Y-%m-%d_%H-%M-%S.png")
+        let name = jiff::Zoned::now()
+            .strftime("Screenshot_%Y-%m-%d_%H-%M-%S.png")
             .to_string();
         path.push(name);
 
