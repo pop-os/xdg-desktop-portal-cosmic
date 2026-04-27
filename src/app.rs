@@ -1,13 +1,11 @@
 use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
-use cosmic::Task;
 use cosmic::iced::core::event::wayland::OutputEvent;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedMargin, SctkLayerSurfaceSettings,
 };
-use cosmic::iced::{Event, Length, Limits, Subscription, event};
-use cosmic::widget;
-use cosmic::{app, cosmic_config, iced::window};
+use cosmic::iced::{Event, Length, Limits, Subscription, event, window};
+use cosmic::{Task, app, cosmic_config, widget};
 use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
 use wayland_client::protocol::wl_output::WlOutput;

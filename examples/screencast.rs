@@ -3,10 +3,8 @@
 // - https://gitlab.freedesktop.org/pipewire/pipewire/-/merge_requests/1881
 
 use ashpd::desktop::PersistMode;
-use ashpd::{
-    desktop::screencast::{CursorMode, Screencast, SourceType},
-    enumflags2::BitFlags,
-};
+use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
+use ashpd::enumflags2::BitFlags;
 use clap::Parser;
 use gst::prelude::*;
 

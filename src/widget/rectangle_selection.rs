@@ -1,20 +1,15 @@
 use std::borrow::Cow;
 
-use cosmic::{
-    iced::core::{
-        Border, Color, Length, Point, Rectangle, Renderer, Shadow, Size, clipboard::DndSource,
-        layout::Node, renderer::Quad,
-    },
-    iced::{
-        self,
-        clipboard::{
-            dnd::{self, DndAction, DndDestinationRectangle, DndEvent, OfferEvent, SourceEvent},
-            mime::{AllowedMimeTypes, AsMimeTypes},
-        },
-        mouse,
-    },
-    widget::{self, Widget},
+use cosmic::iced::clipboard::dnd::{
+    self, DndAction, DndDestinationRectangle, DndEvent, OfferEvent, SourceEvent,
 };
+use cosmic::iced::clipboard::mime::{AllowedMimeTypes, AsMimeTypes};
+use cosmic::iced::core::clipboard::DndSource;
+use cosmic::iced::core::layout::Node;
+use cosmic::iced::core::renderer::Quad;
+use cosmic::iced::core::{Border, Color, Length, Point, Rectangle, Renderer, Shadow, Size};
+use cosmic::iced::{self, mouse};
+use cosmic::widget::{self, Widget};
 
 use crate::screenshot::Rect;
 
@@ -496,11 +491,9 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         };
         #[cfg(feature = "wgpu")]
         {
-            use cosmic::iced_widget::graphics::{
-                Mesh,
-                color::{Packed, pack},
-                mesh::{Indexed, SolidVertex2D},
-            };
+            use cosmic::iced_widget::graphics::Mesh;
+            use cosmic::iced_widget::graphics::color::{Packed, pack};
+            use cosmic::iced_widget::graphics::mesh::{Indexed, SolidVertex2D};
             let mut overlay = Color::BLACK;
             overlay.a = 0.3;
 

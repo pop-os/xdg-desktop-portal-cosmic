@@ -2,7 +2,8 @@
 
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
-use cosmic::iced::keyboard::{Key, key::Named};
+use cosmic::iced::keyboard::Key;
+use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     destroy_layer_surface, get_layer_surface,
 };
@@ -17,21 +18,21 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::io;
 use std::num::NonZeroU32;
-use std::{
-    collections::HashMap,
-    io,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
-use crate::config::{self, screenshot::ImageSaveLocation};
+use crate::config::screenshot::ImageSaveLocation;
+use crate::config::{self};
 use crate::wayland::{CaptureSource, ShmImage, WaylandHelper};
-use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::DragState};
+use crate::widget::keyboard_wrapper::KeyboardWrapper;
+use crate::widget::rectangle_selection::DragState;
 use crate::{PortalResponse, fl, subscription};
 
 #[derive(Clone, Debug)]

@@ -1,7 +1,5 @@
-use i18n_embed::{
-    DefaultLocalizer, LanguageLoader, Localizer,
-    fluent::{FluentLanguageLoader, fluent_language_loader},
-};
+use i18n_embed::fluent::{FluentLanguageLoader, fluent_language_loader};
+use i18n_embed::{DefaultLocalizer, LanguageLoader, Localizer};
 use rust_embed::RustEmbed;
 use std::sync::LazyLock;
 

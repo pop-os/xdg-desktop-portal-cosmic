@@ -1,10 +1,9 @@
 use cosmic::cosmic_theme::palette::Srgba;
 use futures::future::{AbortHandle, abortable};
-use std::{collections::HashMap, future::Future};
-use zbus::{
-    object_server::{InterfaceRef, SignalEmitter},
-    zvariant::{self, OwnedValue},
-};
+use std::collections::HashMap;
+use std::future::Future;
+use zbus::object_server::{InterfaceRef, SignalEmitter};
+use zbus::zvariant::{self, OwnedValue};
 
 pub use cosmic_portal_config as config;
 

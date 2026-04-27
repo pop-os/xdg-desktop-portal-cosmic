@@ -1,8 +1,8 @@
+use cosmic::iced::core::event::Event;
+use cosmic::iced::core::widget::{Operation, Tree};
 use cosmic::iced::core::{
-    Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget,
-    event::Event,
-    keyboard, layout, mouse, overlay, renderer,
-    widget::{Operation, Tree},
+    Clipboard, Element, Layout, Length, Rectangle, Shell, Size, Widget, keyboard, layout, mouse,
+    overlay, renderer,
 };
 
 #[allow(missing_debug_implementations)]

@@ -6,27 +6,24 @@
 
 use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Rect};
 use futures::executor::block_on;
-use pipewire::{
-    spa::{
-        self,
-        pod::{self, Pod, deserialize::PodDeserializer, serialize::PodSerializer},
-        utils::Id,
-    },
-    stream::{Stream, StreamState},
-    sys::pw_buffer,
-};
-use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
+use pipewire::spa::pod::deserialize::PodDeserializer;
+use pipewire::spa::pod::serialize::PodSerializer;
+use pipewire::spa::pod::{self, Pod};
+use pipewire::spa::utils::Id;
+use pipewire::spa::{self};
+use pipewire::stream::{Stream, StreamState};
+use pipewire::sys::pw_buffer;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::os::fd::IntoRawFd;
+use std::{io, iter, slice};
 use tokio::sync::oneshot;
-use wayland_client::{
-    WEnum,
-    protocol::{wl_buffer, wl_output, wl_shm},
-};
+use wayland_client::WEnum;
+use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
 
-use crate::{
-    buffer,
-    screencast::StreamProps,
-    wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
-};
+use crate::buffer;
+use crate::screencast::StreamProps;
+use crate::wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper};
 
 static FORMAT_MAP: &[(gbm::Format, Id)] = &[
     (gbm::Format::Abgr8888, Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
