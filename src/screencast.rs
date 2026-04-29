@@ -247,7 +247,7 @@ impl ScreenCast {
                 return PortalResponse::Other;
             };
 
-            let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
+            let (requested_cursor_mode, multiple, source_types, persisted_capture_sources) = {
                 let session_data = interface.get_mut().await;
                 let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
                 let multiple = session_data.multiple;
@@ -271,7 +271,7 @@ impl ScreenCast {
             let capture_sources = if let Some(capture_sources) =
                 persisted_capture_sources.and_then(|x| x.to_capture_sources(&self.wayland_helper))
             {
-                capture_sources
+                (capture_sources, requested_cursor_mode)
             } else {
                 // Show dialog to prompt for what to capture
                 let resp = screencast_dialog::show_screencast_prompt(
@@ -280,15 +280,22 @@ impl ScreenCast {
                     app_id,
                     multiple,
                     source_types,
+                    requested_cursor_mode == CURSOR_MODE_EMBEDDED,
                     &self.wayland_helper,
                 )
                 .await;
-                let Some(capture_sources) = resp else {
+                let Some(selection) = resp else {
                     return PortalResponse::Cancelled;
                 };
-                capture_sources
+                let cursor_mode = if selection.show_cursor {
+                    CURSOR_MODE_EMBEDDED
+                } else {
+                    CURSOR_MODE_HIDDEN
+                };
+                (selection.capture_sources, cursor_mode)
             };
 
+            let (capture_sources, cursor_mode) = capture_sources;
             let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
             // Use `FuturesOrdered` so streams are in consistent order
             let mut res_futures = FuturesOrdered::new();

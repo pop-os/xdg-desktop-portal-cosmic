@@ -13,3 +13,4 @@ share-screen = Share your screen
 unknown-application = Unknown Application
 output = Output
 window = Window
+show-cursor = Show cursor
