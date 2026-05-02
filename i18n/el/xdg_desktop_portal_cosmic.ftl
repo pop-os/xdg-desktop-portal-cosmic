@@ -1,2 +1,14 @@
 cancel = Ακύρωση
 share = Κοινοποίηση
+share-screen = Διαμοιρασμός οθόνης
+    .description = Το σύστημα θέλει να κοινοποιήσει τα περιεχόμενα της οθόνης σας στο «{ $app_name }». Επιλέξτε μια οθόνη ή ένα παράθυρο προς κοινή χρήση.
+output = Έξοδος
+save-to = Αποθήκευση
+    .clipboard = { save-to } στο Πρόχειρο
+    .pictures = { save-to } στις Εικόνες
+    .documents = { save-to } στα Έγγραφα
+choose-folder = Επιλογή φακέλου
+unknown-application = Άγνωστη εφαρμογή
+window = Παράθυρο
+capture = Καταγραφή
+allow = Αποδοχή
