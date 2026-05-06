@@ -95,12 +95,13 @@ impl cosmic::Application for CosmicPortal {
     }
 
     fn init(
-        core: app::Core,
+        mut core: app::Core,
         Flags {
             config_handler,
             config,
         }: Self::Flags,
     ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
+        core.set_app_type(cosmic::core::AppType::System);
         let wayland_conn = wayland_client::Connection::connect_to_env().unwrap();
         let wayland_helper = crate::wayland::WaylandHelper::new(wayland_conn);
         let dummy_id = window::Id::unique();
@@ -159,26 +160,17 @@ impl cosmic::Application for CosmicPortal {
         }
     }
 
-    fn update(
-        &mut self,
-        message: Self::Message,
-    ) -> cosmic::iced::Task<cosmic::Action<Self::Message>> {
+    fn update(&mut self, message: Self::Message) -> cosmic::Task<cosmic::Action<Self::Message>> {
         match message {
-            Msg::Access(m) => access::update_msg(self, m).map(cosmic::Action::App),
+            Msg::Access(m) => access::update_msg(self, m),
             Msg::FileChooser(id, m) => file_chooser::update_msg(self, id, m),
             Msg::Portal(e) => match e {
-                subscription::Event::Access(args) => {
-                    access::update_args(self, args).map(cosmic::Action::App)
-                }
+                subscription::Event::Access(args) => access::update_args(self, args),
                 subscription::Event::FileChooser(args) => file_chooser::update_args(self, args),
-                subscription::Event::Screenshot(args) => {
-                    screenshot::update_args(self, args).map(cosmic::Action::App)
-                }
-                subscription::Event::Screencast(args) => {
-                    screencast_dialog::update_args(self, args).map(cosmic::Action::App)
-                }
+                subscription::Event::Screenshot(args) => screenshot::update_args(self, args),
+                subscription::Event::Screencast(args) => screencast_dialog::update_args(self, args),
                 subscription::Event::CancelScreencast(handle) => {
-                    screencast_dialog::cancel(self, handle).map(cosmic::Action::App)
+                    screencast_dialog::cancel(self, handle)
                 }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
@@ -193,8 +185,8 @@ impl cosmic::Application for CosmicPortal {
                     cosmic::iced::exit()
                 }
             },
-            Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::Action::App),
-            Msg::Screencast(m) => screencast_dialog::update_msg(self, m).map(cosmic::Action::App),
+            Msg::Screenshot(m) => screenshot::update_msg(self, m),
+            Msg::Screencast(m) => screencast_dialog::update_msg(self, m),
             Msg::Output(o_event, wl_output) => {
                 match o_event {
                     OutputEvent::Created(Some(info))
