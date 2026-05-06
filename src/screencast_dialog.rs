@@ -117,15 +117,20 @@ fn get_desktop_entry<'a>(entries: &'a [DesktopEntry], id: &str) -> Option<&'a De
     fde::find_app_by_id(entries, Ascii::new(id))
 }
 
-fn create_dialog() -> cosmic::Task<crate::app::Msg> {
-    get_layer_surface(SctkLayerSurfaceSettings {
-        id: *SCREENCAST_ID,
-        keyboard_interactivity: KeyboardInteractivity::Exclusive,
-        namespace: "screencast".into(),
-        layer: Layer::Overlay,
-        size: None,
-        ..Default::default()
-    })
+fn create_dialog() -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
+    cosmic::surface::surface_task::<crate::app::Msg>(cosmic::surface::action::simple_layer_shell::<
+        crate::app::Msg,
+    >(
+        move || SctkLayerSurfaceSettings {
+            id: *SCREENCAST_ID,
+            keyboard_interactivity: KeyboardInteractivity::Exclusive,
+            namespace: "screencast".into(),
+            layer: Layer::Overlay,
+            size: None,
+            ..Default::default()
+        },
+        None::<fn() -> cosmic::Element<'static, cosmic::Action<crate::app::Msg>>>,
+    ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -188,7 +193,10 @@ fn active_tab(portal: &CosmicPortal) -> Tab {
     *portal.screencast_tab_model.active_data::<Tab>().unwrap()
 }
 
-pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
+pub fn update_msg(
+    portal: &mut CosmicPortal,
+    msg: Msg,
+) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     let Some(args) = portal.screencast_args.as_mut() else {
         return cosmic::Task::none();
     };
@@ -244,7 +252,10 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
     cosmic::Task::none()
 }
 
-pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate::app::Msg> {
+pub fn update_args(
+    portal: &mut CosmicPortal,
+    args: Args,
+) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     // If the dialog is already open, cancel previous request, but re-use dialog surface
     let command = if let Some(args) = portal.screencast_args.take() {
         args.send_response(None);
@@ -278,7 +289,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
 pub fn cancel(
     portal: &mut CosmicPortal,
     session_handle: zvariant::ObjectPath<'static>,
-) -> cosmic::Task<crate::app::Msg> {
+) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     if portal
         .screencast_args
         .as_ref()

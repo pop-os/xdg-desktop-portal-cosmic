@@ -299,12 +299,15 @@ where
                 .padding([space_xxs, space_s, space_xxs, space_s]),
             )
             .class(cosmic::theme::Container::Custom(Box::new(|theme| {
-                let theme = theme.cosmic();
+                let cosmic = theme.cosmic();
                 cosmic::iced::widget::container::Style {
-                    background: Some(Background::Color(theme.background.component.base.into())),
-                    text_color: Some(theme.background.component.on.into()),
+                    background: Some(Background::Color(
+                        // TODO support blur effect in iced?
+                        cosmic.background(false).component.base.into(),
+                    )),
+                    text_color: Some(cosmic.background(false).component.on.into()),
                     border: Border {
-                        radius: theme.corner_radii.radius_s.into(),
+                        radius: cosmic.corner_radii.radius_s.into(),
                         ..Default::default()
                     },
                     ..Default::default()

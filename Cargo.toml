@@ -17,7 +17,7 @@ ashpd = "0.12"
 cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
     "gvfs",
     "wayland",
-] }
+], branch = "theme-v2" }
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "160b086" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "160b086" }
 futures = "0.3"
@@ -81,10 +81,13 @@ serde = "1.0.228"
 gst = { package = "gstreamer", version = "0.25.1" }
 clap = { version = "4.6.1", features = ["derive"] }
 
-# [patch."https://github.com/pop-os/libcosmic"]
-# libcosmic = { git = "https://github.com/pop-os/libcosmic//" }
-# cosmic-config = { git = "https://github.com/pop-os/libcosmic//" }
-# iced_futures = { git = "https://github.com/pop-os/libcosmic//" }
+[patch."https://github.com/pop-os/libcosmic"]
+# libcosmic = { git = "https://github.com/pop-os/libcosmic//", branch = "theme-v2" }
+# cosmic-config = { git = "https://github.com/pop-os/libcosmic//", branch = "theme-v2" }
+# iced_futures = { git = "https://github.com/pop-os/libcosmic//", branch = "theme-v2" }
+libcosmic = { path = "../libcosmic" }
+cosmic-config = { path = "../libcosmic/cosmic-config" }
+cosmic-theme = { path = "../libcosmic/cosmic-theme" }
 
 [profile.release]
 opt-level = 3

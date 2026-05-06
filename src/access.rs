@@ -113,7 +113,6 @@ pub enum Msg {
     Allow,
     Cancel,
     Choice(usize, usize),
-    Ignore,
 }
 
 #[derive(Clone, Debug)]
@@ -132,7 +131,7 @@ pub(crate) struct AccessDialogArgs {
 }
 
 impl AccessDialogArgs {
-    pub(crate) fn get_surface(&mut self) -> cosmic::Task<Msg> {
+    pub(crate) fn get_surface(&mut self) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
         if self.options.modal.unwrap_or_default() {
             // create a modal surface
             let (id, task) = window::open(window::Settings {
@@ -140,25 +139,33 @@ impl AccessDialogArgs {
                 ..Default::default()
             });
             self.access_id = id;
-            task.map(|_| Msg::Ignore)
+            task.discard()
         } else {
             // create a layer surface
-            self.access_id = window::Id::unique();
-            get_layer_surface(SctkLayerSurfaceSettings {
-                id: self.access_id,
-                layer: cosmic_client_toolkit::sctk::shell::wlr_layer::Layer::Top,
-                keyboard_interactivity:
-                    cosmic_client_toolkit::sctk::shell::wlr_layer::KeyboardInteractivity::OnDemand,
-                input_zone: None,
-                anchor: cosmic_client_toolkit::sctk::shell::wlr_layer::Anchor::empty(),
-                output: IcedOutput::Active,
-                namespace: "access portal".to_string(),
-                ..Default::default()
-            })
+            let id = window::Id::unique();
+            self.access_id = id;
+            cosmic::surface::surface_task::<crate::app::Msg>(
+                cosmic::surface::action::simple_layer_shell::<crate::app::Msg>(
+                    move || {
+                        SctkLayerSurfaceSettings {
+                        id: id,
+                        layer: cosmic_client_toolkit::sctk::shell::wlr_layer::Layer::Top,
+                        keyboard_interactivity:
+                            cosmic_client_toolkit::sctk::shell::wlr_layer::KeyboardInteractivity::OnDemand,
+                        input_zone: None,
+                        anchor: cosmic_client_toolkit::sctk::shell::wlr_layer::Anchor::empty(),
+                        output: IcedOutput::Active,
+                        namespace: "access portal".to_string(),
+                        ..Default::default()
+                    }
+                    },
+                    None::<fn() -> cosmic::Element<'static, cosmic::Action<crate::app::Msg>>>,
+                ),
+            )
         }
     }
 
-    pub(crate) fn destroy_surface(&self) -> cosmic::Task<Msg> {
+    pub(crate) fn destroy_surface(&self) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
         if self.options.modal.unwrap_or_default() {
             window::close(self.access_id)
         } else {
@@ -241,28 +248,37 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
         .into()
 }
 
-pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
+pub fn update_msg(
+    portal: &mut CosmicPortal,
+    msg: Msg,
+) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     match msg {
         Msg::Allow => {
             let args = portal.access_args.take().unwrap();
             let tx = args.tx.clone();
             let choices = args.active_choices.clone().into_iter().collect();
-            tokio::spawn(async move {
-                tx.send(PortalResponse::Success(AccessDialogResult { choices }))
-                    .await
-            });
-
-            args.destroy_surface()
+            cosmic::Task::batch([
+                cosmic::task::future::<(), ()>(async move {
+                    _ = tx
+                        .send(PortalResponse::Success(AccessDialogResult { choices }))
+                        .await;
+                })
+                .discard(),
+                args.destroy_surface().discard(),
+            ])
         }
         Msg::Cancel => {
             let args = portal.access_args.take().unwrap();
             let tx = args.tx.clone();
-            tokio::spawn(async move {
-                tx.send(PortalResponse::Cancelled::<AccessDialogResult>)
-                    .await
-            });
-
-            args.destroy_surface()
+            cosmic::Task::batch([
+                cosmic::task::future::<(), ()>(async move {
+                    _ = tx
+                        .send(PortalResponse::Cancelled::<AccessDialogResult>)
+                        .await;
+                })
+                .discard(),
+                args.destroy_surface().discard(),
+            ])
         }
         Msg::Choice(i, j) => {
             let args = portal.access_args.as_mut().unwrap();
@@ -274,28 +290,29 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             }
             cosmic::iced::Task::none()
         }
-        Msg::Ignore => cosmic::iced::Task::none(),
     }
-    .map(crate::app::Msg::Access)
 }
 pub fn update_args(
     portal: &mut CosmicPortal,
     mut msg: AccessDialogArgs,
-) -> cosmic::Task<crate::app::Msg> {
+) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     let mut cmds = Vec::with_capacity(2);
     if let Some(args) = portal.access_args.take() {
         // destroy surface and recreate
         cmds.push(args.destroy_surface());
         // send cancelled response
-        tokio::spawn(async move {
-            let _ = args
-                .tx
-                .send(PortalResponse::Cancelled::<AccessDialogResult>)
-                .await;
-        });
+        cmds.push(
+            cosmic::task::future::<(), ()>(async move {
+                let _ = args
+                    .tx
+                    .send(PortalResponse::Cancelled::<AccessDialogResult>)
+                    .await;
+            })
+            .discard(),
+        );
     }
 
     cmds.push(msg.get_surface());
     portal.access_args = Some(msg);
-    cosmic::iced::Task::batch(cmds).map(crate::app::Msg::Access)
+    cosmic::iced::Task::batch(cmds)
 }
