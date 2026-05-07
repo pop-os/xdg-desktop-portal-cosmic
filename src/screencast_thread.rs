@@ -81,14 +81,8 @@ impl MetadataCursor {
         self.meta_cursor = spa_sys::spa_meta_cursor {
             id: 0,
             flags: 0,
-            position: spa_sys::spa_point {
-                x: 0,
-                y: 0,
-            },
-            hotspot: spa_sys::spa_point {
-                x: 0,
-                y: 0,
-            },
+            position: spa_sys::spa_point { x: 0, y: 0 },
+            hotspot: spa_sys::spa_point { x: 0, y: 0 },
             bitmap_offset: 0,
         };
     }

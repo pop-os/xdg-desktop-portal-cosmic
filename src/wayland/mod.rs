@@ -86,8 +86,8 @@ struct WaylandHelperInner {
     wl_shm: wl_shm::WlShm,
     dmabuf: Mutex<Option<DmabufHelper>>,
     zwp_dmabuf: Option<ZwpLinuxDmabufV1>,
-    // TODO: Multiple; remove on seat or cap removal
-    pointer: Mutex<Option<wl_pointer::WlPointer>>,
+    // TODO: Handle multiple pointers if multi-seat is ever supported.
+    pointer: Mutex<Option<(wl_seat::WlSeat, wl_pointer::WlPointer)>>,
 }
 
 // TODO seperate state object from what is passed to threads
@@ -245,7 +245,7 @@ impl Session {
     pub fn cursor_stream(&self) -> Option<cursor_stream::CursorStream> {
         // TODO: If multiple seat is ever supported, how can it be handled?
         let pointer = self.0.wayland_helper.inner.pointer.lock().unwrap();
-        let pointer = pointer.as_ref()?;
+        let (_, pointer) = pointer.as_ref()?;
 
         let weak_session = Arc::downgrade(&self.0);
 
@@ -863,7 +863,7 @@ impl SeatHandler for AppData {
     ) {
         if capability == seat::Capability::Pointer {
             let pointer = self.seat_state.get_pointer(qh, &seat).unwrap();
-            *self.wayland_helper.inner.pointer.lock().unwrap() = Some(pointer);
+            *self.wayland_helper.inner.pointer.lock().unwrap() = Some((seat, pointer));
         }
     }
 
@@ -871,12 +871,27 @@ impl SeatHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _seat: wl_seat::WlSeat,
-        _capability: seat::Capability,
+        seat: wl_seat::WlSeat,
+        capability: seat::Capability,
     ) {
+        if capability == seat::Capability::Pointer {
+            self.wayland_helper
+                .inner
+                .pointer
+                .lock()
+                .unwrap()
+                .take_if(|(s, _)| *s == seat);
+        }
     }
 
-    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {}
+    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.wayland_helper
+            .inner
+            .pointer
+            .lock()
+            .unwrap()
+            .take_if(|(s, _)| *s == seat);
+    }
 }
 
 impl PointerHandler for AppData {
