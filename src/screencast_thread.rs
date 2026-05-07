@@ -77,6 +77,22 @@ impl MetadataCursor {
             + width as usize * height as usize * 4
     }
 
+    fn clear(&mut self) {
+        self.meta_cursor = spa_sys::spa_meta_cursor {
+            id: 0,
+            flags: 0,
+            position: spa_sys::spa_point {
+                x: 0,
+                y: 0,
+            },
+            hotspot: spa_sys::spa_point {
+                x: 0,
+                y: 0,
+            },
+            bitmap_offset: 0,
+        };
+    }
+
     fn update(
         &mut self,
         image: Option<&image::RgbaImage>,
@@ -94,7 +110,6 @@ impl MetadataCursor {
                 x: hotspot.0,
                 y: hotspot.1,
             },
-            //bitmap_offset: 0,
             bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
         };
         let Some(image) = image else {
@@ -548,9 +563,13 @@ impl StreamData {
                             MetadataCursor::size_of(64, 64),
                         )
                     } {
-                        let position = self.session.cursor_position();
-                        let hotspot = self.session.cursor_hotspot();
-                        cursor.update(self.cursor_image.as_ref(), position, hotspot);
+                        if self.session.cursor_entered() {
+                            let position = self.session.cursor_position();
+                            let hotspot = self.session.cursor_hotspot();
+                            cursor.update(self.cursor_image.as_ref(), position, hotspot);
+                        } else {
+                            cursor.clear();
+                        }
                     }
                 }
                 Err(err) => {

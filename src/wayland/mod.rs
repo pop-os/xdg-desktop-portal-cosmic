@@ -19,7 +19,7 @@ use futures::channel::oneshot;
 use futures::stream::{FuturesOrdered, Stream, StreamExt};
 use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use wayland_client::globals::registry_queue_init;
@@ -166,6 +166,7 @@ struct SessionInner {
     capture_cursor_session: Mutex<Option<(CaptureCursorSession, CaptureSession)>>,
     condvar: Condvar,
     state: Mutex<SessionState>,
+    cursor_entered: AtomicBool,
     // Pack x and y into a single atomic
     cursor_position: AtomicU64,
     cursor_hotspot: AtomicU64,
@@ -287,6 +288,10 @@ impl Session {
             &capture_session,
             &self.0.wayland_helper,
         ))
+    }
+
+    pub fn cursor_entered(&self) -> bool {
+        self.0.cursor_entered.load(Ordering::Relaxed)
     }
 
     pub fn cursor_position(&self) -> (i32, i32) {
@@ -454,6 +459,7 @@ impl WaylandHelper {
                 capture_cursor_session: Mutex::new(None),
                 condvar: Condvar::new(),
                 state: Default::default(),
+                cursor_entered: AtomicBool::new(false),
                 cursor_position: AtomicU64::new(0),
                 cursor_hotspot: AtomicU64::new(0),
             }
@@ -729,6 +735,30 @@ impl ScreencopyHandler for AppData {
             .and_then(|data| data.sender.lock().unwrap().take())
         {
             let _ = sender.send(Err(reason));
+        }
+    }
+
+    fn cursor_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        session: &CaptureCursorSession,
+    ) {
+        let data = session.data::<CursorSessionData>().unwrap();
+        if let Some(session) = data.session.upgrade() {
+            session.cursor_entered.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn cursor_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        session: &CaptureCursorSession,
+    ) {
+        let data = session.data::<CursorSessionData>().unwrap();
+        if let Some(session) = data.session.upgrade() {
+            session.cursor_entered.store(false, Ordering::Relaxed);
         }
     }
 
