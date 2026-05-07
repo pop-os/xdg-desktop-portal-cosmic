@@ -84,14 +84,13 @@ struct WaylandHelperInner {
     zwp_dmabuf: Option<ZwpLinuxDmabufV1>,
 }
 
-// TODO seperate state object from what is passed to threads
 #[derive(Clone)]
 pub struct WaylandHelper {
     inner: Arc<WaylandHelperInner>,
 }
 
 struct AppData {
-    wayland_helper: WaylandHelper, // TODO: populate outputs
+    wayland_helper: WaylandHelper,
     registry_state: RegistryState,
     screencopy_state: ScreencopyState,
     output_state: OutputState,
@@ -209,7 +208,6 @@ impl Session {
         buffer_damage: &[Rect],
     ) -> Result<Frame, WEnum<FailureReason>> {
         let (sender, receiver) = oneshot::channel();
-        // TODO damage
         self.0.capture_session.capture(
             buffer,
             buffer_damage,
@@ -391,7 +389,6 @@ impl WaylandHelper {
         overlay_cursor: bool,
     ) -> Option<ShmImage<OwnedFd>> {
         // XXX error type?
-        // TODO: way to get cursor metadata?
 
         let session = self.capture_source_session(source, overlay_cursor);
 
