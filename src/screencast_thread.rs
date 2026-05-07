@@ -6,6 +6,7 @@
 
 use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Rect};
 use futures::executor::block_on;
+use futures::stream::StreamExt;
 use pipewire::spa::pod::deserialize::PodDeserializer;
 use pipewire::spa::pod::serialize::PodSerializer;
 use pipewire::spa::pod::{self, Pod};
@@ -16,6 +17,7 @@ use pipewire::sys::pw_buffer;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::os::fd::IntoRawFd;
+use std::task::{Context, Poll, Waker};
 use std::{io, iter, slice};
 use tokio::sync::oneshot;
 use wayland_client::WEnum;
@@ -23,7 +25,14 @@ use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
 
 use crate::buffer;
 use crate::screencast::StreamProps;
-use crate::wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper};
+use crate::wayland::{CaptureSource, CursorStream, DmabufHelper, Session, WaylandHelper};
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CursorMode {
+    Hidden,
+    Embedded,
+    Metadata,
+}
 
 static FORMAT_MAP: &[(gbm::Format, Id)] = &[
     (gbm::Format::Abgr8888, Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
@@ -54,6 +63,68 @@ fn shm_format_to_gbm(format: wl_shm::Format) -> Option<gbm::Format> {
     }
 }
 
+#[repr(C)]
+struct MetadataCursor {
+    meta_cursor: spa_sys::spa_meta_cursor,
+    meta_bitmap: spa_sys::spa_meta_bitmap,
+    bytes: [u8],
+}
+
+impl MetadataCursor {
+    pub fn size_of(width: u32, height: u32) -> usize {
+        std::mem::offset_of!(Self, meta_bitmap)
+            + std::mem::size_of::<spa_sys::spa_meta_bitmap>()
+            + width as usize * height as usize * 4
+    }
+
+    fn clear(&mut self) {
+        self.meta_cursor = spa_sys::spa_meta_cursor {
+            id: 0,
+            flags: 0,
+            position: spa_sys::spa_point { x: 0, y: 0 },
+            hotspot: spa_sys::spa_point { x: 0, y: 0 },
+            bitmap_offset: 0,
+        };
+    }
+
+    fn update(
+        &mut self,
+        image: Option<&image::RgbaImage>,
+        position: (i32, i32),
+        hotspot: (i32, i32),
+    ) {
+        self.meta_cursor = spa_sys::spa_meta_cursor {
+            id: 1,
+            flags: 0,
+            position: spa_sys::spa_point {
+                x: position.0,
+                y: position.1,
+            },
+            hotspot: spa_sys::spa_point {
+                x: hotspot.0,
+                y: hotspot.1,
+            },
+            bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
+        };
+        let Some(image) = image else {
+            self.meta_cursor.bitmap_offset = 0;
+            return;
+        };
+        self.meta_bitmap = spa_sys::spa_meta_bitmap {
+            format: spa_sys::SPA_VIDEO_FORMAT_RGBA,
+            size: spa_sys::spa_rectangle {
+                // XXX
+                width: image.width(),
+                height: image.height(),
+            },
+            stride: image.width() as i32 * 4,
+            offset: std::mem::size_of::<spa_sys::spa_meta_bitmap>() as u32,
+        };
+        // XXX what if buffer is not large enough?
+        self.bytes[..image.len()].copy_from_slice(image);
+    }
+}
+
 pub struct ScreencastThread {
     stream_props: StreamProps,
     node_id: u32,
@@ -64,7 +135,7 @@ impl ScreencastThread {
     pub async fn new(
         wayland_helper: WaylandHelper,
         capture_source: CaptureSource,
-        overlay_cursor: bool,
+        cursor_mode: CursorMode,
         stream_props: StreamProps,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
@@ -74,7 +145,7 @@ impl ScreencastThread {
             match start_stream(
                 wayland_helper,
                 capture_source,
-                overlay_cursor,
+                cursor_mode,
                 thread_stop_tx_clone,
             ) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
@@ -115,6 +186,8 @@ struct StreamData {
     format: gbm::Format,
     modifier: Option<gbm::Modifier>,
     session: Session,
+    cursor_stream: Option<CursorStream>,
+    cursor_image: Option<image::RgbaImage>,
     formats: Formats,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
@@ -436,6 +509,14 @@ impl StreamData {
             // TODO: Causes segfault
             // let _ = stream.disconnect();
         }
+
+        if let Some(stream) = &mut self.cursor_stream {
+            let mut context = Context::from_waker(Waker::noop());
+            if let Poll::Ready(image) = stream.poll_next_unpin(&mut context) {
+                self.cursor_image = image;
+            }
+        }
+
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
@@ -469,6 +550,21 @@ impl StreamData {
                     } {
                         video_transform.transform = convert_transform(frame.transform);
                     }
+                    if let Some(cursor) = unsafe {
+                        buffer_cursor_find_meta_data(
+                            buffer,
+                            spa_sys::SPA_META_Cursor,
+                            MetadataCursor::size_of(64, 64),
+                        )
+                    } {
+                        if self.session.cursor_entered() {
+                            let position = self.session.cursor_position();
+                            let hotspot = self.session.cursor_hotspot();
+                            cursor.update(self.cursor_image.as_ref(), position, hotspot);
+                        } else {
+                            cursor.clear();
+                        }
+                    }
                 }
                 Err(err) => {
                     if err == WEnum::Value(FailureReason::BufferConstraints) {
@@ -491,7 +587,7 @@ impl StreamData {
 fn start_stream(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
-    overlay_cursor: bool,
+    cursor_mode: CursorMode,
     thread_stop_tx: pipewire::channel::Sender<()>,
 ) -> anyhow::Result<(
     pipewire::main_loop::MainLoopRc,
@@ -508,7 +604,20 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
+    let session =
+        wayland_helper.capture_source_session(capture_source, cursor_mode == CursorMode::Embedded);
+    let mut cursor_stream = None;
+    let mut cursor_image = None;
+    if cursor_mode == CursorMode::Metadata {
+        cursor_stream = session.cursor_stream();
+        // Initial poll of stream to start capture
+        if let Some(stream) = &mut cursor_stream {
+            let mut context = Context::from_waker(Waker::noop());
+            if let Poll::Ready(image) = stream.poll_next_unpin(&mut context) {
+                cursor_image = image;
+            }
+        }
+    }
 
     let Some(formats) = block_on(session.wait_for_formats(|formats| formats.clone())) else {
         return Err(anyhow::anyhow!(
@@ -543,6 +652,8 @@ fn start_stream(
         wayland_helper,
         dmabuf_helper,
         session,
+        cursor_stream,
+        cursor_image,
         formats,
         format: gbm::Format::Abgr8888,
         modifier: None,
@@ -578,6 +689,18 @@ fn convert_transform(transform: WEnum<wl_output::Transform>) -> u32 {
             spa_sys::SPA_META_TRANSFORMATION_Flipped270
         }
         WEnum::Value(_) | WEnum::Unknown(_) => unreachable!(),
+    }
+}
+
+// SAFETY: buffer must be non-null, valid as long as return value is used
+unsafe fn buffer_cursor_find_meta_data<'a>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+    size: usize,
+) -> Option<&'a mut MetadataCursor> {
+    unsafe {
+        let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size);
+        (std::ptr::slice_from_raw_parts(ptr, size) as *mut MetadataCursor).as_mut()
     }
 }
 
@@ -637,6 +760,26 @@ fn meta() -> OwnedPod {
     // TODO: header, video damage
 }
 
+fn meta_cursor() -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
+        type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa_sys::SPA_PARAM_Meta,
+        properties: vec![
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_type,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_Cursor)),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_size,
+                flags: pod::PropertyFlags::empty(),
+                // XXX
+                value: pod::Value::Int(MetadataCursor::size_of(64, 64) as _),
+            },
+        ],
+    }))
+}
+
 fn format_params(
     dmabuf: Option<&DmabufHelper>,
     fixated: Option<(gbm::Format, gbm::Modifier)>,
@@ -682,6 +825,7 @@ fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec
     [
         Some(buffers(width, height, blocks, allow_dmabuf)),
         Some(meta()),
+        Some(meta_cursor()),
     ]
     .into_iter()
     .flatten()

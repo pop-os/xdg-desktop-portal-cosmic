@@ -9,7 +9,7 @@ use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
 use crate::screencast_dialog::{self, CaptureSources};
-use crate::screencast_thread::ScreencastThread;
+use crate::screencast_thread::{CursorMode, ScreencastThread};
 use crate::wayland::{CaptureSource, WaylandHelper};
 use crate::{PortalResponse, Request, subscription};
 
@@ -146,7 +146,7 @@ struct StartResult {
 #[derive(Default)]
 struct SessionData {
     screencast_threads: Vec<ScreencastThread>,
-    cursor_mode: Option<u32>,
+    cursor_mode: Option<CursorMode>,
     multiple: bool,
     source_types: BitFlags<SourceType>,
     persisted_capture_sources: Option<PersistedCaptureSources>,
@@ -210,7 +210,16 @@ impl ScreenCast {
         match crate::session_interface::<SessionData>(connection, &session_handle).await {
             Some(interface) => {
                 let mut session_data = interface.get_mut().await;
-                session_data.cursor_mode = options.cursor_mode;
+                session_data.cursor_mode = match options.cursor_mode {
+                    Some(CURSOR_MODE_HIDDEN) => Some(CursorMode::Hidden),
+                    Some(CURSOR_MODE_EMBEDDED) => Some(CursorMode::Embedded),
+                    Some(CURSOR_MODE_METADATA) => Some(CursorMode::Metadata),
+                    Some(value) => {
+                        log::error!("unrecognized screencopy cursor mode: {}", value);
+                        None
+                    }
+                    None => None,
+                };
                 session_data.multiple = options.multiple.unwrap_or(false);
                 session_data.source_types =
                     BitFlags::from_bits_truncate(options.types.unwrap_or(0));
@@ -249,7 +258,7 @@ impl ScreenCast {
 
             let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
                 let session_data = interface.get_mut().await;
-                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
+                let cursor_mode = session_data.cursor_mode.unwrap_or(CursorMode::Hidden);
                 let multiple = session_data.multiple;
                 let source_types = session_data.source_types;
                 let persisted_capture_sources = session_data.persisted_capture_sources.clone();
@@ -289,7 +298,6 @@ impl ScreenCast {
                 capture_sources
             };
 
-            let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
             // Use `FuturesOrdered` so streams are in consistent order
             let mut res_futures = FuturesOrdered::new();
             for output in &capture_sources.outputs {
@@ -302,7 +310,7 @@ impl ScreenCast {
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
                     CaptureSource::Output(output.clone()),
-                    overlay_cursor,
+                    cursor_mode,
                     StreamProps {
                         position,
                         size,
@@ -329,7 +337,7 @@ impl ScreenCast {
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
                     CaptureSource::Toplevel(foreign_toplevel.clone()),
-                    overlay_cursor,
+                    cursor_mode,
                     StreamProps {
                         position: None,
                         size,
@@ -340,7 +348,7 @@ impl ScreenCast {
             }
 
             let mut failed = false;
-            let mut screencast_threads = Vec::new();
+            let mut screencast_threads = Vec::<ScreencastThread>::new();
             while let Some(res) = res_futures.next().await {
                 match res {
                     Ok(thread) => screencast_threads.push(thread),
@@ -394,8 +402,7 @@ impl ScreenCast {
 
     #[zbus(property)]
     async fn available_cursor_modes(&self) -> u32 {
-        // TODO: Support metadata?
-        CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED
+        CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED | CURSOR_MODE_METADATA
     }
 
     #[zbus(property, name = "version")]
