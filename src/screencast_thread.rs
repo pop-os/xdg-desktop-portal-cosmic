@@ -25,6 +25,13 @@ use crate::buffer;
 use crate::screencast::StreamProps;
 use crate::wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper};
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CursorMode {
+    Hidden,
+    Embedded,
+    Metadata,
+}
+
 static FORMAT_MAP: &[(gbm::Format, Id)] = &[
     (gbm::Format::Abgr8888, Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
     (gbm::Format::Argb8888, Id(spa_sys::SPA_VIDEO_FORMAT_BGRA)),
@@ -64,7 +71,7 @@ impl ScreencastThread {
     pub async fn new(
         wayland_helper: WaylandHelper,
         capture_source: CaptureSource,
-        overlay_cursor: bool,
+        cursor_mode: CursorMode,
         stream_props: StreamProps,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
@@ -74,7 +81,7 @@ impl ScreencastThread {
             match start_stream(
                 wayland_helper,
                 capture_source,
-                overlay_cursor,
+                cursor_mode,
                 thread_stop_tx_clone,
             ) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
@@ -491,7 +498,7 @@ impl StreamData {
 fn start_stream(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
-    overlay_cursor: bool,
+    cursor_mode: CursorMode,
     thread_stop_tx: pipewire::channel::Sender<()>,
 ) -> anyhow::Result<(
     pipewire::main_loop::MainLoopRc,
@@ -508,7 +515,8 @@ fn start_stream(
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
+    let session =
+        wayland_helper.capture_source_session(capture_source, cursor_mode == CursorMode::Embedded);
 
     let Some(formats) = block_on(session.wait_for_formats(|formats| formats.clone())) else {
         return Err(anyhow::anyhow!(
