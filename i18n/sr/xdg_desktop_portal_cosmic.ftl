@@ -1,0 +1,14 @@
+output = Излаз
+allow = Дозволи
+cancel = Откажи
+capture = Ухвати
+share = Подели
+choose-folder = Изабери фасциклу
+unknown-application = Непознати програм
+window = Прозор
+save-to = Сачувај у
+    .clipboard = { save-to } оставу
+    .pictures = { save-to } сликама
+    .documents = { save-to } документима
+share-screen = Поделите екран
+    .description = Систем жели да подели садржај вашег екрана са „{ $app_name }“. Изаберите екран или прозор који желите да поделите.
