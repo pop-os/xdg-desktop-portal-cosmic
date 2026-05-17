@@ -249,7 +249,7 @@ impl ScreenCast {
 
             let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
                 let session_data = interface.get_mut().await;
-                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
+                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_EMBEDDED);
                 let multiple = session_data.multiple;
                 let source_types = session_data.source_types;
                 let persisted_capture_sources = session_data.persisted_capture_sources.clone();
