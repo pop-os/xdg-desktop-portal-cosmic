@@ -427,6 +427,7 @@ pub struct Args {
     pub choice: Choice,
     pub location: ImageSaveLocation,
     pub action: Action,
+    pub capture_selection_on_release: bool,
 }
 
 struct Output {
@@ -537,6 +538,7 @@ impl Screenshot {
                     toplevel_images,
                     tx,
                     location: config.save_location,
+                    capture_selection_on_release: config.capture_selection_on_release,
                     // TODO cover all outputs at start of rectangle?
                     choice,
                     // will be updated
@@ -791,6 +793,21 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         }
         Msg::Choice(c) => {
             let choice = (&c).into();
+            let capture_selection_on_release = portal
+                .screenshot_args
+                .as_ref()
+                .map(|args| args.capture_selection_on_release)
+                .unwrap_or(portal.config.screenshot.capture_selection_on_release);
+            let should_capture_on_release = portal.screenshot_args.as_ref().is_some_and(|args| {
+                capture_selection_on_release
+                    && matches!(
+                        (&args.choice, &c),
+                        (
+                            Choice::Rectangle(_, previous_state),
+                            Choice::Rectangle(r, DragState::None)
+                        ) if *previous_state != DragState::None && r.dimensions().is_some()
+                    )
+            });
             // Only save config when drag is finished to avoid disk writes on every mouse motion
             let should_save_config =
                 !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
@@ -811,16 +828,23 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             } else {
                 log::error!("Failed to find screenshot Args for Choice message.");
             }
-            if should_save_config {
+            let config_task = if should_save_config {
                 cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
                     config::screenshot::Screenshot {
                         choice,
                         last_rectangle: last_rect,
+                        capture_selection_on_release,
                         ..portal.config.screenshot
                     },
                 ))
             } else {
                 cosmic::Task::none()
+            };
+
+            if should_capture_on_release {
+                cosmic::Task::batch(vec![config_task, update_msg(portal, Msg::Capture)])
+            } else {
+                config_task
             }
         }
         Msg::OutputChanged(wl_output) => {
@@ -870,6 +894,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                         save_location: loc,
                         choice: (&mut portal.config.screenshot.choice).into(),
                         last_rectangle: portal.config.screenshot.last_rectangle,
+                        capture_selection_on_release: args.capture_selection_on_release,
                     },
                 ))
             } else {
@@ -892,6 +917,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
         action,
         location,
         toplevel_images,
+        capture_selection_on_release: _,
     } = &args;
 
     if portal.outputs.len() != images.len() {

@@ -18,6 +18,9 @@ pub struct Screenshot {
     pub choice: Choice,
     #[serde(default)]
     pub last_rectangle: Option<Rect>,
+    /// Capture a rectangle selection as soon as drawing/resizing is released.
+    #[serde(default)]
+    pub capture_selection_on_release: bool,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
