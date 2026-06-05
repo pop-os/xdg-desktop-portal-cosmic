@@ -1,7 +1,6 @@
 use crate::{PortalResponse, Session};
 use std::{
     collections::HashMap,
-    env,
     os::{fd::OwnedFd, unix::net::UnixStream},
 };
 use zbus::zvariant;
@@ -88,17 +87,17 @@ impl RemoteDesktop {
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
-    ) -> zvariant::Fd<'_> {
-        println!("Connect");
-        // TODO Dedicated mechanism to get fd, for specific "devices"
-        if let Ok(path) = env::var("LIBEI_SOCKET") {
-            if let Ok(socket) = UnixStream::connect(path) {
-                return OwnedFd::from(socket).into();
-            }
-        }
-
-        todo!()
-        //PortalResponse::Other
+    ) -> zbus::fdo::Result<zvariant::OwnedFd> {
+        let proxy = zbus::proxy::Builder::<'_, zbus::proxy::Proxy<'_>>::new(connection)
+            .destination("com.system76.CosmicComp")?
+            .path("/com/system76/CosmicComp/Ei")?
+            .interface("com.system76.CosmicComp.Ei")?
+            .build()
+            .await?;
+        let path: String = proxy.call("GetSocketPath", &()).await?;
+        let socket = UnixStream::connect(&path)
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to connect to EIS: {e}")))?;
+        Ok(OwnedFd::from(socket).into())
     }
 
     // TODO: Notify*
