@@ -1,9 +1,5 @@
 use crate::{PortalResponse, Session};
-use std::{
-    collections::HashMap,
-    env,
-    os::{fd::OwnedFd, unix::net::UnixStream},
-};
+use std::collections::HashMap;
 use zbus::zvariant;
 
 #[derive(zvariant::SerializeDict, zvariant::Type)]
@@ -31,6 +27,15 @@ struct StartResult {
 }
 
 struct SessionData {}
+
+#[zbus::proxy(
+    interface = "com.system76.CosmicComp.Ei",
+    default_service = "com.system76.CosmicComp",
+    default_path = "/com/system76/CosmicComp/Ei"
+)]
+trait CosmicCompEi {
+    fn get_sender_socket(&self) -> zbus::Result<zvariant::OwnedFd>;
+}
 
 pub struct RemoteDesktop;
 
@@ -88,17 +93,12 @@ impl RemoteDesktop {
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
-    ) -> zvariant::Fd<'_> {
-        println!("Connect");
-        // TODO Dedicated mechanism to get fd, for specific "devices"
-        if let Ok(path) = env::var("LIBEI_SOCKET") {
-            if let Ok(socket) = UnixStream::connect(path) {
-                return OwnedFd::from(socket).into();
-            }
-        }
-
-        todo!()
-        //PortalResponse::Other
+    ) -> zbus::fdo::Result<zvariant::OwnedFd> {
+        let proxy = CosmicCompEiProxy::new(connection).await?;
+        proxy
+            .get_sender_socket()
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to connect to EIS: {e}")))
     }
 
     // TODO: Notify*
