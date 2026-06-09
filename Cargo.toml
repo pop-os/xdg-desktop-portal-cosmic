@@ -85,6 +85,9 @@ clap = { version = "4.6.1", features = ["derive"] }
 # libcosmic = { git = "https://github.com/pop-os/libcosmic//" }
 # cosmic-config = { git = "https://github.com/pop-os/libcosmic//" }
 # iced_futures = { git = "https://github.com/pop-os/libcosmic//" }
+[patch."https://github.com/pop-os/cosmic-protocols"]
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "c253ec1" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "c253ec1" }
 
 [profile.release]
 opt-level = 3

@@ -320,6 +320,7 @@ fn output_button<'a>(
         let container = theme.current_container();
         iced::core::widget::text::Style {
             color: Some(container.on.into()),
+            ..Default::default()
         }
     }));
     let mut row_children = vec![text.into()];
@@ -365,6 +366,7 @@ fn toplevel_button(
         let container = theme.current_container();
         iced::core::widget::text::Style {
             color: Some(container.on.into()),
+            ..Default::default()
         }
     }));
     let button = widget::button::custom(text)
