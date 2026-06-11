@@ -13,7 +13,10 @@ use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
 };
 use cosmic::iced::{Length, Limits, window};
 use cosmic::widget::space;
-use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
+use cosmic_client_toolkit::sctk::{
+    output::OutputInfo,
+    shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer},
+};
 use futures::stream::{FuturesUnordered, StreamExt};
 use image::RgbaImage;
 use rustix::fd::AsFd;
@@ -880,6 +883,58 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
     }
 }
 
+fn usable_output_info(info: OutputInfo) -> Option<(String, (u32, u32), (i32, i32))> {
+    let name = info.name?;
+    let logical_size = info.logical_size.map(|(w, h)| (w as u32, h as u32))?;
+    let logical_pos = info.logical_position?;
+    Some((name, logical_size, logical_pos))
+}
+
+fn output_states_match_images(
+    outputs: &[OutputState],
+    images: &HashMap<String, ScreenshotImage>,
+) -> bool {
+    outputs.len() == images.len()
+        && outputs
+            .iter()
+            .all(|output| images.contains_key(&output.name))
+}
+
+fn sync_output_states(portal: &mut CosmicPortal) {
+    let outputs = portal
+        .wayland_helper
+        .outputs()
+        .into_iter()
+        .filter_map(|output| {
+            let info = portal.wayland_helper.output_info(&output)?;
+            let (name, logical_size, logical_pos) = usable_output_info(info)?;
+            let existing = portal.outputs.iter().find(|state| state.output == output);
+
+            Some(OutputState {
+                output,
+                id: existing
+                    .map(|state| state.id)
+                    .unwrap_or_else(window::Id::unique),
+                name,
+                logical_size,
+                logical_pos,
+                has_pointer: existing.map(|state| state.has_pointer).unwrap_or(false),
+                bg_source: existing.and_then(|state| state.bg_source.clone()),
+            })
+        })
+        .collect();
+
+    portal.outputs = outputs;
+}
+
+fn fail_screenshot_request(tx: Sender<PortalResponse<ScreenshotResult>>) {
+    tokio::spawn(async move {
+        if let Err(err) = tx.send(PortalResponse::Other).await {
+            log::error!("Failed to send screenshot event: {err}");
+        }
+    });
+}
+
 pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate::app::Msg> {
     let Args {
         handle,
@@ -894,14 +949,19 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
         toplevel_images,
     } = &args;
 
-    if portal.outputs.len() != images.len() {
+    if !output_states_match_images(&portal.outputs, images) {
+        sync_output_states(portal);
+    }
+
+    if !output_states_match_images(&portal.outputs, images) {
         log::error!(
-            "Screenshot output count mismatch: {} != {}",
+            "Screenshot output mismatch: {} != {}",
             portal.outputs.len(),
             images.len()
         );
         log::warn!("Screenshot outputs: {:?}", portal.outputs);
         log::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
+        fail_screenshot_request(tx.clone());
         return cosmic::Task::none();
     }
 
