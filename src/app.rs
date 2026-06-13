@@ -8,7 +8,10 @@ use cosmic::iced::{Event, Length, Limits, Subscription, event, window};
 use cosmic::{Task, app, cosmic_config, widget};
 use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use wayland_client::protocol::wl_output::WlOutput;
+
+static SUBSCRIPTION_FAILED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn run() -> cosmic::iced::Result {
     let settings = cosmic::app::Settings::default()
@@ -20,6 +23,10 @@ pub(crate) fn run() -> cosmic::iced::Result {
         config_handler,
     };
     cosmic::app::run::<CosmicPortal>(settings, flags)
+}
+
+pub(crate) fn subscription_failed() -> bool {
+    SUBSCRIPTION_FAILED.load(Ordering::Relaxed)
 }
 
 // run iced app with no main surface
@@ -190,6 +197,11 @@ impl cosmic::Application for CosmicPortal {
                 }
                 subscription::Event::NameLost => {
                     log::warn!("'{}' name on bus lost. Exiting.", crate::DBUS_NAME);
+                    cosmic::iced::exit()
+                }
+                subscription::Event::SubscriptionFailed(err) => {
+                    log::error!("Portal subscription failed: {err}. Exiting.");
+                    SUBSCRIPTION_FAILED.store(true, Ordering::Relaxed);
                     cosmic::iced::exit()
                 }
             },

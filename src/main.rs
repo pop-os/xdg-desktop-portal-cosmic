@@ -330,5 +330,11 @@ impl Settings {
 fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     localize::localize();
-    app::run()
+    let result = app::run();
+    if result.is_ok() && app::subscription_failed() {
+        return Err(cosmic::iced::Error::EventLoop(Box::new(
+            std::io::Error::new(std::io::ErrorKind::Other, "portal subscription failed"),
+        )));
+    }
+    result
 }

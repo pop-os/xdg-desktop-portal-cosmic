@@ -5,3 +5,5 @@ Description=Portal service (COSMIC implementation)
 Type=dbus
 BusName=org.freedesktop.impl.portal.desktop.cosmic
 ExecStart=@libexecdir@/xdg-desktop-portal-cosmic
+Restart=on-failure
+RestartSec=1s

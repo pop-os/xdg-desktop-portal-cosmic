@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use cosmic::cosmic_theme::palette::Srgba;
 use cosmic::iced::Subscription;
-use futures::{SinkExt, StreamExt, future};
+use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc::Receiver;
 use zbus::{Connection, fdo, zvariant};
 
@@ -31,6 +31,7 @@ pub enum Event {
     Config(config::Config),
     Init(tokio::sync::mpsc::Sender<Event>),
     NameLost,
+    SubscriptionFailed(String),
 }
 
 pub enum State {
@@ -57,8 +58,10 @@ pub(crate) fn portal_subscription(
                 let mut state = State::Init;
                 loop {
                     if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
-                        log::debug!("Portal Subscription Error: {:?}", err);
-                        future::pending::<()>().await;
+                        let _ = output
+                            .send(Event::SubscriptionFailed(format!("{err:?}")))
+                            .await;
+                        break;
                     }
                 }
             })
@@ -204,6 +207,7 @@ pub(crate) async fn process_changes(
                     }
                     Event::Init(_) => {}
                     Event::NameLost => {}
+                    Event::SubscriptionFailed(_) => {}
                 }
             }
         }
