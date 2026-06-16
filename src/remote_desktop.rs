@@ -1,8 +1,5 @@
 use crate::{PortalResponse, Session};
-use std::{
-    collections::HashMap,
-    os::{fd::OwnedFd, unix::net::UnixStream},
-};
+use std::collections::HashMap;
 use zbus::zvariant;
 
 #[derive(zvariant::SerializeDict, zvariant::Type)]
@@ -37,7 +34,7 @@ struct SessionData {}
     default_path = "/com/system76/CosmicComp/Ei"
 )]
 trait CosmicCompEi {
-    fn get_socket_path(&self) -> zbus::Result<String>;
+    fn get_sender_socket(&self) -> zbus::Result<zvariant::OwnedFd>;
 }
 
 pub struct RemoteDesktop;
@@ -98,10 +95,10 @@ impl RemoteDesktop {
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> zbus::fdo::Result<zvariant::OwnedFd> {
         let proxy = CosmicCompEiProxy::new(connection).await?;
-        let path = proxy.get_socket_path().await?;
-        let socket = UnixStream::connect(&path)
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to connect to EIS: {e}")))?;
-        Ok(OwnedFd::from(socket).into())
+        proxy
+            .get_sender_socket()
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to connect to EIS: {e}")))
     }
 
     // TODO: Notify*
