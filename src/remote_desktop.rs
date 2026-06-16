@@ -31,6 +31,15 @@ struct StartResult {
 
 struct SessionData {}
 
+#[zbus::proxy(
+    interface = "com.system76.CosmicComp.Ei",
+    default_service = "com.system76.CosmicComp",
+    default_path = "/com/system76/CosmicComp/Ei"
+)]
+trait CosmicCompEi {
+    fn get_socket_path(&self) -> zbus::Result<String>;
+}
+
 pub struct RemoteDesktop;
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.RemoteDesktop")]
@@ -88,13 +97,8 @@ impl RemoteDesktop {
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> zbus::fdo::Result<zvariant::OwnedFd> {
-        let proxy = zbus::proxy::Builder::<'_, zbus::proxy::Proxy<'_>>::new(connection)
-            .destination("com.system76.CosmicComp")?
-            .path("/com/system76/CosmicComp/Ei")?
-            .interface("com.system76.CosmicComp.Ei")?
-            .build()
-            .await?;
-        let path: String = proxy.call("GetSocketPath", &()).await?;
+        let proxy = CosmicCompEiProxy::new(connection).await?;
+        let path = proxy.get_socket_path().await?;
         let socket = UnixStream::connect(&path)
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to connect to EIS: {e}")))?;
         Ok(OwnedFd::from(socket).into())
