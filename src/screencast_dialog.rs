@@ -54,34 +54,7 @@ pub async fn show_screencast_prompt(
     let locales = get_languages_from_env();
     let desktop_entries = load_desktop_entries(&locales).await;
 
-    let toplevels = wayland_helper
-        .toplevels()
-        .into_iter()
-        .map(|info| {
-            let icon = get_desktop_entry(&desktop_entries, &info.app_id)
-                .and_then(|x| Some(x.icon()?.to_string()));
-            (info, icon)
-        })
-        .collect();
-
-    let mut outputs = Vec::new();
-    for output in wayland_helper.outputs() {
-        let Some(info) = wayland_helper.output_info(&output) else {
-            continue;
-        };
-        let source = CaptureSource::Output(output.clone());
-        let image = wayland_helper
-            .capture_source_shm(source, false)
-            .await
-            .and_then(|image| image.image_transformed().ok())
-            .map(|image| {
-                widget::image::Handle::from_rgba(image.width(), image.height(), image.into_vec())
-            });
-        outputs.push((output, info, image));
-    }
-
-    // Order outputs by their position in the display arrangement
-    outputs.sort_by_key(|(_, info, _)| info.logical_position.unwrap_or((i32::MAX, i32::MAX)));
+    let (outputs, toplevels) = gather_capture_sources(wayland_helper, &desktop_entries).await;
 
     let app_name = get_desktop_entry(&desktop_entries, &app_id)
         .and_then(|x| Some(x.name(&locales)?.into_owned()));
@@ -120,6 +93,47 @@ fn get_desktop_entry<'a>(entries: &'a [DesktopEntry], id: &str) -> Option<&'a De
     fde::find_app_by_id(entries, Ascii::new(id))
 }
 
+/// Gather the capturable outputs (with a thumbnail) and toplevel windows, shared
+/// between the screencast dialog and the remote-desktop dialog.
+pub(crate) async fn gather_capture_sources(
+    wayland_helper: &WaylandHelper,
+    desktop_entries: &[DesktopEntry],
+) -> (
+    Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
+    Vec<(ToplevelInfo, Option<String>)>,
+) {
+    let toplevels = wayland_helper
+        .toplevels()
+        .into_iter()
+        .map(|info| {
+            let icon = get_desktop_entry(desktop_entries, &info.app_id)
+                .and_then(|x| Some(x.icon()?.to_string()));
+            (info, icon)
+        })
+        .collect();
+
+    let mut outputs = Vec::new();
+    for output in wayland_helper.outputs() {
+        let Some(info) = wayland_helper.output_info(&output) else {
+            continue;
+        };
+        let source = CaptureSource::Output(output.clone());
+        let image = wayland_helper
+            .capture_source_shm(source, false)
+            .await
+            .and_then(|image| image.image_transformed().ok())
+            .map(|image| {
+                widget::image::Handle::from_rgba(image.width(), image.height(), image.into_vec())
+            });
+        outputs.push((output, info, image));
+    }
+
+    // Order outputs by their position in the display arrangement
+    outputs.sort_by_key(|(_, info, _)| info.logical_position.unwrap_or((i32::MAX, i32::MAX)));
+
+    (outputs, toplevels)
+}
+
 fn create_dialog() -> cosmic::Task<crate::app::Msg> {
     get_layer_surface(SctkLayerSurfaceSettings {
         id: *SCREENCAST_ID,
@@ -132,7 +146,7 @@ fn create_dialog() -> cosmic::Task<crate::app::Msg> {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Tab {
+pub(crate) enum Tab {
     Outputs,
     Windows,
 }
@@ -176,6 +190,28 @@ impl CaptureSources {
         self.outputs.clear();
         self.toplevels.clear();
     }
+
+    pub fn toggle_output(&mut self, output: WlOutput, multiple: bool) {
+        if let Some(idx) = self.outputs.iter().position(|x| x == &output) {
+            self.outputs.remove(idx);
+        } else {
+            if !multiple && !self.is_empty() {
+                self.clear();
+            }
+            self.outputs.push(output);
+        }
+    }
+
+    pub fn toggle_toplevel(&mut self, toplevel: ExtForeignToplevelHandleV1, multiple: bool) {
+        if let Some(idx) = self.toplevels.iter().position(|t| t == &toplevel) {
+            self.toplevels.remove(idx);
+        } else {
+            if !multiple && !self.is_empty() {
+                self.clear();
+            }
+            self.toplevels.push(toplevel);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -187,8 +223,127 @@ pub enum Msg {
     Cancel,
 }
 
-fn active_tab(portal: &CosmicPortal) -> Tab {
-    *portal.screencast_tab_model.active_data::<Tab>().unwrap()
+pub(crate) fn active_tab(
+    tab_model: &widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
+) -> Tab {
+    tab_model
+        .active_data::<Tab>()
+        .copied()
+        .unwrap_or(Tab::Outputs)
+}
+
+/// The shared source-picker control: a tab bar plus, for the active tab, the
+/// outputs laid out by display arrangement or the list of windows. Generic over
+/// the dialog's message type so both the screencast and remote-desktop dialogs
+/// can reuse it.
+pub(crate) fn sources_view<'a, M, FTab, FOut, FTop>(
+    tab_model: &'a widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
+    outputs: &'a [(WlOutput, OutputInfo, Option<widget::image::Handle>)],
+    toplevels: &'a [(ToplevelInfo, Option<String>)],
+    selected: &'a CaptureSources,
+    on_tab: FTab,
+    on_output: FOut,
+    on_toplevel: FTop,
+) -> cosmic::Element<'a, M>
+where
+    M: Clone + 'static,
+    FTab: Fn(widget::segmented_button::Entity) -> M + 'static,
+    FOut: Fn(WlOutput) -> M,
+    FTop: Fn(ExtForeignToplevelHandleV1) -> M,
+{
+    let tabs = widget::tab_bar::horizontal(tab_model).on_activate(on_tab);
+
+    let list: cosmic::Element<M> = match active_tab(tab_model) {
+        Tab::Outputs => {
+            // Position each output to match the display arrangement (as in the
+            // cosmic-settings display page), scaled to fit the dialog.
+            let geometry = |info: &OutputInfo| {
+                let (x, y) = info.logical_position.unwrap_or((0, 0));
+                let (w, h) = info.logical_size.unwrap_or((1920, 1080));
+                (x, y, w.max(1), h.max(1))
+            };
+
+            let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
+            let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
+            for (_, info, _) in outputs {
+                let (x, y, w, h) = geometry(info);
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x + w);
+                max_y = max_y.max(y + h);
+            }
+            let bbox_w = (max_x - min_x).max(1) as f32;
+            let bbox_h = (max_y - min_y).max(1) as f32;
+
+            // Scale the arrangement to fit a target area, and inset each region so
+            // adjacent screens have a gap.
+            const TARGET_W: f32 = 520.0;
+            const TARGET_H: f32 = 320.0;
+            const GAP: f32 = 6.0;
+            let scale = (TARGET_W / bbox_w).min(TARGET_H / bbox_h);
+
+            let mut children = Vec::new();
+            let mut regions = Vec::new();
+            let mut labels = Vec::new();
+            let mut selected_flags = Vec::new();
+            for (output, info, image) in outputs {
+                let (x, y, w, h) = geometry(info);
+                let region = iced::core::Rectangle {
+                    x: (x - min_x) as f32 * scale + GAP / 2.0,
+                    y: (y - min_y) as f32 * scale + GAP / 2.0,
+                    width: (w as f32 * scale - GAP).max(1.0),
+                    height: (h as f32 * scale - GAP).max(1.0),
+                };
+                let is_selected = selected.outputs.contains(output);
+                children.push(output_thumb_button(
+                    is_selected,
+                    image.as_ref(),
+                    region.width,
+                    region.height,
+                    on_output(output.clone()),
+                ));
+                labels.push(info.name.clone().unwrap_or_default());
+                selected_flags.push(is_selected);
+                regions.push(region);
+            }
+
+            let total = iced::core::Size::new(bbox_w * scale, bbox_h * scale);
+            crate::widget::output_arrangement::OutputArrangement::new(
+                children,
+                regions,
+                labels,
+                selected_flags,
+                total,
+            )
+            .into()
+        }
+        Tab::Windows => {
+            let mut list = widget::ListColumn::new();
+            for (toplevel_info, icon) in toplevels {
+                let icon = IconSource::from_unknown(icon.as_deref().unwrap_or_default());
+                let label = &toplevel_info.title;
+                let is_selected = selected.toplevels.contains(&toplevel_info.foreign_toplevel);
+                list = list.add(toplevel_button(
+                    label,
+                    is_selected,
+                    icon,
+                    on_toplevel(toplevel_info.foreign_toplevel.clone()),
+                ));
+            }
+            if toplevels.len() > 8 {
+                widget::container(cosmic::widget::scrollable(list))
+                    .max_height(380.)
+                    .width(iced::Length::Fill)
+                    .into()
+            } else {
+                list.into()
+            }
+        }
+    };
+
+    widget::column::with_children(vec![tabs.into(), list])
+        .spacing(8)
+        .into()
 }
 
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
@@ -201,34 +356,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             portal.screencast_tab_model.activate(tab);
         }
         Msg::SelectOutput(output) => {
-            if let Some(idx) = args
-                .capture_sources
-                .outputs
-                .iter()
-                .position(|x| x == &output)
-            {
-                args.capture_sources.outputs.remove(idx);
-            } else {
-                if !args.multiple && !args.capture_sources.is_empty() {
-                    args.capture_sources.clear();
-                }
-                args.capture_sources.outputs.push(output);
-            }
+            args.capture_sources.toggle_output(output, args.multiple);
         }
         Msg::SelectToplevel(toplevel) => {
-            if let Some(idx) = args
-                .capture_sources
-                .toplevels
-                .iter()
-                .position(|t| t == &toplevel)
-            {
-                args.capture_sources.toplevels.remove(idx);
-            } else {
-                if !args.multiple && !args.capture_sources.is_empty() {
-                    args.capture_sources.clear();
-                }
-                args.capture_sources.toplevels.push(toplevel);
-            }
+            args.capture_sources
+                .toggle_toplevel(toplevel, args.multiple);
         }
         Msg::Share => {
             if let Some(mut args) = portal.screencast_args.take() {
@@ -313,14 +445,14 @@ fn output_button_appearance(
     appearance
 }
 
-fn output_thumb_button<'a>(
+fn output_thumb_button<'a, M: Clone + 'static>(
     is_selected: bool,
     image_handle: Option<&'a widget::image::Handle>,
     width: f32,
     height: f32,
-    msg: Msg,
-) -> cosmic::Element<'a, Msg> {
-    let content: cosmic::Element<'a, Msg> = match image_handle {
+    msg: M,
+) -> cosmic::Element<'a, M> {
+    let content: cosmic::Element<'a, M> = match image_handle {
         Some(image_handle) => widget::image::Image::new(image_handle.clone())
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
@@ -353,12 +485,12 @@ fn output_thumb_button<'a>(
         .into()
 }
 
-fn toplevel_button(
-    label: &str,
+fn toplevel_button<'a, M: Clone + 'static>(
+    label: &'a str,
     is_selected: bool,
     icon: IconSource,
-    msg: Msg,
-) -> cosmic::Element<'_, Msg> {
+    msg: M,
+) -> cosmic::Element<'a, M> {
     let text = widget::text(label).class(theme::style::Text::Custom(|theme| {
         let container = theme.current_container();
         iced::core::widget::text::Style {
@@ -397,100 +529,18 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
         share_button = share_button.on_press(Msg::Share);
     }
 
-    let tabs =
-        widget::tab_bar::horizontal(&portal.screencast_tab_model).on_activate(Msg::ActivateTab);
-
-    let list: cosmic::Element<_> = match active_tab(portal) {
-        Tab::Outputs => {
-            // Position each output to match the display arrangement (as in the
-            // cosmic-settings display page), scaled to fit the dialog.
-            let geometry = |info: &OutputInfo| {
-                let (x, y) = info.logical_position.unwrap_or((0, 0));
-                let (w, h) = info.logical_size.unwrap_or((1920, 1080));
-                (x, y, w.max(1), h.max(1))
-            };
-
-            let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
-            let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
-            for (_, info, _) in &args.outputs {
-                let (x, y, w, h) = geometry(info);
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x + w);
-                max_y = max_y.max(y + h);
-            }
-            let bbox_w = (max_x - min_x).max(1) as f32;
-            let bbox_h = (max_y - min_y).max(1) as f32;
-
-            // Scale the arrangement to fit a target area, and inset each region so
-            // adjacent screens have a gap.
-            const TARGET_W: f32 = 520.0;
-            const TARGET_H: f32 = 320.0;
-            const GAP: f32 = 6.0;
-            let scale = (TARGET_W / bbox_w).min(TARGET_H / bbox_h);
-
-            let mut children = Vec::new();
-            let mut regions = Vec::new();
-            let mut labels = Vec::new();
-            let mut selected = Vec::new();
-            for (output, info, image) in &args.outputs {
-                let (x, y, w, h) = geometry(info);
-                let region = iced::core::Rectangle {
-                    x: (x - min_x) as f32 * scale + GAP / 2.0,
-                    y: (y - min_y) as f32 * scale + GAP / 2.0,
-                    width: (w as f32 * scale - GAP).max(1.0),
-                    height: (h as f32 * scale - GAP).max(1.0),
-                };
-                let is_selected = args.capture_sources.outputs.contains(output);
-                children.push(output_thumb_button(
-                    is_selected,
-                    image.as_ref(),
-                    region.width,
-                    region.height,
-                    Msg::SelectOutput(output.clone()),
-                ));
-                labels.push(info.name.clone().unwrap_or_default());
-                selected.push(is_selected);
-                regions.push(region);
-            }
-
-            let total = iced::core::Size::new(bbox_w * scale, bbox_h * scale);
-            crate::widget::output_arrangement::OutputArrangement::new(
-                children, regions, labels, selected, total,
-            )
-            .into()
-        }
-        Tab::Windows => {
-            let mut list = widget::ListColumn::new();
-            for (toplevel_info, icon) in &args.toplevels {
-                let icon = IconSource::from_unknown(icon.as_deref().unwrap_or_default());
-                let label = &toplevel_info.title;
-                let is_selected = args
-                    .capture_sources
-                    .toplevels
-                    .contains(&toplevel_info.foreign_toplevel);
-                list = list.add(toplevel_button(
-                    label,
-                    is_selected,
-                    icon,
-                    Msg::SelectToplevel(toplevel_info.foreign_toplevel.clone()),
-                ));
-            }
-            if args.toplevels.len() > 8 {
-                widget::container(cosmic::widget::scrollable(list))
-                    .max_height(380.)
-                    .width(iced::Length::Fill)
-                    .into()
-            } else {
-                list.into()
-            }
-        }
-    };
-
     let unknown = fl!("unknown-application");
     let app_name = args.app_name.as_deref().unwrap_or(&unknown);
 
-    let control = widget::column::with_children(vec![tabs.into(), list]).spacing(8);
+    let control = sources_view(
+        &portal.screencast_tab_model,
+        &args.outputs,
+        &args.toplevels,
+        &args.capture_sources,
+        Msg::ActivateTab,
+        Msg::SelectOutput,
+        Msg::SelectToplevel,
+    );
     autosize::autosize(
         KeyboardWrapper::new(
             widget::dialog()

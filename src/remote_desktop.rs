@@ -1,8 +1,6 @@
 use crate::screencast::{self, CaptureOutcome, SessionData, StreamProps};
 use crate::wayland::WaylandHelper;
-use crate::{
-    PortalResponse, Request, Session, remote_desktop_dialog, screencast_dialog, subscription,
-};
+use crate::{PortalResponse, Request, Session, remote_desktop_dialog, subscription};
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
@@ -139,11 +137,8 @@ impl RemoteDesktop {
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> PortalResponse<StartResult> {
-        // Dismiss whichever prompt is up: the permission dialog or the screencast picker.
-        let on_cancel = || async {
-            remote_desktop_dialog::hide_remote_desktop_prompt(&self.tx, &session_handle).await;
-            screencast_dialog::hide_screencast_prompt(&self.tx, &session_handle).await;
-        };
+        let on_cancel =
+            || remote_desktop_dialog::hide_remote_desktop_prompt(&self.tx, &session_handle);
         Request::run(connection, &handle, on_cancel, async {
             let Some(interface) =
                 crate::session_interface::<SessionData>(connection, &session_handle).await
@@ -151,7 +146,14 @@ impl RemoteDesktop {
                 return PortalResponse::Other;
             };
 
-            let (device_types, clipboard_enabled, persist_mode, screen_cast_enabled) = {
+            let (
+                device_types,
+                clipboard_enabled,
+                persist_mode,
+                screen_cast_enabled,
+                multiple,
+                source_types,
+            ) = {
                 let session_data = interface.get().await;
                 let Some(remote_desktop) = session_data.remote_desktop.as_ref() else {
                     return PortalResponse::Other;
@@ -161,15 +163,26 @@ impl RemoteDesktop {
                     remote_desktop.clipboard_enabled,
                     remote_desktop.persist_mode,
                     remote_desktop.screen_cast_enabled,
+                    session_data.multiple,
+                    session_data.source_types,
                 )
             };
+
+            if screen_cast_enabled && self.wayland_helper.outputs().is_empty() {
+                log::error!("No output");
+                return PortalResponse::Other;
+            }
 
             let resp = remote_desktop_dialog::show_remote_desktop_prompt(
                 &self.tx,
                 &session_handle,
-                app_id.clone(),
+                app_id,
                 device_types,
                 persist_mode,
+                screen_cast_enabled,
+                multiple,
+                source_types,
+                &self.wayland_helper,
             )
             .await;
             let Some(response) = resp else {
@@ -185,12 +198,11 @@ impl RemoteDesktop {
 
             // Reuse the ScreenCast.Start capture path; streams are returned here.
             let streams = if screen_cast_enabled {
-                match screencast::capture(
+                match screencast::capture_from_sources(
                     connection,
                     &self.wayland_helper,
-                    &self.tx,
                     &session_handle,
-                    app_id,
+                    response.capture_sources,
                 )
                 .await
                 {

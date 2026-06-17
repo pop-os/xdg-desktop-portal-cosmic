@@ -148,8 +148,8 @@ struct StartResult {
 pub(crate) struct SessionData {
     screencast_threads: Vec<ScreencastThread>,
     cursor_mode: Option<u32>,
-    multiple: bool,
-    source_types: BitFlags<SourceType>,
+    pub(crate) multiple: bool,
+    pub(crate) source_types: BitFlags<SourceType>,
     persisted_capture_sources: Option<PersistedCaptureSources>,
     pub(crate) closed: bool,
     pub(crate) remote_desktop: Option<RemoteDesktopData>,
@@ -194,17 +194,12 @@ pub(crate) async fn capture(
         return CaptureOutcome::Other;
     };
 
-    let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
-        let session_data = interface.get_mut().await;
-        let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_EMBEDDED);
-        let multiple = session_data.multiple;
-        let source_types = session_data.source_types;
-        let persisted_capture_sources = session_data.persisted_capture_sources.clone();
+    let (multiple, source_types, persisted_capture_sources) = {
+        let session_data = interface.get().await;
         (
-            cursor_mode,
-            multiple,
-            source_types,
-            persisted_capture_sources,
+            session_data.multiple,
+            session_data.source_types,
+            session_data.persisted_capture_sources.clone(),
         )
     };
 
@@ -236,6 +231,25 @@ pub(crate) async fn capture(
         capture_sources
     };
 
+    capture_from_sources(connection, wayland_helper, session_handle, capture_sources).await
+}
+
+pub(crate) async fn capture_from_sources(
+    connection: &zbus::Connection,
+    wayland_helper: &WaylandHelper,
+    session_handle: &zvariant::ObjectPath<'_>,
+    capture_sources: CaptureSources,
+) -> CaptureOutcome {
+    let Some(interface) = crate::session_interface::<SessionData>(connection, session_handle).await
+    else {
+        return CaptureOutcome::Other;
+    };
+
+    let cursor_mode = interface
+        .get()
+        .await
+        .cursor_mode
+        .unwrap_or(CURSOR_MODE_EMBEDDED);
     let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
     // Use `FuturesOrdered` so streams are in consistent order
     let mut res_futures = FuturesOrdered::new();
