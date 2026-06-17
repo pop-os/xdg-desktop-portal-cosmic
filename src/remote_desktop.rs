@@ -1,7 +1,11 @@
 use crate::screencast::{self, CaptureOutcome, SessionData, StreamProps};
 use crate::wayland::WaylandHelper;
-use crate::{PortalResponse, Request, Session, remote_desktop_dialog, subscription};
+use crate::{
+    PortalResponse, Request, Session, remote_desktop_dialog, remote_desktop_ei, subscription,
+};
+use remote_desktop_ei::{Command, EiSender};
 use std::collections::HashMap;
+use std::os::unix::net::UnixStream;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
@@ -22,6 +26,7 @@ pub(crate) struct RemoteDesktopData {
     pub(crate) persist_mode: u32,
     pub(crate) granted_persist_mode: u32,
     pub(crate) screen_cast_enabled: bool,
+    pub(crate) ei_sender: Option<EiSender>,
 }
 
 impl Default for RemoteDesktopData {
@@ -32,6 +37,7 @@ impl Default for RemoteDesktopData {
             persist_mode: PERSIST_NONE,
             granted_persist_mode: PERSIST_NONE,
             screen_cast_enabled: false,
+            ei_sender: None,
         }
     }
 }
@@ -77,6 +83,56 @@ pub struct RemoteDesktop {
 impl RemoteDesktop {
     pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
         Self { wayland_helper, tx }
+    }
+
+    async fn ei_sender(
+        &self,
+        connection: &zbus::Connection,
+        session_handle: &zvariant::ObjectPath<'_>,
+    ) -> Option<EiSender> {
+        let interface = crate::session_interface::<SessionData>(connection, session_handle).await?;
+
+        let device_types = {
+            let session_data = interface.get().await;
+            let remote_desktop = session_data.remote_desktop.as_ref()?;
+            if let Some(sender) = remote_desktop.ei_sender.clone() {
+                return Some(sender);
+            }
+            remote_desktop.device_types
+        };
+
+        let proxy = CosmicCompEiProxy::new(connection).await.ok()?;
+        let fd = match proxy.get_sender_socket(device_types).await {
+            Ok(fd) => fd,
+            Err(err) => {
+                log::error!("Failed to get ei sender socket: {err}");
+                return None;
+            }
+        };
+        let stream = UnixStream::from(std::os::fd::OwnedFd::from(fd));
+        match EiSender::connect(stream, device_types).await {
+            Ok(sender) => {
+                if let Some(remote_desktop) = interface.get_mut().await.remote_desktop.as_mut() {
+                    remote_desktop.ei_sender = Some(sender.clone());
+                }
+                Some(sender)
+            }
+            Err(err) => {
+                log::error!("Failed to create remote desktop ei sender: {err}");
+                None
+            }
+        }
+    }
+
+    async fn notify(
+        &self,
+        connection: &zbus::Connection,
+        session_handle: &zvariant::ObjectPath<'_>,
+        command: Command,
+    ) {
+        if let Some(sender) = self.ei_sender(connection, session_handle).await {
+            sender.send(command);
+        }
     }
 }
 
@@ -253,7 +309,165 @@ impl RemoteDesktop {
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to connect to EIS: {e}")))
     }
 
-    // TODO: Notify*
+    // Notify* for legacy clients that don't use ConnectToEIS.
+
+    async fn notify_pointer_motion(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        dx: f64,
+        dy: f64,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::PointerMotion { dx, dy },
+        )
+        .await;
+    }
+
+    async fn notify_pointer_motion_absolute(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        _stream: u32,
+        x: f64,
+        y: f64,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::PointerMotionAbsolute { x, y },
+        )
+        .await;
+    }
+
+    async fn notify_pointer_button(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        button: i32,
+        state: u32,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::PointerButton { button, state },
+        )
+        .await;
+    }
+
+    async fn notify_pointer_axis(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        dx: f64,
+        dy: f64,
+    ) {
+        self.notify(connection, &session_handle, Command::PointerAxis { dx, dy })
+            .await;
+    }
+
+    async fn notify_pointer_axis_discrete(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        axis: u32,
+        steps: i32,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::PointerAxisDiscrete { axis, steps },
+        )
+        .await;
+    }
+
+    async fn notify_keyboard_keycode(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        keycode: i32,
+        state: u32,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::KeyboardKeycode { keycode, state },
+        )
+        .await;
+    }
+
+    async fn notify_keyboard_keysym(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        keysym: i32,
+        state: u32,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::KeyboardKeysym { keysym, state },
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)] // signature fixed by the portal protocol
+    async fn notify_touch_down(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        _stream: u32,
+        slot: u32,
+        x: f64,
+        y: f64,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::TouchDown { slot, x, y },
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)] // signature fixed by the portal protocol
+    async fn notify_touch_motion(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        _stream: u32,
+        slot: u32,
+        x: f64,
+        y: f64,
+    ) {
+        self.notify(
+            connection,
+            &session_handle,
+            Command::TouchMotion { slot, x, y },
+        )
+        .await;
+    }
+
+    async fn notify_touch_up(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session_handle: zvariant::ObjectPath<'_>,
+        _options: HashMap<String, zvariant::OwnedValue>,
+        slot: u32,
+    ) {
+        self.notify(connection, &session_handle, Command::TouchUp { slot })
+            .await;
+    }
 
     #[zbus(property)]
     async fn available_device_types(&self) -> u32 {

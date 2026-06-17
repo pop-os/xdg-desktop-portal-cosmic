@@ -6425,6 +6425,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "reis"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81f3fedd2777cde52c1be5e572efbec485eac7b801c47820eda388d4f13b9c4b"
+dependencies = [
+ "enumflags2",
+ "futures-util",
+ "log",
+ "rustix 1.1.4",
+ "tokio",
+]
+
+[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9232,6 +9245,7 @@ dependencies = [
  "pipewire",
  "pipewire-sys",
  "png 0.18.1",
+ "reis",
  "rust-embed",
  "rustix 1.1.4",
  "serde",
