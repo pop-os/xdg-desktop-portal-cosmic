@@ -1,15 +1,28 @@
 use crate::screencast::{self, CaptureOutcome, SessionData, StreamProps};
 use crate::wayland::WaylandHelper;
-use crate::{PortalResponse, Request, Session, screencast_dialog, subscription};
+use crate::{
+    PortalResponse, Request, Session, remote_desktop_dialog, screencast_dialog, subscription,
+};
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
-const ALL_DEVICE_TYPES: u32 = 1 | 2 | 4;
+// Device types, as defined by the RemoteDesktop portal spec.
+pub(crate) const DEVICE_KEYBOARD: u32 = 1;
+pub(crate) const DEVICE_POINTER: u32 = 2;
+pub(crate) const DEVICE_TOUCHSCREEN: u32 = 4;
+const ALL_DEVICE_TYPES: u32 = DEVICE_KEYBOARD | DEVICE_POINTER | DEVICE_TOUCHSCREEN;
+
+// Persist modes, as defined by the RemoteDesktop portal spec.
+pub(crate) const PERSIST_NONE: u32 = 0;
+pub(crate) const PERSIST_WHILE_RUNNING: u32 = 1;
+pub(crate) const PERSIST_UNTIL_REVOKED: u32 = 2;
 
 pub(crate) struct RemoteDesktopData {
     pub(crate) device_types: u32,
     pub(crate) clipboard_enabled: bool,
+    pub(crate) persist_mode: u32,
+    pub(crate) granted_persist_mode: u32,
     pub(crate) screen_cast_enabled: bool,
 }
 
@@ -18,6 +31,8 @@ impl Default for RemoteDesktopData {
         Self {
             device_types: ALL_DEVICE_TYPES,
             clipboard_enabled: false,
+            persist_mode: PERSIST_NONE,
+            granted_persist_mode: PERSIST_NONE,
             screen_cast_enabled: false,
         }
     }
@@ -110,7 +125,8 @@ impl RemoteDesktop {
             return PortalResponse::Other;
         };
         remote_desktop.device_types = options.types.unwrap_or(ALL_DEVICE_TYPES) & ALL_DEVICE_TYPES;
-        // TODO: persist_mode / restore_data
+        remote_desktop.persist_mode = options.persist_mode.unwrap_or(PERSIST_NONE);
+        // TODO: restore_data
         PortalResponse::Success(HashMap::new())
     }
 
@@ -123,25 +139,49 @@ impl RemoteDesktop {
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> PortalResponse<StartResult> {
-        let on_cancel = || screencast_dialog::hide_screencast_prompt(&self.tx, &session_handle);
+        // Dismiss whichever prompt is up: the permission dialog or the screencast picker.
+        let on_cancel = || async {
+            remote_desktop_dialog::hide_remote_desktop_prompt(&self.tx, &session_handle).await;
+            screencast_dialog::hide_screencast_prompt(&self.tx, &session_handle).await;
+        };
         Request::run(connection, &handle, on_cancel, async {
-            let (device_types, clipboard_enabled, screen_cast_enabled) = {
-                let Some(interface) =
-                    crate::session_interface::<SessionData>(connection, &session_handle).await
-                else {
-                    return PortalResponse::Other;
-                };
+            let Some(interface) =
+                crate::session_interface::<SessionData>(connection, &session_handle).await
+            else {
+                return PortalResponse::Other;
+            };
+
+            let (device_types, clipboard_enabled, persist_mode, screen_cast_enabled) = {
                 let session_data = interface.get().await;
                 let Some(remote_desktop) = session_data.remote_desktop.as_ref() else {
                     return PortalResponse::Other;
                 };
-                // Without a prompt yet, the granted devices are whatever was selected.
                 (
                     remote_desktop.device_types,
                     remote_desktop.clipboard_enabled,
+                    remote_desktop.persist_mode,
                     remote_desktop.screen_cast_enabled,
                 )
             };
+
+            let resp = remote_desktop_dialog::show_remote_desktop_prompt(
+                &self.tx,
+                &session_handle,
+                app_id.clone(),
+                device_types,
+                persist_mode,
+            )
+            .await;
+            let Some(response) = resp else {
+                return PortalResponse::Cancelled;
+            };
+
+            if interface.get().await.closed {
+                return PortalResponse::Cancelled;
+            }
+            if let Some(remote_desktop) = interface.get_mut().await.remote_desktop.as_mut() {
+                remote_desktop.granted_persist_mode = response.persist_mode;
+            }
 
             // Reuse the ScreenCast.Start capture path; streams are returned here.
             let streams = if screen_cast_enabled {

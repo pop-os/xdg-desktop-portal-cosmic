@@ -11,11 +11,12 @@ use zbus::{Connection, fdo, zvariant};
 
 use crate::access::Access;
 use crate::file_chooser::FileChooser;
+use crate::remote_desktop::RemoteDesktop;
 use crate::screencast::ScreenCast;
 use crate::screenshot::Screenshot;
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
-    DBUS_NAME, DBUS_PATH, Settings, config, remote_desktop::RemoteDesktop, wayland,
+    DBUS_NAME, DBUS_PATH, Settings, config, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -25,6 +26,8 @@ pub enum Event {
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
+    RemoteDesktop(crate::remote_desktop_dialog::Args),
+    CancelRemoteDesktop(zvariant::ObjectPath<'static>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -144,6 +147,16 @@ pub(crate) async fn process_changes(
                     Event::CancelScreencast(handle) => {
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
                             log::error!("Error sending screencast cancel: {:?}", err);
+                        };
+                    }
+                    Event::RemoteDesktop(args) => {
+                        if let Err(err) = output.send(Event::RemoteDesktop(args)).await {
+                            log::error!("Error sending remote desktop event: {:?}", err);
+                        };
+                    }
+                    Event::CancelRemoteDesktop(handle) => {
+                        if let Err(err) = output.send(Event::CancelRemoteDesktop(handle)).await {
+                            log::error!("Error sending remote desktop cancel: {:?}", err);
                         };
                     }
                     Event::Accent(a) => {

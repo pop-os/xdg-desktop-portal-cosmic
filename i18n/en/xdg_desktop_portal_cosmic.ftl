@@ -1,4 +1,5 @@
 allow = Allow
+deny = Deny
 cancel = Cancel
 capture = Capture
 share = Share
@@ -13,3 +14,13 @@ share-screen = Share your screen
 unknown-application = Unknown Application
 output = Output
 window = Window
+
+remote-desktop = Remote control
+    .description = "{$app_name}" wants to remotely control this device using the input devices shown below.
+    .keyboard = Keyboard
+    .pointer = Pointer
+    .touchscreen = Touchscreen
+    .remember = Remember
+    .persist-none = This time only
+    .persist-while-running = Until the app closes
+    .persist-until-revoked = Until I revoke it

@@ -151,7 +151,7 @@ pub(crate) struct SessionData {
     multiple: bool,
     source_types: BitFlags<SourceType>,
     persisted_capture_sources: Option<PersistedCaptureSources>,
-    closed: bool,
+    pub(crate) closed: bool,
     pub(crate) remote_desktop: Option<RemoteDesktopData>,
 }
 
