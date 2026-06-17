@@ -90,7 +90,10 @@ pub(crate) async fn process_changes(
             let connection = zbus::connection::Builder::session()?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
-                .serve_at(DBUS_PATH, RemoteDesktop)?
+                .serve_at(
+                    DBUS_PATH,
+                    RemoteDesktop::new(wayland_helper.clone(), tx.clone()),
+                )?
                 .serve_at(
                     DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
