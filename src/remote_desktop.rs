@@ -1,6 +1,27 @@
-use crate::{PortalResponse, Session};
+use crate::screencast::{self, CaptureOutcome, SessionData, StreamProps};
+use crate::wayland::WaylandHelper;
+use crate::{PortalResponse, Request, Session, screencast_dialog, subscription};
 use std::collections::HashMap;
+use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
+
+const ALL_DEVICE_TYPES: u32 = 1 | 2 | 4;
+
+pub(crate) struct RemoteDesktopData {
+    pub(crate) device_types: u32,
+    pub(crate) clipboard_enabled: bool,
+    pub(crate) screen_cast_enabled: bool,
+}
+
+impl Default for RemoteDesktopData {
+    fn default() -> Self {
+        Self {
+            device_types: ALL_DEVICE_TYPES,
+            clipboard_enabled: false,
+            screen_cast_enabled: false,
+        }
+    }
+}
 
 #[derive(zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
@@ -23,10 +44,8 @@ struct SelectDevicesOptions {
 struct StartResult {
     devices: u32,
     clipboard_enabled: bool,
-    streams: Vec<(u32, HashMap<String, zvariant::OwnedValue>)>,
+    streams: Vec<(u32, StreamProps)>,
 }
-
-struct SessionData {}
 
 #[zbus::proxy(
     interface = "com.system76.CosmicComp.Ei",
@@ -34,10 +53,19 @@ struct SessionData {}
     default_path = "/com/system76/CosmicComp/Ei"
 )]
 trait CosmicCompEi {
-    fn get_sender_socket(&self) -> zbus::Result<zvariant::OwnedFd>;
+    fn get_sender_socket(&self, device_types: u32) -> zbus::Result<zvariant::OwnedFd>;
 }
 
-pub struct RemoteDesktop;
+pub struct RemoteDesktop {
+    wayland_helper: WaylandHelper,
+    tx: Sender<subscription::Event>,
+}
+
+impl RemoteDesktop {
+    pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
+        Self { wayland_helper, tx }
+    }
+}
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.RemoteDesktop")]
 impl RemoteDesktop {
@@ -51,7 +79,12 @@ impl RemoteDesktop {
     ) -> PortalResponse<CreateSessionResult> {
         connection
             .object_server()
-            .at(&session_handle, Session::new(SessionData {}, |_| {}))
+            .at(
+                &session_handle,
+                Session::new(SessionData::new_remote_desktop(), |session_data| {
+                    session_data.close()
+                }),
+            )
             .await
             .unwrap(); // XXX unwrap
         PortalResponse::Success(CreateSessionResult {
@@ -59,15 +92,25 @@ impl RemoteDesktop {
         })
     }
 
-    // CreateSession
     async fn select_devices(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
-        options: SelectDevicesOptions, // XXX
+        options: SelectDevicesOptions,
     ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
+        let Some(interface) =
+            crate::session_interface::<SessionData>(connection, &session_handle).await
+        else {
+            return PortalResponse::Other;
+        };
+        let mut session_data = interface.get_mut().await;
+        let Some(remote_desktop) = session_data.remote_desktop.as_mut() else {
+            return PortalResponse::Other;
+        };
+        remote_desktop.device_types = options.types.unwrap_or(ALL_DEVICE_TYPES) & ALL_DEVICE_TYPES;
+        // TODO: persist_mode / restore_data
         PortalResponse::Success(HashMap::new())
     }
 
@@ -80,11 +123,52 @@ impl RemoteDesktop {
         parent_window: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> PortalResponse<StartResult> {
-        PortalResponse::Success(StartResult {
-            devices: 7,
-            clipboard_enabled: false,
-            streams: Vec::new(),
+        let on_cancel = || screencast_dialog::hide_screencast_prompt(&self.tx, &session_handle);
+        Request::run(connection, &handle, on_cancel, async {
+            let (device_types, clipboard_enabled, screen_cast_enabled) = {
+                let Some(interface) =
+                    crate::session_interface::<SessionData>(connection, &session_handle).await
+                else {
+                    return PortalResponse::Other;
+                };
+                let session_data = interface.get().await;
+                let Some(remote_desktop) = session_data.remote_desktop.as_ref() else {
+                    return PortalResponse::Other;
+                };
+                // Without a prompt yet, the granted devices are whatever was selected.
+                (
+                    remote_desktop.device_types,
+                    remote_desktop.clipboard_enabled,
+                    remote_desktop.screen_cast_enabled,
+                )
+            };
+
+            // Reuse the ScreenCast.Start capture path; streams are returned here.
+            let streams = if screen_cast_enabled {
+                match screencast::capture(
+                    connection,
+                    &self.wayland_helper,
+                    &self.tx,
+                    &session_handle,
+                    app_id,
+                )
+                .await
+                {
+                    CaptureOutcome::Success(result) => result.streams,
+                    CaptureOutcome::Cancelled => return PortalResponse::Cancelled,
+                    CaptureOutcome::Other => return PortalResponse::Other,
+                }
+            } else {
+                Vec::new()
+            };
+
+            PortalResponse::Success(StartResult {
+                devices: device_types,
+                clipboard_enabled,
+                streams,
+            })
         })
+        .await
     }
 
     async fn connect_to_EIS(
@@ -94,9 +178,25 @@ impl RemoteDesktop {
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
     ) -> zbus::fdo::Result<zvariant::OwnedFd> {
+        let Some(interface) =
+            crate::session_interface::<SessionData>(connection, &session_handle).await
+        else {
+            return Err(zbus::fdo::Error::Failed("No such session".to_string()));
+        };
+        let Some(device_types) = interface
+            .get()
+            .await
+            .remote_desktop
+            .as_ref()
+            .map(|remote_desktop| remote_desktop.device_types)
+        else {
+            return Err(zbus::fdo::Error::Failed(
+                "Not a remote desktop session".to_string(),
+            ));
+        };
         let proxy = CosmicCompEiProxy::new(connection).await?;
         proxy
-            .get_sender_socket()
+            .get_sender_socket(device_types)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to connect to EIS: {e}")))
     }
@@ -105,7 +205,7 @@ impl RemoteDesktop {
 
     #[zbus(property)]
     async fn available_device_types(&self) -> u32 {
-        7 // XXX
+        ALL_DEVICE_TYPES
     }
 
     #[zbus(property, name = "version")]
