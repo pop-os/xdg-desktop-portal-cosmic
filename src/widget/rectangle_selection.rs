@@ -491,9 +491,10 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         };
         #[cfg(feature = "wgpu")]
         {
-            use cosmic::iced_widget::graphics::Mesh;
-            use cosmic::iced_widget::graphics::color::{Packed, pack};
-            use cosmic::iced_widget::graphics::mesh::{Indexed, SolidVertex2D};
+            use cosmic::iced::advanced::graphics::Mesh;
+            use cosmic::iced::advanced::graphics::color::pack;
+            use cosmic::iced::advanced::graphics::mesh::{Indexed, Renderer, SolidVertex2D};
+            use cosmic::iced::core::Transformation;
             let mut overlay = Color::BLACK;
             overlay.a = 0.3;
 
@@ -538,7 +539,8 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
                         .collect(),
                     indices,
                 },
-                size: outer_size,
+                transformation: Transformation::IDENTITY,
+                clip_bounds: Rectangle::INFINITE,
             })
         }
 

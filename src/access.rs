@@ -21,6 +21,9 @@ use crate::wayland::WaylandHelper;
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
 use crate::{PortalResponse, fl, subscription};
 
+//(ID returned with the response, choices (ID, label), label, initial selection or "" meaning the portal should choose)
+type AccessDialogChoice = (String, String, Vec<(String, String)>, String);
+
 #[derive(zvariant::DeserializeDict, zvariant::Type, Debug, Clone)]
 #[zvariant(signature = "a{sv}")]
 pub(crate) struct AccessDialogOptions {
@@ -28,9 +31,7 @@ pub(crate) struct AccessDialogOptions {
     deny_label: Option<String>,
     grant_label: Option<String>,
     icon: Option<String>,
-    //(ID returned with the response, choices (ID, label), label, initial selection or "" meaning the portal should choose)
-    #[allow(clippy::type_complexity)]
-    choices: Option<Vec<(String, String, Vec<(String, String)>, String)>>,
+    choices: Option<Vec<AccessDialogChoice>>,
 }
 
 #[derive(zvariant::SerializeDict, zvariant::Type, Debug, Clone)]

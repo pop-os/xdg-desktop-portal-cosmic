@@ -243,8 +243,11 @@ pub enum Msg {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Args {
+    #[allow(dead_code)]
     pub handle: zvariant::ObjectPath<'static>,
+    #[allow(dead_code)]
     pub app_id: String,
+    #[allow(dead_code)]
     pub parent_window: String,
     pub title: String,
     pub options: FileChooserOptions,
