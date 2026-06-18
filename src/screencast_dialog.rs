@@ -80,6 +80,9 @@ pub async fn show_screencast_prompt(
         outputs.push((output, info, image));
     }
 
+    // Order outputs by their position in the display arrangement
+    outputs.sort_by_key(|(_, info, _)| info.logical_position.unwrap_or((i32::MAX, i32::MAX)));
+
     let app_name = get_desktop_entry(&desktop_entries, &app_id)
         .and_then(|x| Some(x.name(&locales)?.into_owned()));
 
