@@ -313,35 +313,29 @@ fn output_button_appearance(
     appearance
 }
 
-fn output_button<'a>(
-    label: &'a str,
+fn output_thumb_button<'a>(
     is_selected: bool,
     image_handle: Option<&'a widget::image::Handle>,
+    width: f32,
+    height: f32,
     msg: Msg,
 ) -> cosmic::Element<'a, Msg> {
-    let text = widget::text(label).class(theme::style::Text::Custom(|theme| {
-        let container = theme.current_container();
-        iced::core::widget::text::Style {
-            color: Some(container.on.into()),
-            ..Default::default()
-        }
-    }));
-    let mut row_children = vec![text.into()];
-    if is_selected {
-        row_children.push(widget::text("✓").into());
-    }
-    let row = widget::row::with_children(row_children).spacing(12);
+    let content: cosmic::Element<'a, Msg> = match image_handle {
+        Some(image_handle) => widget::image::Image::new(image_handle.clone())
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fill)
+            .content_fit(iced::ContentFit::Fill)
+            .into(),
+        None => widget::container(widget::text(""))
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fill)
+            .into(),
+    };
 
-    let mut children = Vec::new();
-    if let Some(image_handle) = image_handle {
-        children.push(widget::image::Image::new(image_handle.clone()).into());
-    }
-    children.push(row.into());
-    let column = widget::column::with_children(children).spacing(12);
-
-    widget::button::custom(column)
-        .width(iced::Length::Fill)
-        .padding(8)
+    widget::button::custom(content)
+        .width(iced::Length::Fixed(width))
+        .height(iced::Length::Fixed(height))
+        .padding(0)
         .selected(is_selected)
         .class(cosmic::theme::Button::Custom {
             active: Box::new(move |_focused, theme| {
@@ -408,18 +402,63 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
 
     let list: cosmic::Element<_> = match active_tab(portal) {
         Tab::Outputs => {
+            // Position each output to match the display arrangement (as in the
+            // cosmic-settings display page), scaled to fit the dialog.
+            let geometry = |info: &OutputInfo| {
+                let (x, y) = info.logical_position.unwrap_or((0, 0));
+                let (w, h) = info.logical_size.unwrap_or((1920, 1080));
+                (x, y, w.max(1), h.max(1))
+            };
+
+            let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
+            let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
+            for (_, info, _) in &args.outputs {
+                let (x, y, w, h) = geometry(info);
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x + w);
+                max_y = max_y.max(y + h);
+            }
+            let bbox_w = (max_x - min_x).max(1) as f32;
+            let bbox_h = (max_y - min_y).max(1) as f32;
+
+            // Scale the arrangement to fit a target area, and inset each region so
+            // adjacent screens have a gap.
+            const TARGET_W: f32 = 520.0;
+            const TARGET_H: f32 = 320.0;
+            const GAP: f32 = 6.0;
+            let scale = (TARGET_W / bbox_w).min(TARGET_H / bbox_h);
+
             let mut children = Vec::new();
-            for (output, output_info, image_handle) in &args.outputs {
-                let label = output_info.name.as_ref().unwrap();
+            let mut regions = Vec::new();
+            let mut labels = Vec::new();
+            let mut selected = Vec::new();
+            for (output, info, image) in &args.outputs {
+                let (x, y, w, h) = geometry(info);
+                let region = iced::core::Rectangle {
+                    x: (x - min_x) as f32 * scale + GAP / 2.0,
+                    y: (y - min_y) as f32 * scale + GAP / 2.0,
+                    width: (w as f32 * scale - GAP).max(1.0),
+                    height: (h as f32 * scale - GAP).max(1.0),
+                };
                 let is_selected = args.capture_sources.outputs.contains(output);
-                children.push(output_button(
-                    label,
+                children.push(output_thumb_button(
                     is_selected,
-                    image_handle.as_ref(),
+                    image.as_ref(),
+                    region.width,
+                    region.height,
                     Msg::SelectOutput(output.clone()),
                 ));
+                labels.push(info.name.clone().unwrap_or_default());
+                selected.push(is_selected);
+                regions.push(region);
             }
-            widget::row::with_children(children).spacing(8).into()
+
+            let total = iced::core::Size::new(bbox_w * scale, bbox_h * scale);
+            crate::widget::output_arrangement::OutputArrangement::new(
+                children, regions, labels, selected, total,
+            )
+            .into()
         }
         Tab::Windows => {
             let mut list = widget::ListColumn::new();
