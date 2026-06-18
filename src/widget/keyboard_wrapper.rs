@@ -88,6 +88,7 @@ where
             return;
         }
 
+        #[allow(clippy::single_match)]
         match event {
             Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 if let Some(message) = (self.handler)(key.clone(), *modifiers) {
