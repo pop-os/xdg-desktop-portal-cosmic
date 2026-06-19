@@ -28,14 +28,14 @@ struct CreateSessionResult {
     session_id: String,
 }
 
-#[derive(Clone)]
-struct PersistedCaptureSources {
-    pub outputs: Vec<String>,
-    pub toplevels: Vec<String>,
+#[derive(Clone, Default)]
+pub(crate) struct PersistedCaptureSources {
+    pub(crate) outputs: Vec<String>,
+    pub(crate) toplevels: Vec<String>,
 }
 
 impl PersistedCaptureSources {
-    fn from_capture_sources(
+    pub(crate) fn from_capture_sources(
         wayland_helper: &WaylandHelper,
         sources: &CaptureSources,
     ) -> Option<Self> {
@@ -74,6 +74,11 @@ impl PersistedCaptureSources {
 
         Some(CaptureSources { outputs, toplevels })
     }
+
+    /// Whether every persisted output and window still maps to a live source.
+    pub(crate) fn resolves(&self, wayland_helper: &WaylandHelper) -> bool {
+        self.to_capture_sources(wayland_helper).is_some()
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, zvariant::Type)]
@@ -84,28 +89,36 @@ pub(crate) struct RestoreData {
     data: zvariant::OwnedValue,
 }
 
-impl From<PersistedCaptureSources> for RestoreData {
-    fn from(sources: PersistedCaptureSources) -> RestoreData {
+impl RestoreData {
+    /// Wrap an implementation-private structure as a `("COSMIC", 1, v)` blob.
+    pub(crate) fn cosmic_v1(data: zvariant::Structure) -> Self {
         RestoreData {
             vendor: "COSMIC".to_string(),
             version: 1,
-            data: zvariant::Value::from(zvariant::Structure::from((
-                sources.outputs,
-                sources.toplevels,
-            )))
-            .try_to_owned()
-            .unwrap(),
+            data: zvariant::Value::from(data).try_to_owned().unwrap(),
         }
+    }
+
+    /// Return the private payload if this is a `("COSMIC", 1, _)` blob.
+    pub(crate) fn cosmic_v1_data(&self) -> Option<&zvariant::OwnedValue> {
+        ((&*self.vendor, self.version) == ("COSMIC", 1)).then_some(&self.data)
+    }
+}
+
+impl From<PersistedCaptureSources> for RestoreData {
+    fn from(sources: PersistedCaptureSources) -> RestoreData {
+        RestoreData::cosmic_v1(zvariant::Structure::from((
+            sources.outputs,
+            sources.toplevels,
+        )))
     }
 }
 
 impl TryFrom<&RestoreData> for PersistedCaptureSources {
     type Error = ();
     fn try_from(restore_data: &RestoreData) -> Result<Self, ()> {
-        if (&*restore_data.vendor, restore_data.version) != ("COSMIC", 1) {
-            return Err(());
-        }
-        let structure = zvariant::Structure::try_from(&*restore_data.data).map_err(|_| ())?;
+        let data = restore_data.cosmic_v1_data().ok_or(())?;
+        let structure = zvariant::Structure::try_from(&**data).map_err(|_| ())?;
         let (outputs, toplevels) = structure.try_into().map_err(|_| ())?;
         Ok(PersistedCaptureSources { outputs, toplevels })
     }
@@ -150,7 +163,7 @@ pub(crate) struct SessionData {
     cursor_mode: Option<u32>,
     pub(crate) multiple: bool,
     pub(crate) source_types: BitFlags<SourceType>,
-    persisted_capture_sources: Option<PersistedCaptureSources>,
+    pub(crate) persisted_capture_sources: Option<PersistedCaptureSources>,
     pub(crate) closed: bool,
     pub(crate) remote_desktop: Option<RemoteDesktopData>,
 }
@@ -174,6 +187,7 @@ impl SessionData {
 pub(crate) struct CaptureResult {
     pub(crate) streams: Vec<(u32, StreamProps)>,
     pub(crate) restore_data: Option<RestoreData>,
+    pub(crate) sources: Option<PersistedCaptureSources>,
 }
 
 pub(crate) enum CaptureOutcome {
@@ -339,7 +353,8 @@ pub(crate) async fn capture_from_sources(
 
     CaptureOutcome::Success(CaptureResult {
         streams,
-        restore_data: persisted_capture_sources.map(|x| x.into()),
+        restore_data: persisted_capture_sources.clone().map(|x| x.into()),
+        sources: persisted_capture_sources,
     })
 }
 

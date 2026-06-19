@@ -1,4 +1,6 @@
-use crate::screencast::{self, CaptureOutcome, SessionData, StreamProps};
+use crate::screencast::{
+    self, CaptureOutcome, PersistedCaptureSources, RestoreData, SessionData, StreamProps,
+};
 use crate::wayland::WaylandHelper;
 use crate::{
     PortalResponse, Request, Session, remote_desktop_dialog, remote_desktop_ei, subscription,
@@ -26,6 +28,7 @@ pub(crate) struct RemoteDesktopData {
     pub(crate) persist_mode: u32,
     pub(crate) granted_persist_mode: u32,
     pub(crate) screen_cast_enabled: bool,
+    restore: Option<PersistedRemoteDesktop>,
     pub(crate) ei_sender: Option<EiSender>,
 }
 
@@ -37,8 +40,45 @@ impl Default for RemoteDesktopData {
             persist_mode: PERSIST_NONE,
             granted_persist_mode: PERSIST_NONE,
             screen_cast_enabled: false,
+            restore: None,
             ei_sender: None,
         }
+    }
+}
+
+/// Private payload of a RemoteDesktop `("COSMIC", 1, _)` restore blob.
+struct PersistedRemoteDesktop {
+    device_types: u32,
+    clipboard_enabled: bool,
+    screen_cast_enabled: bool,
+    sources: PersistedCaptureSources,
+}
+
+impl From<PersistedRemoteDesktop> for RestoreData {
+    fn from(p: PersistedRemoteDesktop) -> RestoreData {
+        RestoreData::cosmic_v1(zvariant::Structure::from((
+            p.device_types,
+            p.clipboard_enabled,
+            p.screen_cast_enabled,
+            p.sources.outputs,
+            p.sources.toplevels,
+        )))
+    }
+}
+
+impl TryFrom<&RestoreData> for PersistedRemoteDesktop {
+    type Error = ();
+    fn try_from(restore_data: &RestoreData) -> Result<Self, ()> {
+        let data = restore_data.cosmic_v1_data().ok_or(())?;
+        let structure = zvariant::Structure::try_from(&**data).map_err(|_| ())?;
+        let (device_types, clipboard_enabled, screen_cast_enabled, outputs, toplevels) =
+            structure.try_into().map_err(|_| ())?;
+        Ok(PersistedRemoteDesktop {
+            device_types,
+            clipboard_enabled,
+            screen_cast_enabled,
+            sources: PersistedCaptureSources { outputs, toplevels },
+        })
     }
 }
 
@@ -53,7 +93,7 @@ struct CreateSessionResult {
 struct SelectDevicesOptions {
     // Default: all
     types: Option<u32>,
-    restore_data: Option<(String, u32, zvariant::OwnedValue)>,
+    restore_data: Option<RestoreData>,
     // Default: 0
     persist_mode: Option<u32>,
 }
@@ -64,6 +104,8 @@ struct StartResult {
     devices: u32,
     clipboard_enabled: bool,
     streams: Vec<(u32, StreamProps)>,
+    persist_mode: u32,
+    restore_data: Option<RestoreData>,
 }
 
 #[zbus::proxy(
@@ -180,7 +222,10 @@ impl RemoteDesktop {
         };
         remote_desktop.device_types = options.types.unwrap_or(ALL_DEVICE_TYPES) & ALL_DEVICE_TYPES;
         remote_desktop.persist_mode = options.persist_mode.unwrap_or(PERSIST_NONE);
-        // TODO: restore_data
+        remote_desktop.restore = options
+            .restore_data
+            .as_ref()
+            .and_then(|restore_data| PersistedRemoteDesktop::try_from(restore_data).ok());
         PortalResponse::Success(HashMap::new())
     }
 
@@ -200,6 +245,14 @@ impl RemoteDesktop {
                 crate::session_interface::<SessionData>(connection, &session_handle).await
             else {
                 return PortalResponse::Other;
+            };
+
+            let restore_consent = {
+                let mut session_data = interface.get_mut().await;
+                let Some(remote_desktop) = session_data.remote_desktop.as_mut() else {
+                    return PortalResponse::Other;
+                };
+                remote_desktop.restore.take()
             };
 
             let (
@@ -229,51 +282,106 @@ impl RemoteDesktop {
                 return PortalResponse::Other;
             }
 
-            let resp = remote_desktop_dialog::show_remote_desktop_prompt(
-                &self.tx,
-                &session_handle,
-                app_id,
-                device_types,
-                persist_mode,
-                screen_cast_enabled,
-                multiple,
-                source_types,
-                &self.wayland_helper,
-            )
-            .await;
-            let Some(response) = resp else {
-                return PortalResponse::Cancelled;
+            // Restore silently only if the prior consent still matches this
+            // request: the same device set, the same screen-sharing intent, and
+            // the saved monitors/windows still resolve. Otherwise re-prompt.
+            let restored = match &restore_consent {
+                Some(consent) => {
+                    consent.device_types & ALL_DEVICE_TYPES == device_types
+                        && consent.screen_cast_enabled == screen_cast_enabled
+                        && (!screen_cast_enabled || consent.sources.resolves(&self.wayland_helper))
+                }
+                None => false,
+            };
+
+            // Replay the consented sources so `capture` skips its own picker too.
+            if restored
+                && screen_cast_enabled
+                && let Some(consent) = &restore_consent
+            {
+                interface.get_mut().await.persisted_capture_sources = Some(consent.sources.clone());
+            }
+
+            let response = if restored {
+                None
+            } else {
+                match remote_desktop_dialog::show_remote_desktop_prompt(
+                    &self.tx,
+                    &session_handle,
+                    app_id.clone(),
+                    device_types,
+                    persist_mode,
+                    screen_cast_enabled,
+                    multiple,
+                    source_types,
+                    &self.wayland_helper,
+                )
+                .await
+                {
+                    Some(response) => Some(response),
+                    None => return PortalResponse::Cancelled,
+                }
             };
 
             if interface.get().await.closed {
                 return PortalResponse::Cancelled;
             }
+
+            let granted_persist_mode = response.as_ref().map_or(persist_mode, |r| r.persist_mode);
             if let Some(remote_desktop) = interface.get_mut().await.remote_desktop.as_mut() {
-                remote_desktop.granted_persist_mode = response.persist_mode;
+                remote_desktop.granted_persist_mode = granted_persist_mode;
             }
 
             // Reuse the ScreenCast.Start capture path; streams are returned here.
-            let streams = if screen_cast_enabled {
-                match screencast::capture_from_sources(
-                    connection,
-                    &self.wayland_helper,
-                    &session_handle,
-                    response.capture_sources,
-                )
-                .await
-                {
-                    CaptureOutcome::Success(result) => result.streams,
+            let (streams, sources) = if screen_cast_enabled {
+                let outcome = match response {
+                    Some(response) => {
+                        screencast::capture_from_sources(
+                            connection,
+                            &self.wayland_helper,
+                            &session_handle,
+                            response.capture_sources,
+                        )
+                        .await
+                    }
+                    None => {
+                        screencast::capture(
+                            connection,
+                            &self.wayland_helper,
+                            &self.tx,
+                            &session_handle,
+                            app_id,
+                        )
+                        .await
+                    }
+                };
+                match outcome {
+                    CaptureOutcome::Success(result) => {
+                        (result.streams, result.sources.unwrap_or_default())
+                    }
                     CaptureOutcome::Cancelled => return PortalResponse::Cancelled,
                     CaptureOutcome::Other => return PortalResponse::Other,
                 }
             } else {
-                Vec::new()
+                (Vec::new(), PersistedCaptureSources::default())
             };
+
+            let restore_data = (granted_persist_mode != PERSIST_NONE).then(|| {
+                PersistedRemoteDesktop {
+                    device_types,
+                    clipboard_enabled,
+                    screen_cast_enabled,
+                    sources,
+                }
+                .into()
+            });
 
             PortalResponse::Success(StartResult {
                 devices: device_types,
                 clipboard_enabled,
                 streams,
+                persist_mode: granted_persist_mode,
+                restore_data,
             })
         })
         .await
