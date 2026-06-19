@@ -178,6 +178,7 @@ impl RemoteDesktop {
     }
 }
 
+#[allow(unused_variables)]
 #[zbus::interface(name = "org.freedesktop.impl.portal.RemoteDesktop")]
 impl RemoteDesktop {
     async fn create_session(
@@ -387,7 +388,8 @@ impl RemoteDesktop {
         .await
     }
 
-    async fn connect_to_EIS(
+    #[zbus(name = "ConnectToEIS")]
+    async fn connect_to_eis(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
         session_handle: zvariant::ObjectPath<'_>,
