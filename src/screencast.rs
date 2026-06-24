@@ -149,6 +149,14 @@ pub struct StreamProps {
     mapping_id: Option<String>,
 }
 
+impl StreamProps {
+    /// The stream's global logical offset (the captured output's position in the
+    /// compositor layout), used to map absolute input to global coordinates.
+    pub fn position(&self) -> Option<(i32, i32)> {
+        self.position
+    }
+}
+
 #[derive(zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
 struct StartResult {
@@ -268,8 +276,20 @@ pub(crate) async fn capture_from_sources(
     let mut res_futures = FuturesOrdered::new();
     for output in &capture_sources.outputs {
         let info = wayland_helper.output_info(output);
+        let mapping_id = info.as_ref().and_then(|i| i.name.clone());
         let (position, size) = if let Some(info) = info {
-            (info.logical_position, info.logical_size.unwrap_or((0, 0)))
+            // Advertise the *physical* (current-mode) size, matching the actual video
+            // buffer, so the consumer maps absolute pointer input 1:1 over the video.
+            // The portal converts these physical coordinates back to the compositor's
+            // logical space on input
+            let physical = info
+                .modes
+                .iter()
+                .find(|m| m.current)
+                .map(|m| m.dimensions)
+                .or(info.logical_size)
+                .unwrap_or((0, 0));
+            (info.logical_position, physical)
         } else {
             (Some((0, 0)), (0, 0))
         };
@@ -281,7 +301,7 @@ pub(crate) async fn capture_from_sources(
                 position,
                 size,
                 source_type: SOURCE_TYPE_MONITOR,
-                mapping_id: None,
+                mapping_id,
             },
         ));
     }
