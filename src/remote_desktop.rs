@@ -30,6 +30,7 @@ pub(crate) struct RemoteDesktopData {
     pub(crate) screen_cast_enabled: bool,
     restore: Option<PersistedRemoteDesktop>,
     pub(crate) ei_sender: Option<EiSender>,
+    pub(crate) stream_offsets: Vec<(u32, (i32, i32))>,
 }
 
 impl Default for RemoteDesktopData {
@@ -42,6 +43,7 @@ impl Default for RemoteDesktopData {
             screen_cast_enabled: false,
             restore: None,
             ei_sender: None,
+            stream_offsets: Vec::new(),
         }
     }
 }
@@ -164,6 +166,32 @@ impl RemoteDesktop {
                 None
             }
         }
+    }
+
+    /// The global logical offset of a stream (the captured output's position).
+    /// Defaults to (0, 0) if the stream is unknown.
+    async fn stream_offset(
+        &self,
+        connection: &zbus::Connection,
+        session_handle: &zvariant::ObjectPath<'_>,
+        stream: u32,
+    ) -> (i32, i32) {
+        let Some(interface) =
+            crate::session_interface::<SessionData>(connection, session_handle).await
+        else {
+            return (0, 0);
+        };
+        let session_data = interface.get().await;
+        session_data
+            .remote_desktop
+            .as_ref()
+            .and_then(|rd| {
+                rd.stream_offsets
+                    .iter()
+                    .find(|(node, _)| *node == stream)
+                    .map(|(_, off)| *off)
+            })
+            .unwrap_or((0, 0))
     }
 
     async fn notify(
@@ -377,6 +405,16 @@ impl RemoteDesktop {
                 .into()
             });
 
+            // Record each stream's global logical offset so absolute pointer input
+            // (sent in a stream's local space) can be mapped to global coordinates.
+            let stream_offsets: Vec<(u32, (i32, i32))> = streams
+                .iter()
+                .map(|(node, props)| (*node, props.position().unwrap_or((0, 0))))
+                .collect();
+            if let Some(remote_desktop) = interface.get_mut().await.remote_desktop.as_mut() {
+                remote_desktop.stream_offsets = stream_offsets;
+            }
+
             PortalResponse::Success(StartResult {
                 devices: device_types,
                 clipboard_enabled,
@@ -442,14 +480,19 @@ impl RemoteDesktop {
         #[zbus(connection)] connection: &zbus::Connection,
         session_handle: zvariant::ObjectPath<'_>,
         _options: HashMap<String, zvariant::OwnedValue>,
-        _stream: u32,
+        stream: u32,
         x: f64,
         y: f64,
     ) {
+        // The coordinates are in the chosen stream's (output's) local space. Resolve
+        // that output's global offset so the EI sender can produce a global position.
+        let offset = self
+            .stream_offset(connection, &session_handle, stream)
+            .await;
         self.notify(
             connection,
             &session_handle,
-            Command::PointerMotionAbsolute { x, y },
+            Command::PointerMotionAbsolute { x, y, offset },
         )
         .await;
     }

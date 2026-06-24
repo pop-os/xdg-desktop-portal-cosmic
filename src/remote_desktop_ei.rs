@@ -16,7 +16,7 @@ use crate::remote_desktop::{DEVICE_KEYBOARD, DEVICE_POINTER, DEVICE_TOUCHSCREEN}
 #[derive(Debug)]
 pub enum Command {
     PointerMotion { dx: f64, dy: f64 },
-    PointerMotionAbsolute { x: f64, y: f64 },
+    PointerMotionAbsolute { x: f64, y: f64, offset: (i32, i32) },
     PointerButton { button: i32, state: u32 },
     PointerAxis { dx: f64, dy: f64 },
     PointerAxisDiscrete { axis: u32, steps: i32 },
@@ -115,6 +115,7 @@ struct State {
     connection: reis::event::Connection,
     caps: BitFlags<DeviceCapability>,
     devices: HashMap<Device, DeviceState>,
+    abs_regions: Vec<(i32, i32, f64)>,
 }
 
 async fn run(
@@ -127,6 +128,7 @@ async fn run(
         connection,
         caps,
         devices: HashMap::new(),
+        abs_regions: Vec::new(),
     };
     loop {
         tokio::select! {
@@ -155,6 +157,16 @@ impl State {
                 let _ = self.connection.flush();
             }
             EiEvent::DeviceAdded(evt) => {
+                let mut regions = Vec::new();
+                for r in evt.device.regions() {
+                    regions.push((r.x as i32, r.y as i32, r.scale as f64));
+                }
+                if !regions.is_empty() {
+                    // The compositor recreates the absolute-pointer device with a fresh
+                    // region per output whenever an output's scale or geometry changes, so
+                    // replace the stale set rather than accumulating across re-adds.
+                    self.abs_regions = regions;
+                }
                 self.devices.insert(
                     evt.device,
                     DeviceState {
@@ -207,10 +219,22 @@ impl State {
                     p.motion_relative(dx as f32, dy as f32);
                 });
             }
-            // `stream` (which output) is ignored for now; treat as a single space.
-            Command::PointerMotionAbsolute { x, y } => {
+            Command::PointerMotionAbsolute { x, y, offset } => {
+                // `x`/`y` arrive in the stream's *physical* pixel space (we advertise the
+                // physical size to the consumer so it maps 1:1 over the video). Convert to
+                // the compositor's logical space by dividing by the output scale, taken from
+                // the EI absolute-pointer region whose offset matches this stream, then add
+                // the stream's global logical offset.
+                let scale = self
+                    .abs_regions
+                    .iter()
+                    .find(|(rx, ry, _)| *rx == offset.0 && *ry == offset.1)
+                    .map(|(_, _, s)| *s)
+                    .unwrap_or(1.0);
+                let ex = (offset.0 as f64 + x / scale) as f32;
+                let ey = (offset.1 as f64 + y / scale) as f32;
                 self.emit::<ei::PointerAbsolute, _>(serial, time, |p| {
-                    p.motion_absolute(x as f32, y as f32);
+                    p.motion_absolute(ex, ey);
                 });
             }
             Command::PointerButton { button, state } => {
