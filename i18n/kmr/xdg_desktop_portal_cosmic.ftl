@@ -1,0 +1,14 @@
+cancel = Têk bibe
+output = Deran
+allow = Bihêle
+capture = Bigire
+share = Parve bike
+save-to = Tomar bike bo
+    .clipboard = { save-to } Jêgirtdank
+    .pictures = { save-to } Wêne
+    .documents = { save-to } Pelbend
+choose-folder = Peldankê hilbijêre
+share-screen = Dîmendera xwe parve bike
+    .description = Pergal dixwaze naveroka dîmendera te bi "{ $app_name }" re parve bike. Dîmender an çarçoveyekê ji bo parvekirinê hilbijêre.
+unknown-application = Sepana nenas
+window = Çarçove

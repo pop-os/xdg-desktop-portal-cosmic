@@ -1,45 +1,33 @@
-use cosmic_client_toolkit::{
-    screencopy::{
-        CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
-        ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
-        ScreencopySessionDataExt, ScreencopyState,
-    },
-    sctk::{
-        self,
-        dmabuf::{DmabufFeedback, DmabufFormat, DmabufHandler, DmabufState},
-        output::{OutputHandler, OutputInfo, OutputState},
-        registry::{ProvidesRegistryState, RegistryState},
-        shm::{Shm, ShmHandler},
-    },
-    toplevel_info::{ToplevelInfo, ToplevelInfoState},
-    workspace::WorkspaceState,
+use cosmic_client_toolkit::screencopy::{
+    CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
+    ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
+    ScreencopySessionDataExt, ScreencopyState,
 };
-use futures::{
-    channel::oneshot,
-    stream::{FuturesOrdered, Stream, StreamExt},
+use cosmic_client_toolkit::sctk::dmabuf::{
+    DmabufFeedback, DmabufFormat, DmabufHandler, DmabufState,
 };
-use std::{
-    collections::HashMap,
-    os::fd::{AsFd, OwnedFd},
-    sync::{Arc, Condvar, Mutex, Weak},
-    thread,
+use cosmic_client_toolkit::sctk::output::{OutputHandler, OutputInfo, OutputState};
+use cosmic_client_toolkit::sctk::registry::{ProvidesRegistryState, RegistryState};
+use cosmic_client_toolkit::sctk::shm::{Shm, ShmHandler};
+use cosmic_client_toolkit::sctk::{self};
+use cosmic_client_toolkit::toplevel_info::{ToplevelInfo, ToplevelInfoState};
+use cosmic_client_toolkit::workspace::WorkspaceState;
+use futures::channel::oneshot;
+use futures::stream::{FuturesOrdered, Stream, StreamExt};
+use std::collections::HashMap;
+use std::os::fd::{AsFd, OwnedFd};
+use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::thread;
+use wayland_client::globals::registry_queue_init;
+use wayland_client::protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool};
+use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1;
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{
+    self, ZwpLinuxBufferParamsV1,
 };
-use wayland_client::{
-    Connection, Dispatch, QueueHandle, WEnum,
-    globals::registry_queue_init,
-    protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
-};
-use wayland_protocols::{
-    ext::{
-        foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-        workspace::v1::client::ext_workspace_handle_v1,
-    },
-    wp::linux_dmabuf::zv1::client::{
-        zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
-        zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
-        zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
-    },
-};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1;
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 
 pub use cosmic_client_toolkit::screencopy::{CaptureSource, Rect};
 
@@ -62,6 +50,7 @@ impl DmabufHelper {
 
     // TODO: consider scanout flag?
     // Consider tranches in some way?
+    #[allow(dead_code)]
     fn feedback_formats(&self) -> impl Iterator<Item = &DmabufFormat> {
         self.feedback
             .tranches()
@@ -70,6 +59,7 @@ impl DmabufHelper {
             .filter_map(|x| self.feedback.format_table().get(*x as usize))
     }
 
+    #[allow(dead_code)]
     pub fn modifiers_for_format(&self, format: u32) -> impl Iterator<Item = u64> + '_ {
         self.feedback_formats()
             .filter(move |x| x.format == format)
@@ -225,7 +215,16 @@ impl Session {
         self.0.wayland_helper.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
-        receiver.await.unwrap()
+        // Assume stopped if frame is dropped without `ready` or `failed`
+        // - This can happen if the session object has already been destroyed
+        //   when the frame is created.
+        receiver
+            .await
+            .unwrap_or(Err(WEnum::Value(FailureReason::Stopped)))
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.state.lock().unwrap().stopped
     }
 }
 

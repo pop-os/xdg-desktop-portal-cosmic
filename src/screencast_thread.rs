@@ -6,27 +6,24 @@
 
 use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Rect};
 use futures::executor::block_on;
-use pipewire::{
-    spa::{
-        self,
-        pod::{self, Pod, deserialize::PodDeserializer, serialize::PodSerializer},
-        utils::Id,
-    },
-    stream::{Stream, StreamState},
-    sys::pw_buffer,
-};
-use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
+use pipewire::spa::pod::deserialize::PodDeserializer;
+use pipewire::spa::pod::serialize::PodSerializer;
+use pipewire::spa::pod::{self, Pod};
+use pipewire::spa::utils::Id;
+use pipewire::spa::{self};
+use pipewire::stream::{Stream, StreamState};
+use pipewire::sys::pw_buffer;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::os::fd::IntoRawFd;
+use std::{io, iter, slice};
 use tokio::sync::oneshot;
-use wayland_client::{
-    WEnum,
-    protocol::{wl_buffer, wl_output, wl_shm},
-};
+use wayland_client::WEnum;
+use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
 
-use crate::{
-    buffer,
-    screencast::StreamProps,
-    wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
-};
+use crate::buffer;
+use crate::screencast::StreamProps;
+use crate::wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper};
 
 static FORMAT_MAP: &[(gbm::Format, Id)] = &[
     (gbm::Format::Abgr8888, Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
@@ -72,8 +69,14 @@ impl ScreencastThread {
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
+        let thread_stop_tx_clone = thread_stop_tx.clone();
         std::thread::spawn(move || {
-            match start_stream(wayland_helper, capture_source, overlay_cursor) {
+            match start_stream(
+                wayland_helper,
+                capture_source,
+                overlay_cursor,
+                thread_stop_tx_clone,
+            ) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
@@ -115,6 +118,7 @@ struct StreamData {
     formats: Formats,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
+    thread_stop_tx: pipewire::channel::Sender<()>,
 }
 
 impl StreamData {
@@ -427,6 +431,11 @@ impl StreamData {
     }
 
     fn process(&mut self, stream: &Stream) {
+        if self.session.is_stopped() {
+            let _ = self.thread_stop_tx.send(());
+            // TODO: Causes segfault
+            // let _ = stream.disconnect();
+        }
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
@@ -483,6 +492,7 @@ fn start_stream(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
     overlay_cursor: bool,
+    thread_stop_tx: pipewire::channel::Sender<()>,
 ) -> anyhow::Result<(
     pipewire::main_loop::MainLoopRc,
     pipewire::stream::StreamRc,
@@ -538,6 +548,7 @@ fn start_stream(
         modifier: None,
         node_id_tx: Some(node_id_tx),
         buffer_damage: HashMap::new(),
+        thread_stop_tx,
     };
 
     let listener = stream

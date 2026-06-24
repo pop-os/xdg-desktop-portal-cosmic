@@ -1,0 +1,81 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+      - name: Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+          rustflags: ""
+      - name: Format
+        run: cargo fmt --all -- --check
+
+  clippy:
+    needs:
+      - format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+      - name: System dependencies
+        run: sudo apt-get update; sudo apt-get install -y libclang-dev libglib2.0-dev libegl-dev libgbm-dev libpipewire-0.3-dev libwayland-dev libxkbcommon-dev pkg-config
+      - name: Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+          rustflags: ""
+      - name: Clippy
+        run: cargo clippy --all-features -- -D warnings
+
+  check-features:
+    needs:
+      - format
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - --no-default-features
+          - --features wgpu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+      - name: System dependencies
+        run: sudo apt-get update; sudo apt-get install -y libclang-dev libglib2.0-dev libegl-dev libgbm-dev libpipewire-0.3-dev libwayland-dev libxkbcommon-dev pkg-config
+      - name: Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+      - name: Check features
+        run: cargo check ${{ matrix.features }}
+
+  test:
+    needs:
+      - format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+      - name: System dependencies
+        run: sudo apt-get update; sudo apt-get install -y libclang-dev libglib2.0-dev libegl-dev libgbm-dev libpipewire-0.3-dev libwayland-dev libxkbcommon-dev libgstreamer1.0-dev pkg-config
+      - name: Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+      - name: Test features
+        run: cargo test --all-features
+        env:
+          RUST_BACKTRACE: full

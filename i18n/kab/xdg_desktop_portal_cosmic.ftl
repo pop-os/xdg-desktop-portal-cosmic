@@ -1,0 +1,14 @@
+cancel = Sefsex
+output = Tasufeɣt
+share = Bḍu
+window = Asfaylu
+choose-folder = Fren akaram
+unknown-application = Asnas arussin
+allow = Sireg
+capture = Tuṭṭfa
+save-to = sekles ɣer
+    .clipboard = { save-to } tecfawit
+    .pictures = { save-to } tewlafin
+    .documents = { save-to } Isemliyen
+share-screen = Bḍu agdil-ik·im
+    .description = Anagraw yebɣa ad yebḍu agbur n ugdil-ik·im d "{ $app_name }". Fren agdil neɣ asfaylu ara tebḍuḍ.

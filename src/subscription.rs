@@ -1,16 +1,21 @@
 // contains the subscription which sends portal events and response channels to iced.
 
 use std::any::TypeId;
+use std::hash::Hash;
 
-use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
+use cosmic::cosmic_theme::palette::Srgba;
+use cosmic::iced::Subscription;
 use futures::{SinkExt, StreamExt, future};
 use tokio::sync::mpsc::Receiver;
 use zbus::{Connection, fdo, zvariant};
 
+use crate::access::Access;
+use crate::file_chooser::FileChooser;
+use crate::screencast::ScreenCast;
+use crate::screenshot::Screenshot;
 use crate::{
     ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
-    DBUS_NAME, DBUS_PATH, Settings, access::Access, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland,
+    DBUS_NAME, DBUS_PATH, Settings, config, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -36,12 +41,19 @@ pub enum State {
 pub(crate) fn portal_subscription(
     helper: wayland::WaylandHelper,
 ) -> cosmic::iced::Subscription<Event> {
-    struct PortalSubscription;
     struct ConfigSubscription;
+    struct Wrapper {
+        helper: wayland::WaylandHelper,
+    }
+    impl Hash for Wrapper {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            std::any::TypeId::of::<wayland::WaylandHelper>().hash(state);
+        }
+    }
     Subscription::batch([
-        Subscription::run_with_id(
-            TypeId::of::<PortalSubscription>(),
-            cosmic::iced_futures::stream::channel(10, |mut output| async move {
+        Subscription::run_with(Wrapper { helper }, |Wrapper { helper }| {
+            let helper = helper.clone();
+            cosmic::iced::stream::channel(10, |mut output| async move {
                 let mut state = State::Init;
                 loop {
                     if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
@@ -49,8 +61,8 @@ pub(crate) fn portal_subscription(
                         future::pending::<()>().await;
                     }
                 }
-            }),
-        ),
+            })
+        }),
         cosmic_config::config_subscription(
             TypeId::of::<ConfigSubscription>(),
             config::APP_ID.into(),

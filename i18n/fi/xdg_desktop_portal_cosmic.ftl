@@ -8,3 +8,7 @@ share-screen = Jaa näyttö
 unknown-application = Tuntematon sovellus
 output = Ulostulo
 window = Ikkuna
+save-to = Tallenna
+    .clipboard = { save-to } leikepöydälle
+    .pictures = { save-to } Kuvat-kansioon
+    .documents = { save-to } Asiakirjat-kansioon

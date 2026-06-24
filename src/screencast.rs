@@ -1,16 +1,17 @@
 #![allow(dead_code, unused_variables)]
 
-use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
+use ashpd::desktop::screencast::SourceType;
+use ashpd::enumflags2::BitFlags;
 use futures::stream::{FuturesOrdered, StreamExt};
-use std::{collections::HashMap, mem};
+use std::collections::HashMap;
+use std::mem;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
 use crate::screencast_dialog::{self, CaptureSources};
 use crate::screencast_thread::ScreencastThread;
-use crate::subscription;
 use crate::wayland::{CaptureSource, WaylandHelper};
-use crate::{PortalResponse, Request};
+use crate::{PortalResponse, Request, subscription};
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
 const CURSOR_MODE_EMBEDDED: u32 = 2;
@@ -248,7 +249,7 @@ impl ScreenCast {
 
             let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
                 let session_data = interface.get_mut().await;
-                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
+                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_EMBEDDED);
                 let multiple = session_data.multiple;
                 let source_types = session_data.source_types;
                 let persisted_capture_sources = session_data.persisted_capture_sources.clone();
@@ -331,7 +332,7 @@ impl ScreenCast {
                     overlay_cursor,
                     StreamProps {
                         position: None,
-                        size: size,
+                        size,
                         source_type: SOURCE_TYPE_WINDOW,
                         mapping_id: None,
                     },

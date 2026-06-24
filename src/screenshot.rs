@@ -2,35 +2,37 @@
 
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
-use cosmic::iced::keyboard::{Key, key::Named};
-use cosmic::iced::{Limits, window};
-use cosmic::iced_core::Length;
-use cosmic::iced_runtime::clipboard;
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+use cosmic::iced::keyboard::Key;
+use cosmic::iced::keyboard::key::Named;
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+    destroy_layer_surface, get_layer_surface,
+};
+use cosmic::iced::runtime::clipboard;
+use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
-use cosmic::widget::horizontal_space;
+use cosmic::iced::{Length, Limits, window};
+use cosmic::widget::space;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 use futures::stream::{FuturesUnordered, StreamExt};
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::io;
 use std::num::NonZeroU32;
-use std::{
-    collections::HashMap,
-    io,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
-use crate::config::{self, screenshot::ImageSaveLocation};
+use crate::config::screenshot::ImageSaveLocation;
+use crate::config::{self};
 use crate::wayland::{CaptureSource, ShmImage, WaylandHelper};
-use crate::widget::{keyboard_wrapper::KeyboardWrapper, rectangle_selection::DragState};
+use crate::widget::keyboard_wrapper::KeyboardWrapper;
+use crate::widget::rectangle_selection::DragState;
 use crate::{PortalResponse, fl, subscription};
 
 #[derive(Clone, Debug)]
@@ -235,16 +237,31 @@ impl Screenshot {
     pub fn get_img_path(location: ImageSaveLocation) -> Option<PathBuf> {
         let mut path = match location {
             ImageSaveLocation::Pictures => {
-                dirs::picture_dir().or_else(|| dirs::home_dir().map(|h| h.join("Pictures")))
+                // First check for XDG_SCREENSHOTS_DIR environment variable
+                std::env::var_os("XDG_SCREENSHOTS_DIR")
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute())
+                    .or_else(|| {
+                        // Fall back to XDG_PICTURES_DIR/Screenshots or ~/Pictures/Screenshots
+                        dirs::picture_dir()
+                            .or_else(|| dirs::home_dir().map(|h| h.join("Pictures")))
+                            .map(|p| p.join("Screenshots"))
+                    })
             }
             ImageSaveLocation::Documents => {
                 dirs::document_dir().or_else(|| dirs::home_dir().map(|h| h.join("Documents")))
             }
             ImageSaveLocation::Clipboard => None,
-            // ImageSaveLocation::Custom(path) => Some(path),
         }?;
-        let name = chrono::Local::now()
-            .format("Screenshot_%Y-%m-%d_%H-%M-%S.png")
+
+        // Ensure the directory exists
+        if let Err(err) = std::fs::create_dir_all(&path) {
+            log::error!("Failed to create screenshot directory {:?}: {}", path, err);
+            return None;
+        }
+
+        let name = jiff::Zoned::now()
+            .strftime("Screenshot_%Y-%m-%d_%H-%M-%S.png")
             .to_string();
         path.push(name);
 
@@ -570,14 +587,14 @@ impl Screenshot {
 
 pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_, Msg> {
     let Some((i, output)) = portal.outputs.iter().enumerate().find(|(i, o)| o.id == id) else {
-        return horizontal_space().width(Length::Fixed(1.0)).into();
+        return space::horizontal().width(Length::Fixed(1.0)).into();
     };
     let Some(args) = portal.screenshot_args.as_ref() else {
-        return horizontal_space().width(Length::Fixed(1.0)).into();
+        return space::horizontal().width(Length::Fixed(1.0)).into();
     };
 
     let Some(img) = args.output_images.get(&output.name) else {
-        return horizontal_space().width(Length::Fixed(1.0)).into();
+        return space::horizontal().width(Length::Fixed(1.0)).into();
     };
     let theme = portal.core.system_theme().cosmic();
     KeyboardWrapper::new(
@@ -729,9 +746,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 }
             }
 
-            let response = if success && image_path.is_some() {
+            let response = if success && let Some(image_path) = image_path {
                 PortalResponse::Success(ScreenshotResult {
-                    uri: format!("file:///{}", image_path.unwrap().display()),
+                    uri: format!("file:///{}", image_path.display()),
                 })
             } else if success && image_path.is_none() {
                 PortalResponse::Success(ScreenshotResult {
@@ -775,7 +792,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         Msg::Choice(c) => {
             let choice = (&c).into();
             // Only save config when drag is finished to avoid disk writes on every mouse motion
-            let should_save_config = !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
+            let should_save_config =
+                !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
             let last_rect = if let Choice::Rectangle(r, _) = &c {
                 portal.prev_rectangle = Some(*r);
                 Some(config::screenshot::Rect {
