@@ -8,16 +8,17 @@ VENDOR ?= 1
 	dh $@
 
 override_dh_auto_clean:
-	if test "${CLEAN}" = "1"; then \
-		cargo clean; \
-	fi
-
-	if ! ischroot && test "${VENDOR}" = "1"; then \
+ifeq ($(CLEAN),1)
+	just clean
+endif
+ifeq ($(VENDOR),1)
+	if ! ischroot; then \
 		just vendor; \
 	fi
+endif
 
 override_dh_auto_build:
-	just build-vendored
+	just vendor=$(VENDOR) build
 
 override_dh_auto_install:
 	just rootdir=$(DESTDIR) install

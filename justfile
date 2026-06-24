@@ -1,89 +1,64 @@
 name := 'xdg-desktop-portal-cosmic'
-export APPID := 'org.freedesktop.impl.portal.desktop.cosmic'
+appid := 'org.freedesktop.impl.portal.desktop.cosmic'
 
 rootdir := ''
 prefix := '/usr'
 
-# Paths for the final installed system (used in service files)
-libexecdir := clean(prefix / 'libexec')
-
-# Paths for staging installation (includes rootdir)
 base-dir := absolute_path(clean(rootdir / prefix))
 
-export INSTALL_DIR := base-dir / 'share'
+# Path baked into the installed service files (without rootdir)
+libexecdir := clean(prefix / 'libexec')
 
-bin-dir := base-dir / 'libexec'
+# Installation target paths
 data-dir := base-dir / 'share'
 lib-dir := base-dir / 'lib'
 icons-dir := data-dir / 'icons' / 'hicolor'
 
 cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
-bin-src := cargo-target-dir / 'release' / name
-bin-dst := bin-dir / name
 
-# Default recipe which runs `just build-release`
+# Set debug=1 to build with the debug profile instead of release
+debug := '0'
+target := if debug == '0' { 'release' } else { 'debug' }
+profile-args := if debug == '0' { '--release' } else { '' }
+
+# Set vendor=1 to build offline from the vendored tarball
+vendor := '0'
+vendor-args := if vendor == '0' { '' } else { '--frozen' }
+
+bin-src := cargo-target-dir / target / name
+bin-dst := base-dir / 'libexec' / name
+
 [private]
-default: build-release
+default: build
 
-# Runs `cargo clean`
+# Builds the application
+build: vendor-check
+    cargo build {{ profile-args }} {{ vendor-args }} --bin {{ name }}
+
+# Removes the target directory
 clean:
-    cargo clean
+    rm -rf {{ cargo-target-dir }}
 
-# `cargo clean` and removes vendored dependencies
-clean-dist: clean
+# Removes the target directory and vendored dependencies
+distclean: clean
     rm -rf .cargo vendor vendor.tar
-
-# Compiles with debug profile
-build-debug *args:
-    cargo build {{args}}
-
-# Compiles with release profile
-build-release *args: (build-debug '--release' args)
-
-# Compiles release profile with vendored dependencies
-build-vendored *args: vendor-extract (build-release '--frozen --offline' args)
-
-# Runs a clippy check
-check *args:
-    cargo clippy --all-features {{args}} -- -W clippy::pedantic
-
-# Runs a clippy check with JSON message format
-check-json: (check '--message-format=json')
-
-# Run with debug logs
-run *args:
-    env RUST_LOG=debug RUST_BACKTRACE=full cargo run --release {{args}}
 
 # Installs files
 install:
-    install -Dm0755 {{bin-src}} {{bin-dst}}
-    sed 's|@libexecdir@|{{libexecdir}}|' data/dbus-1/{{APPID}}.service.in \
-        | install -Dm0644 /dev/stdin {{data-dir}}/dbus-1/services/{{APPID}}.service
-    sed 's|@libexecdir@|{{libexecdir}}|' data/{{APPID}}.service.in \
-        | install -Dm0644 /dev/stdin {{lib-dir}}/systemd/user/{{APPID}}.service
-    install -Dm0644 data/cosmic.portal {{data-dir}}/xdg-desktop-portal/portals/cosmic.portal
-    install -Dm0644 data/cosmic-portals.conf {{data-dir}}/xdg-desktop-portal/cosmic-portals.conf
+    install -Dm0755 {{ bin-src }} {{ bin-dst }}
+    sed 's|@libexecdir@|{{ libexecdir }}|' data/dbus-1/{{ appid }}.service.in \
+        | install -Dm0644 /dev/stdin {{ data-dir }}/dbus-1/services/{{ appid }}.service
+    sed 's|@libexecdir@|{{ libexecdir }}|' data/{{ appid }}.service.in \
+        | install -Dm0644 /dev/stdin {{ lib-dir }}/systemd/user/{{ appid }}.service
+    install -Dm0644 data/cosmic.portal {{ data-dir }}/xdg-desktop-portal/portals/cosmic.portal
+    install -Dm0644 data/cosmic-portals.conf {{ data-dir }}/xdg-desktop-portal/cosmic-portals.conf
     find 'data'/'icons' -type f -exec echo {} \; \
         | rev \
         | cut -d'/' -f-3 \
         | rev \
-        | xargs -d '\n' -I {} install -Dm0644 'data'/'icons'/{} {{icons-dir}}/{}
-    -pkill -f 'xdg-desktop-portal-cosmic'
+        | xargs -d '\n' -I {} install -Dm0644 'data'/'icons'/{} {{ icons-dir }}/{}
 
-# Uninstalls installed files
-uninstall:
-    rm -f {{bin-dst}}
-    rm -f {{data-dir}}/dbus-1/services/{{APPID}}.service
-    rm -f {{lib-dir}}/systemd/user/{{APPID}}.service
-    rm -f {{data-dir}}/xdg-desktop-portal/portals/cosmic.portal
-    rm -f {{data-dir}}/xdg-desktop-portal/cosmic-portals.conf
-    find 'data'/'icons' -type f -exec echo {} \; \
-        | rev \
-        | cut -d'/' -f-3 \
-        | rev \
-        | xargs -d '\n' -I {} rm -f {{icons-dir}}/{}
-
-# Vendor dependencies locally
+# Vendors Cargo dependencies into a tarball
 vendor:
     rm -rf .cargo
     mkdir -p .cargo
@@ -91,18 +66,19 @@ vendor:
     echo 'directory = "vendor"' >> .cargo/config.toml
     echo >> .cargo/config.toml
     echo '[env]' >> .cargo/config.toml
-    if [ -n "$${SOURCE_DATE_EPOCH}" ]; then \
-        source_date="$$(date -d "@$${SOURCE_DATE_EPOCH}" "+%Y-%m-%d")"; \
-        echo "VERGEN_GIT_COMMIT_DATE = \"$${source_date}\"" >> .cargo/config.toml; \
+    if [ -n "${SOURCE_DATE_EPOCH}" ]; then \
+        source_date="$(date -d "@${SOURCE_DATE_EPOCH}" "+%Y-%m-%d")"; \
+        echo "VERGEN_GIT_COMMIT_DATE = \"${source_date}\"" >> .cargo/config.toml; \
     fi
-    if [ -n "$${SOURCE_GIT_HASH}" ]; then \
-        echo "VERGEN_GIT_SHA = \"$${SOURCE_GIT_HASH}\"" >> .cargo/config.toml; \
+    if [ -n "${SOURCE_GIT_HASH}" ]; then \
+        echo "VERGEN_GIT_SHA = \"${SOURCE_GIT_HASH}\"" >> .cargo/config.toml; \
     fi
     tar pcf vendor.tar .cargo vendor
     rm -rf .cargo vendor
 
-# Extracts vendored dependencies
+# Extracts the vendored dependencies when vendor=1
 [private]
-vendor-extract:
-    rm -rf vendor
-    tar pxf vendor.tar
+vendor-check:
+    if [ '{{ vendor }}' != '0' ]; then \
+        rm -rf vendor && tar xf vendor.tar; \
+    fi
