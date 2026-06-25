@@ -129,6 +129,7 @@ impl Background {
                                 handle: args_handle,
                                 id,
                                 app_id,
+                                name,
                                 tx,
                             }))
                             .await
@@ -352,6 +353,8 @@ pub struct Args {
     pub handle: zvariant::ObjectPath<'static>,
     pub id: window::Id,
     pub app_id: String,
+    /// Human-readable application name supplied by the portal frontend.
+    pub name: String,
     tx: mpsc::Sender<PortalResponse<NotifyBackgroundResult>>,
 }
 
@@ -365,15 +368,20 @@ pub enum Msg {
 }
 
 /// Permissions dialog
-pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg> {
+pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_, Msg> {
+    // Prefer the human-readable name; fall back to the app id if the frontend omitted it.
     let name = portal
         .background_prompts
         .get(&id)
-        .map(|args| args.app_id.as_str())
-        // xxx What do I do here?
+        .map(|args| {
+            if args.name.is_empty() {
+                args.app_id.as_str()
+            } else {
+                args.name.as_str()
+            }
+        })
         .unwrap_or("Invalid window id");
 
-    // TODO: Add cancel
     widget::dialog()
         .title(fl!("bg-dialog-title"))
         .body(fl!("bg-dialog-body", appname = name))
@@ -422,6 +430,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 id,
                 app_id,
                 tx,
+                ..
             }) = portal.background_prompts.remove(&id)
             else {
                 log::warn!("Window {id:?} doesn't exist for some reason");
