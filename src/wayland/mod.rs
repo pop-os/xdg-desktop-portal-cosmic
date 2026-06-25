@@ -80,7 +80,7 @@ struct WaylandHelperInner {
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
     output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ExtForeignToplevelHandleV1>>>,
     toplevels: Mutex<Vec<ToplevelInfo>>,
-    tx: broadcast::Sender<Event>,
+    event_tx: broadcast::Sender<Event>,
     qh: QueueHandle<AppData>,
     capturer: Capturer,
     wl_shm: wl_shm::WlShm,
@@ -146,11 +146,6 @@ impl AppData {
 
         *self.wayland_helper.inner.toplevels.lock().unwrap() =
             self.toplevel_info_state.toplevels().cloned().collect();
-
-        // Signal that toplevels were updated; the actual updates are unimportant here
-        if let Err(e) = self.wayland_helper.inner.tx.send(Event::ToplevelsUpdated) {
-            log::warn!("Failed sending toplevels update message: {e}");
-        }
     }
 }
 
@@ -246,7 +241,7 @@ impl WaylandHelper {
         let screencopy_state = ScreencopyState::new(&globals, &qh);
         let shm_state = Shm::bind(&globals, &qh).unwrap();
         let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).ok();
-        let (tx, _) = broadcast::channel(SUB_BACKLOG);
+        let (event_tx, _) = broadcast::channel(SUB_BACKLOG);
         let wayland_helper = WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
                 conn,
@@ -254,7 +249,7 @@ impl WaylandHelper {
                 output_infos: Mutex::new(HashMap::new()),
                 output_toplevels: Mutex::new(HashMap::new()),
                 toplevels: Mutex::new(Vec::new()),
-                tx,
+                event_tx,
                 qh: qh.clone(),
                 capturer: screencopy_state.capturer().clone(),
                 wl_shm: shm_state.wl_shm().clone(),
@@ -496,36 +491,21 @@ impl WaylandHelper {
         )
     }
 
-    /// Subscribe to events from the compositor.
-    pub fn subscription(&self) -> impl Stream<Item = Event> + use<> {
-        let mut rx_helper = self.inner.tx.subscribe();
+    /// Subscribe to compositor events such as toplevel changes.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.inner.event_tx.subscribe()
+    }
 
-        cosmic::iced::stream::channel(
-            SUB_BACKLOG,
-            |mut output: futures::channel::mpsc::Sender<Event>| async move {
-                // Tokio's types don't implement std's Stream yet
-                loop {
-                    match rx_helper.recv().await {
-                        Ok(message) => {
-                            let _ = output.try_send(message).inspect_err(|e| {
-                                log::warn!(
-                                    "Failed sending message from Wayland helper subscription: {e}"
-                                )
-                            });
-                        }
-                        Err(e) if matches!(e, broadcast::error::RecvError::Lagged(_)) => (),
-                        _ => break,
-                    }
-                }
-            },
-        )
+    /// Notify subscribers that the set of toplevels changed (created or destroyed).
+    pub fn notify_toplevels_changed(&self) {
+        let _ = self.inner.event_tx.send(Event::ToplevelsUpdated);
     }
 }
 
-/// Events from the compositor, such as new toplevels.
-#[derive(Clone, Copy)]
+/// Events broadcast from the compositor, such as toplevel changes.
+#[derive(Clone, Copy, Debug)]
 pub enum Event {
-    /// Toplevels updated in some way (created, destroyed, focus changed)
+    /// Toplevels were created or destroyed.
     ToplevelsUpdated,
 }
 

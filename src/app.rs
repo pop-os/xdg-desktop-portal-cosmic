@@ -183,8 +183,7 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
-                | subscription::Event::HighContrast(_)
-                | subscription::Event::BackgroundToplevels => cosmic::iced::Task::none(),
+                | subscription::Event::HighContrast(_) => cosmic::iced::Task::none(),
                 subscription::Event::Init {
                     tx,
                     tx_conf,

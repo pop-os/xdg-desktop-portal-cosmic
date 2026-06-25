@@ -16,7 +16,9 @@ impl ToplevelInfoHandler for AppData {
         _qh: &QueueHandle<Self>,
         _toplevel: &ExtForeignToplevelHandleV1,
     ) {
-        self.update_output_toplevels()
+        self.update_output_toplevels();
+        // A new app may have started running; notify the Background portal.
+        self.wayland_helper.notify_toplevels_changed();
     }
 
     fn update_toplevel(
@@ -25,7 +27,9 @@ impl ToplevelInfoHandler for AppData {
         _qh: &QueueHandle<Self>,
         _toplevel: &ExtForeignToplevelHandleV1,
     ) {
-        self.update_output_toplevels()
+        // Keep cached toplevel info fresh, but don't signal: focus/title changes would
+        // otherwise spam RunningApplicationsChanged.
+        self.update_output_toplevels();
     }
 
     fn toplevel_closed(
@@ -34,7 +38,9 @@ impl ToplevelInfoHandler for AppData {
         _qh: &QueueHandle<Self>,
         _toplevel: &ExtForeignToplevelHandleV1,
     ) {
-        self.update_output_toplevels()
+        self.update_output_toplevels();
+        // An app may have stopped running; notify the Background portal.
+        self.wayland_helper.notify_toplevels_changed();
     }
 }
 

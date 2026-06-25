@@ -7,6 +7,7 @@ use anyhow::Context;
 use cosmic::cosmic_theme::palette::Srgba;
 use cosmic::iced::Subscription;
 use futures::{SinkExt, StreamExt, future};
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::Receiver;
 use zbus::{Connection, fdo, zvariant};
 
@@ -29,7 +30,6 @@ pub enum Event {
     CancelScreencast(zvariant::ObjectPath<'static>),
     Background(crate::background::Args),
     CancelBackground(cosmic::iced::window::Id),
-    BackgroundToplevels,
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -44,7 +44,11 @@ pub enum Event {
 
 pub enum State {
     Init,
-    Waiting(Connection, Receiver<Event>),
+    Waiting(
+        Connection,
+        Receiver<Event>,
+        broadcast::Receiver<wayland::Event>,
+    ),
 }
 
 pub(crate) fn portal_subscription(
@@ -59,15 +63,6 @@ pub(crate) fn portal_subscription(
             std::any::TypeId::of::<wayland::WaylandHelper>().hash(state);
         }
     }
-    struct WaylandHelperSubscription {
-        helper: wayland::WaylandHelper,
-    }
-    impl Hash for WaylandHelperSubscription {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            std::any::TypeId::of::<WaylandHelperSubscription>().hash(state);
-        }
-    }
-    let helper_sub = helper.clone();
     Subscription::batch([
         Subscription::run_with(Wrapper { helper }, |Wrapper { helper }| {
             let helper = helper.clone();
@@ -80,13 +75,6 @@ pub(crate) fn portal_subscription(
                     }
                 }
             })
-        }),
-        Subscription::run_with(
-            WaylandHelperSubscription { helper: helper_sub },
-            |WaylandHelperSubscription { helper }| helper.subscription(),
-        )
-        .map(|wl_event| match wl_event {
-            wayland::Event::ToplevelsUpdated => Event::BackgroundToplevels,
         }),
         cosmic_config::config_subscription(
             TypeId::of::<ConfigSubscription>(),
@@ -142,6 +130,7 @@ pub(crate) async fn process_changes(
 
             connection.request_name(DBUS_NAME).await?;
 
+            let wl_rx = wayland_helper.subscribe();
             _ = output
                 .send(Event::Init {
                     tx,
@@ -149,10 +138,33 @@ pub(crate) async fn process_changes(
                     handler,
                 })
                 .await;
-            *state = State::Waiting(connection, rx);
+            *state = State::Waiting(connection, rx, wl_rx);
         }
-        State::Waiting(conn, rx) => {
-            while let Some(event) = rx.recv().await {
+        State::Waiting(conn, rx, wl_rx) => {
+            loop {
+                let event = tokio::select! {
+                    event = rx.recv() => match event {
+                        Some(event) => event,
+                        None => break,
+                    },
+                    wl_event = wl_rx.recv() => {
+                        match wl_event {
+                            Ok(wayland::Event::ToplevelsUpdated) => {
+                                // Coalesce a burst of updates (e.g. the initial toplevel
+                                // enumeration) into a single signal.
+                                while !matches!(
+                                    wl_rx.try_recv(),
+                                    Err(broadcast::error::TryRecvError::Empty
+                                        | broadcast::error::TryRecvError::Closed)
+                                ) {}
+                                emit_running_applications_changed(conn).await?;
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => break,
+                        }
+                        continue;
+                    }
+                };
                 match event {
                     Event::Access(args) => {
                         if let Err(err) = output.send(Event::Access(args)).await {
@@ -188,21 +200,6 @@ pub(crate) async fn process_changes(
                         if let Err(err) = output.send(Event::CancelBackground(id)).await {
                             log::error!("Error sending background cancel: {:?}", err);
                         }
-                    }
-                    Event::BackgroundToplevels => {
-                        log::debug!(
-                            "Emitting RunningApplicationsChanged in response to toplevel updates"
-                        );
-                        let background = conn
-                            .object_server()
-                            .interface::<_, Background>(DBUS_PATH)
-                            .await
-                            .context("Connecting to Background portal D-Bus interface")?;
-                        Background::running_applications_changed(background.signal_emitter())
-                            .await
-                            .context(
-                                "Emitting RunningApplicationsChanged for the Background portal",
-                            )?;
                     }
                     Event::Accent(a) => {
                         let object_server = conn.object_server();
@@ -268,9 +265,25 @@ pub(crate) async fn process_changes(
                     Event::NameLost => {}
                 }
             }
+
+            // The loop only exits at shutdown once all senders drop. Park instead of
+            // returning so the outer subscription loop doesn't busy-loop back into Init.
+            future::pending::<()>().await;
         }
     };
     Ok(())
+}
+
+/// Emit the Background portal's `RunningApplicationsChanged` signal.
+async fn emit_running_applications_changed(conn: &Connection) -> anyhow::Result<()> {
+    let background = conn
+        .object_server()
+        .interface::<_, Background>(DBUS_PATH)
+        .await
+        .context("Connecting to Background portal D-Bus interface")?;
+    Background::running_applications_changed(background.signal_emitter())
+        .await
+        .context("Emitting RunningApplicationsChanged for the Background portal")
 }
 
 async fn name_lost_task(
