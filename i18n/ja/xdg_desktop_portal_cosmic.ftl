@@ -1,0 +1,14 @@
+cancel = キャンセル
+allow = 許可
+capture = キャプチャ
+share = 共有
+save-to = 保存先：
+    .clipboard = { save-to } クリップボードに保存
+    .pictures = { save-to } ピクチャに保存
+    .documents = { save-to } ドキュメントに保存
+choose-folder = フォルダーを選択
+share-screen = 画面を共有
+    .description = システムは画面の内容を「{ $app_name }」と共有しようとしています。共有する画面またはウィンドウを選択してください。
+unknown-application = 不明なアプリケーション
+output = 出力
+window = ウィンドウ

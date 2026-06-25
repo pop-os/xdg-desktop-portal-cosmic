@@ -1,52 +1,34 @@
-use cosmic_client_toolkit::{
-    screencopy::{
-        CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
-        ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
-        ScreencopySessionDataExt, ScreencopyState,
-    },
-    sctk::{
-        self,
-        dmabuf::{DmabufFeedback, DmabufFormat, DmabufHandler, DmabufState},
-        output::{OutputHandler, OutputInfo, OutputState},
-        registry::{ProvidesRegistryState, RegistryState},
-        shm::{Shm, ShmHandler},
-    },
-    toplevel_info::{ToplevelInfo, ToplevelInfoState},
-    workspace::WorkspaceState,
+use cosmic_client_toolkit::screencopy::{
+    CaptureFrame, CaptureOptions, CaptureSession, Capturer, FailureReason, Formats, Frame,
+    ScreencopyFrameData, ScreencopyFrameDataExt, ScreencopyHandler, ScreencopySessionData,
+    ScreencopySessionDataExt, ScreencopyState,
 };
-use futures::{
-    channel::oneshot,
-    stream::{FuturesOrdered, Stream, StreamExt},
+use cosmic_client_toolkit::sctk::dmabuf::{
+    DmabufFeedback, DmabufFormat, DmabufHandler, DmabufState,
 };
-use rustix::fd::{FromRawFd, RawFd};
-use std::{
-    collections::HashMap,
-    env, fs, io,
-    os::{
-        fd::{AsFd, OwnedFd},
-        unix::{fs::MetadataExt, net::UnixStream},
-    },
-    process,
-    sync::{Arc, Condvar, Mutex, Weak},
-    thread,
-};
+use cosmic_client_toolkit::sctk::output::{OutputHandler, OutputInfo, OutputState};
+use cosmic_client_toolkit::sctk::registry::{ProvidesRegistryState, RegistryState};
+use cosmic_client_toolkit::sctk::shm::{Shm, ShmHandler};
+use cosmic_client_toolkit::sctk::{self};
+use cosmic_client_toolkit::toplevel_info::{ToplevelInfo, ToplevelInfoState};
+use cosmic_client_toolkit::workspace::WorkspaceState;
+use futures::channel::oneshot;
+use futures::stream::{FuturesOrdered, Stream, StreamExt};
+use std::collections::HashMap;
+use std::os::fd::{AsFd, OwnedFd};
+use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::thread;
 use tokio::sync::broadcast;
-use wayland_client::{
-    globals::registry_queue_init,
-    protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool},
-    Connection, Dispatch, QueueHandle, WEnum,
+use wayland_client::globals::registry_queue_init;
+use wayland_client::protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool};
+use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1;
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{
+    self, ZwpLinuxBufferParamsV1,
 };
-use wayland_protocols::{
-    ext::{
-        foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-        workspace::v1::client::ext_workspace_handle_v1,
-    },
-    wp::linux_dmabuf::zv1::client::{
-        zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
-        zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
-        zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
-    },
-};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1;
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 
 pub use cosmic_client_toolkit::screencopy::{CaptureSource, Rect};
 
@@ -71,6 +53,7 @@ impl DmabufHelper {
 
     // TODO: consider scanout flag?
     // Consider tranches in some way?
+    #[allow(dead_code)]
     fn feedback_formats(&self) -> impl Iterator<Item = &DmabufFormat> {
         self.feedback
             .tranches()
@@ -79,6 +62,7 @@ impl DmabufHelper {
             .filter_map(|x| self.feedback.format_table().get(*x as usize))
     }
 
+    #[allow(dead_code)]
     pub fn modifiers_for_format(&self, format: u32) -> impl Iterator<Item = u64> + '_ {
         self.feedback_formats()
             .filter(move |x| x.format == format)
@@ -101,7 +85,7 @@ struct WaylandHelperInner {
     capturer: Capturer,
     wl_shm: wl_shm::WlShm,
     dmabuf: Mutex<Option<DmabufHelper>>,
-    zwp_dmabuf: ZwpLinuxDmabufV1,
+    zwp_dmabuf: Option<ZwpLinuxDmabufV1>,
 }
 
 // TODO seperate state object from what is passed to threads
@@ -133,7 +117,7 @@ impl AppData {
             .unwrap();
         *guard = toplevels
             .filter_map(|info| {
-                let Some(o) = self.workspace_state.workspace_groups().find_map(|wg| {
+                let o = self.workspace_state.workspace_groups().find_map(|wg| {
                     wg.workspaces
                         .iter()
                         .filter_map(|handle| self.workspace_state.workspace_info(handle))
@@ -146,9 +130,7 @@ impl AppData {
                                 })
                                 .then(|| info.output.iter().cloned().collect::<Vec<_>>())
                         })
-                }) else {
-                    return None;
-                };
+                })?;
 
                 Some((o, info.foreign_toplevel.clone()))
             })
@@ -242,7 +224,16 @@ impl Session {
         self.0.wayland_helper.inner.conn.flush().unwrap();
 
         // TODO: wait for server to release buffer?
-        receiver.await.unwrap()
+        // Assume stopped if frame is dropped without `ready` or `failed`
+        // - This can happen if the session object has already been destroyed
+        //   when the frame is created.
+        receiver
+            .await
+            .unwrap_or(Err(WEnum::Value(FailureReason::Stopped)))
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.state.lock().unwrap().stopped
     }
 }
 
@@ -254,7 +245,7 @@ impl WaylandHelper {
         let registry_state = RegistryState::new(&globals);
         let screencopy_state = ScreencopyState::new(&globals, &qh);
         let shm_state = Shm::bind(&globals, &qh).unwrap();
-        let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).unwrap();
+        let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).ok();
         let (tx, _) = broadcast::channel(SUB_BACKLOG);
         let wayland_helper = WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
@@ -289,8 +280,10 @@ impl WaylandHelper {
 
         event_queue.roundtrip(&mut data).unwrap();
 
-        thread::spawn(move || loop {
-            event_queue.blocking_dispatch(&mut data).unwrap();
+        thread::spawn(move || {
+            loop {
+                event_queue.blocking_dispatch(&mut data).unwrap();
+            }
         });
 
         wayland_helper
@@ -475,10 +468,10 @@ impl WaylandHelper {
     ) -> wl_buffer::WlBuffer {
         // TODO ensure dmabuf is valid format with right number of planes?
         // - params.add can raise protocol error
-        let params = self
-            .inner
-            .zwp_dmabuf
-            .create_params(&self.inner.qh, sctk::globals::GlobalData);
+        let zwp_dmabuf = self.inner.zwp_dmabuf.as_ref().unwrap_or_else(|| {
+            panic!("zwp_linux_dmabuf_v1 not available on this compositor");
+        });
+        let params = zwp_dmabuf.create_params(&self.inner.qh, sctk::globals::GlobalData);
         let modifier = u64::from(dmabuf.modifier);
         let modifier_hi = (modifier >> 32) as u32;
         let modifier_lo = (modifier & 0xffffffff) as u32;
@@ -504,25 +497,28 @@ impl WaylandHelper {
     }
 
     /// Subscribe to events from the compositor.
-    pub fn subscription(&self) -> impl Stream<Item = Event> {
+    pub fn subscription(&self) -> impl Stream<Item = Event> + use<> {
         let mut rx_helper = self.inner.tx.subscribe();
 
-        cosmic::iced::stream::channel(SUB_BACKLOG, |mut output| async move {
-            // Tokio's types don't implement std's Stream yet
-            loop {
-                match rx_helper.recv().await {
-                    Ok(message) => {
-                        let _ = output.try_send(message).inspect_err(|e| {
-                            log::warn!(
-                                "Failed sending message from Wayland helper subscription: {e}"
-                            )
-                        });
+        cosmic::iced::stream::channel(
+            SUB_BACKLOG,
+            |mut output: futures::channel::mpsc::Sender<Event>| async move {
+                // Tokio's types don't implement std's Stream yet
+                loop {
+                    match rx_helper.recv().await {
+                        Ok(message) => {
+                            let _ = output.try_send(message).inspect_err(|e| {
+                                log::warn!(
+                                    "Failed sending message from Wayland helper subscription: {e}"
+                                )
+                            });
+                        }
+                        Err(e) if matches!(e, broadcast::error::RecvError::Lagged(_)) => (),
+                        _ => break,
                     }
-                    Err(e) if matches!(e, broadcast::error::RecvError::Lagged(_)) => (),
-                    _ => break,
                 }
-            }
-        })
+            },
+        )
     }
 }
 
@@ -762,38 +758,6 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for AppData {
     }
 }
 
-fn portal_wayland_socket() -> Option<UnixStream> {
-    let fd = std::env::var("PORTAL_WAYLAND_SOCKET")
-        .ok()?
-        .parse::<RawFd>()
-        .ok()?;
-    env::remove_var("PORTAL_WAYLAND_SOCKET");
-    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-    // set the CLOEXEC flag on this FD
-    let mut flags = rustix::io::fcntl_getfd(&fd).ok()?;
-    flags.insert(rustix::io::FdFlags::CLOEXEC);
-    if let Err(err) = rustix::io::fcntl_setfd(&fd, flags) {
-        drop(fd);
-        log::error!("Failed to set CLOEXEC on portal socket: {}", err);
-        return None;
-    }
-    Some(UnixStream::from(fd))
-}
-
-// Connect to wayland and start task reading events from socket
-pub fn connect_to_wayland() -> wayland_client::Connection {
-    if let Some(portal_socket) = portal_wayland_socket() {
-        wayland_client::Connection::from_socket(portal_socket).unwrap_or_else(|err| {
-            log::error!("{}", err);
-            process::exit(1)
-        })
-    } else {
-        // Useful fallback for testing and debugging, without `COSMIC_ENABLE_WAYLAND_SECURITY`
-        log::warn!("Failed to find `PORTAL_WAYLAND_SOCKET`; trying default Wayland display");
-        wayland_client::Connection::connect_to_env().unwrap()
-    }
-}
-
 struct SessionData {
     session: Weak<SessionInner>,
     session_data: ScreencopySessionData,
@@ -821,4 +785,4 @@ sctk::delegate_shm!(AppData);
 sctk::delegate_registry!(AppData);
 sctk::delegate_output!(AppData);
 sctk::delegate_dmabuf!(AppData);
-cosmic_client_toolkit::delegate_screencopy!(AppData, session: [SessionData], frame: [FrameData]);
+cosmic_client_toolkit::delegate_screencopy!(AppData);

@@ -1,0 +1,14 @@
+cancel = Бас тарту
+output = Шығару
+allow = Рұқсат ету
+capture = Түсіру
+share = Бөлісу
+save-to = Сақтау орны
+    .clipboard = { save-to } Алмасу буфері
+    .pictures = { save-to } Суреттер
+    .documents = { save-to } Құжаттар
+choose-folder = Буманы таңдау
+share-screen = Экранды бөлісу
+    .description = Жүйе экраныңыздың мазмұнын "{ $app_name }" бағдарламасымен бөліскісі келеді. Бөлісу үшін экранды немесе терезені таңдаңыз.
+unknown-application = Белгісіз қолданба
+window = Терезе

@@ -1,0 +1,14 @@
+allow = Salli
+cancel = Peru
+capture = Kaappaa
+share = Jaa
+choose-folder = Valitse kansio
+share-screen = Jaa näyttö
+    .description = Järjestelmä haluaa jakaa näyttösi sisällön sovelluksen "{ $app_name }" kanssa. Valitse jaettava näyttö tai ikkuna.
+unknown-application = Tuntematon sovellus
+output = Ulostulo
+window = Ikkuna
+save-to = Tallenna
+    .clipboard = { save-to } leikepöydälle
+    .pictures = { save-to } Kuvat-kansioon
+    .documents = { save-to } Asiakirjat-kansioon

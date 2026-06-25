@@ -4,30 +4,58 @@
 
 // Dmabuf modifier negotiation is described in https://docs.pipewire.org/page_dma_buf.html
 
-use cosmic_client_toolkit::screencopy::{Formats, Rect};
+use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Rect};
 use futures::executor::block_on;
-use pipewire::{
-    spa::{
-        self,
-        pod::{self, deserialize::PodDeserializer, serialize::PodSerializer, Pod},
-        utils::Id,
-    },
-    stream::{StreamRef, StreamState},
-    sys::pw_buffer,
-};
-use std::{collections::HashMap, ffi::c_void, io, iter, os::fd::IntoRawFd, slice};
+use pipewire::spa::pod::deserialize::PodDeserializer;
+use pipewire::spa::pod::serialize::PodSerializer;
+use pipewire::spa::pod::{self, Pod};
+use pipewire::spa::utils::Id;
+use pipewire::spa::{self};
+use pipewire::stream::{Stream, StreamState};
+use pipewire::sys::pw_buffer;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::os::fd::IntoRawFd;
+use std::{io, iter, slice};
 use tokio::sync::oneshot;
-use wayland_client::{
-    protocol::{wl_buffer, wl_output, wl_shm},
-    WEnum,
-};
+use wayland_client::WEnum;
+use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
 
-use crate::{
-    buffer,
-    wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper},
-};
+use crate::buffer;
+use crate::screencast::StreamProps;
+use crate::wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper};
+
+static FORMAT_MAP: &[(gbm::Format, Id)] = &[
+    (gbm::Format::Abgr8888, Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
+    (gbm::Format::Argb8888, Id(spa_sys::SPA_VIDEO_FORMAT_BGRA)),
+];
+
+fn spa_format(format: gbm::Format) -> Option<Id> {
+    Some(FORMAT_MAP.iter().find(|(f, _)| *f == format)?.1)
+}
+
+fn spa_format_to_gbm(format: Id) -> Option<gbm::Format> {
+    Some(FORMAT_MAP.iter().find(|(_, f)| *f == format)?.0)
+}
+
+fn shm_format(format: gbm::Format) -> Option<wl_shm::Format> {
+    match format {
+        gbm::Format::Argb8888 => Some(wl_shm::Format::Argb8888),
+        gbm::Format::Xrgb8888 => Some(wl_shm::Format::Xrgb8888),
+        _ => wl_shm::Format::try_from(format as u32).ok(),
+    }
+}
+
+fn shm_format_to_gbm(format: wl_shm::Format) -> Option<gbm::Format> {
+    match format {
+        wl_shm::Format::Argb8888 => Some(gbm::Format::Argb8888),
+        wl_shm::Format::Xrgb8888 => Some(gbm::Format::Xrgb8888),
+        _ => gbm::Format::try_from(format as u32).ok(),
+    }
+}
 
 pub struct ScreencastThread {
+    stream_props: StreamProps,
     node_id: u32,
     thread_stop_tx: pipewire::channel::Sender<()>,
 }
@@ -37,11 +65,18 @@ impl ScreencastThread {
         wayland_helper: WaylandHelper,
         capture_source: CaptureSource,
         overlay_cursor: bool,
+        stream_props: StreamProps,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         let (thread_stop_tx, thread_stop_rx) = pipewire::channel::channel::<()>();
+        let thread_stop_tx_clone = thread_stop_tx.clone();
         std::thread::spawn(move || {
-            match start_stream(wayland_helper, capture_source, overlay_cursor) {
+            match start_stream(
+                wayland_helper,
+                capture_source,
+                overlay_cursor,
+                thread_stop_tx_clone,
+            ) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
                     tx.send(Ok(node_id_rx)).unwrap();
                     let weak_loop = loop_.downgrade();
@@ -54,10 +89,15 @@ impl ScreencastThread {
             }
         });
         Ok(Self {
+            stream_props,
             // XXX can second unwrap fail?
             node_id: rx.await.unwrap()?.await.unwrap()?,
             thread_stop_tx,
         })
+    }
+
+    pub fn stream_props(&self) -> StreamProps {
+        self.stream_props.clone()
     }
 
     pub fn node_id(&self) -> u32 {
@@ -72,24 +112,47 @@ impl ScreencastThread {
 struct StreamData {
     dmabuf_helper: Option<DmabufHelper>,
     wayland_helper: WaylandHelper,
-    modifier: gbm::Modifier,
+    format: gbm::Format,
+    modifier: Option<gbm::Modifier>,
     session: Session,
     formats: Formats,
-    width: u32,
-    height: u32,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
+    thread_stop_tx: pipewire::channel::Sender<()>,
 }
 
 impl StreamData {
-    // Get driver preferred modifier, and plane count
-    fn choose_modifier(&self, modifiers: &[gbm::Modifier]) -> Option<(gbm::Modifier, u32)> {
+    fn width(&self) -> u32 {
+        self.formats.buffer_size.0
+    }
+
+    fn height(&self) -> u32 {
+        self.formats.buffer_size.1
+    }
+
+    fn plane_count(&self, format: gbm::Format, modifier: gbm::Modifier) -> Option<u32> {
         let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
         let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
         let dev = self
             .formats
             .dmabuf_device
-            .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+            .unwrap_or(dmabuf_helper.feedback().main_device());
+        let (_, gbm) = gbm_devices.gbm_device(dev).ok()??;
+        gbm.format_modifier_plane_count(format, modifier)
+    }
+
+    // Get driver preferred modifier, and plane count
+    fn choose_modifier(
+        &self,
+        format: gbm::Format,
+        modifiers: &[gbm::Modifier],
+    ) -> Option<gbm::Modifier> {
+        let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
+        let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
+        let dev = self
+            .formats
+            .dmabuf_device
+            .unwrap_or(dmabuf_helper.feedback().main_device());
         let gbm = match gbm_devices.gbm_device(dev) {
             Ok(Some((_, gbm))) => gbm,
             Ok(None) => {
@@ -103,12 +166,12 @@ impl StreamData {
         };
         if modifiers.iter().all(|x| *x == gbm::Modifier::Invalid) {
             match gbm.create_buffer_object::<()>(
-                self.width,
-                self.height,
-                gbm::Format::Abgr8888,
+                self.width(),
+                self.height(),
+                format,
                 gbm::BufferObjectFlags::empty(),
             ) {
-                Ok(bo) => Some((gbm::Modifier::Invalid, bo.plane_count())),
+                Ok(_bo) => Some(gbm::Modifier::Invalid),
                 Err(err) => {
                     log::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
@@ -119,13 +182,13 @@ impl StreamData {
             }
         } else {
             match gbm.create_buffer_object_with_modifiers2::<()>(
-                self.width,
-                self.height,
-                gbm::Format::Abgr8888,
+                self.width(),
+                self.height(),
+                format,
                 modifiers.iter().copied(),
                 gbm::BufferObjectFlags::empty(),
             ) {
-                Ok(bo) => Some((bo.modifier(), bo.plane_count())),
+                Ok(bo) => Some(bo.modifier()),
                 Err(err) => {
                     log::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
@@ -137,7 +200,30 @@ impl StreamData {
         }
     }
 
-    fn state_changed(&mut self, stream: &StreamRef, old: StreamState, new: StreamState) {
+    // Handle changes to capture source size, etc.
+    fn update_formats(&mut self, stream: &Stream) -> bool {
+        let Some(formats) = block_on(self.session.wait_for_formats(|formats| formats.clone()))
+        else {
+            return false;
+        };
+
+        if formats == self.formats {
+            // No change to formats, so nothing to do.
+            return false;
+        }
+
+        let initial_params = format_params(self.dmabuf_helper.as_ref(), None, &formats);
+        let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
+        if let Err(err) = stream.update_params(&mut initial_params) {
+            log::error!("failed to update pipewire params: {}", err);
+        }
+
+        self.formats = formats;
+
+        true
+    }
+
+    fn state_changed(&mut self, stream: &Stream, old: StreamState, new: StreamState) {
         log::info!("state-changed '{:?}' -> '{:?}'", old, new);
         match new {
             StreamState::Paused => {
@@ -156,65 +242,108 @@ impl StreamData {
         }
     }
 
-    fn param_changed(&mut self, stream: &StreamRef, id: u32, pod: Option<&Pod>) {
+    fn param_changed(&mut self, stream: &Stream, id: u32, pod: Option<&Pod>) {
+        let Some(pod) = pod else {
+            return;
+        };
         if id != spa_sys::SPA_PARAM_Format {
             return;
         }
-        if let Some(pod) = pod {
-            let value = PodDeserializer::deserialize_from::<pod::Value>(pod.as_bytes());
-            if let Ok((_, pod::Value::Object(object))) = &value {
-                if let Some(modifier_prop) = object
-                    .properties
-                    .iter()
-                    .find(|p| p.key == spa_sys::SPA_FORMAT_VIDEO_modifier)
-                {
-                    if let pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(
-                        _,
-                        spa::utils::ChoiceEnum::Enum {
-                            default,
-                            alternatives,
-                        },
-                    ))) = &modifier_prop.value
-                    {
-                        log::info!(
-                            "modifier param-changed: (default: {}, alternatives: {:?})",
-                            default,
-                            alternatives
-                        );
+        let object = match pod.as_object() {
+            Ok(object) => object,
+            Err(err) => {
+                log::error!("format param not an object?: {}", err);
+                return;
+            }
+        };
 
-                        // Create temporary bo to get preferred modifier
-                        // Similar to xdg-desktop-portal-wlr
-                        let modifiers = iter::once(default)
-                            .chain(alternatives)
-                            .map(|x| gbm::Modifier::from(*x as u64))
-                            .collect::<Vec<_>>();
-                        if let Some((modifier, plane_count)) = self.choose_modifier(&modifiers) {
-                            self.modifier = modifier;
+        let mut pwr_format = spa::param::video::VideoInfoRaw::new();
+        if let Err(err) = pwr_format.parse(pod) {
+            log::error!("error parsing pipewire video info: {}", err);
+        }
 
-                            let params = params(
-                                self.width,
-                                self.height,
-                                plane_count,
-                                self.dmabuf_helper.as_ref(),
-                                Some(modifier),
-                                &self.formats,
-                            );
-                            let mut params: Vec<_> = params
-                                .iter()
-                                .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
-                                .collect();
-                            if let Err(err) = stream.update_params(&mut params) {
-                                log::error!("failed to update pipewire params: {}", err);
-                            }
-                        }
+        self.format = if let Some(gbm_format) = spa_format_to_gbm(Id(pwr_format.format().0)) {
+            gbm_format
+        } else {
+            log::error!("pipewire format not recognized: {:?}", pwr_format);
+            return;
+        };
+
+        if let Some(modifier_prop) = object.find_prop(Id(spa_sys::SPA_FORMAT_VIDEO_modifier)) {
+            let value =
+                PodDeserializer::deserialize_from::<pod::Value>(modifier_prop.value().as_bytes());
+            let Ok((_, pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(_, choice))))) =
+                &value
+            else {
+                log::error!("invalid modifier prop: {:?}", value);
+                return;
+            };
+
+            if modifier_prop
+                .flags()
+                .contains(pod::PodPropFlags::DONT_FIXATE)
+            {
+                let spa::utils::ChoiceEnum::Enum {
+                    default,
+                    alternatives,
+                } = choice
+                else {
+                    // TODO How does C code deal with variants of choice?
+                    log::error!("invalid modifier prop choice: {:?}", choice);
+                    return;
+                };
+
+                log::info!(
+                    "modifier param-changed: (default: {}, alternatives: {:?})",
+                    default,
+                    alternatives
+                );
+
+                // Create temporary bo to get preferred modifier
+                // Similar to xdg-desktop-portal-wlr
+                let modifiers = iter::once(default)
+                    .chain(alternatives)
+                    .map(|x| gbm::Modifier::from(*x as u64))
+                    .collect::<Vec<_>>();
+                if let Some(modifier) = self.choose_modifier(self.format, &modifiers) {
+                    self.modifier = Some(modifier);
+
+                    let params = format_params(
+                        self.dmabuf_helper.as_ref(),
+                        Some((self.format, modifier)),
+                        &self.formats,
+                    );
+                    let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+                    if let Err(err) = stream.update_params(&mut params) {
+                        log::error!("failed to update pipewire params: {}", err);
                     }
+                    return;
+                } else {
+                    log::error!("failed to choose modifier from {:?}", modifiers);
+                    let params = format_params(None, None, &self.formats);
+                    let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+                    if let Err(err) = stream.update_params(&mut params) {
+                        log::error!("failed to update pipewire params: {}", err);
+                    }
+                    return;
                 }
             }
-            //println!("param-changed: {} {:?}", id, value);
+        }
+
+        log::info!("modifier fixated. Setting other params.");
+
+        let blocks = self
+            .modifier
+            .and_then(|m| self.plane_count(self.format, m))
+            .unwrap_or(1);
+        let params = other_params(self.width(), self.height(), blocks, self.modifier.is_some());
+        let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
+        if let Err(err) = stream.update_params(&mut params) {
+            log::error!("failed to update pipewire params: {}", err);
         }
     }
 
-    fn add_buffer(&mut self, _stream: &StreamRef, buffer: *mut pw_buffer) {
+    fn add_buffer(&mut self, _stream: &Stream, buffer: *mut pw_buffer) {
         let buf = unsafe { &mut *(*buffer).buffer };
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
         // let metas = unsafe { slice::from_raw_parts(buf.metas, buf.n_metas as usize) };
@@ -227,10 +356,16 @@ impl StreamData {
             let dev = self
                 .formats
                 .dmabuf_device
-                .unwrap_or(dmabuf_helper.feedback().main_device()) as u64;
+                .unwrap_or(dmabuf_helper.feedback().main_device());
             // Unwrap: assumes `choose_buffer` successfully opened gbm device
             let (_, gbm) = gbm_devices.gbm_device(dev).unwrap().unwrap();
-            let dmabuf = buffer::create_dmabuf(&gbm, self.modifier, self.width, self.height);
+            let dmabuf = buffer::create_dmabuf(
+                gbm,
+                self.format,
+                self.modifier.unwrap(),
+                self.width(),
+                self.height(),
+            );
 
             wl_buffer = self.wayland_helper.create_dmabuf_buffer(&dmabuf);
 
@@ -244,7 +379,7 @@ impl StreamData {
                 data.mapoffset = 0;
 
                 let chunk = unsafe { &mut *data.chunk };
-                chunk.size = self.height * plane.stride;
+                chunk.size = self.height() * plane.stride;
                 chunk.offset = plane.offset;
                 chunk.stride = plane.stride as i32;
             }
@@ -253,34 +388,34 @@ impl StreamData {
             assert_eq!(datas.len(), 1);
             let data = &mut datas[0];
 
-            let fd = buffer::create_memfd(self.width, self.height);
+            let fd = buffer::create_memfd(self.width(), self.height());
 
             wl_buffer = self.wayland_helper.create_shm_buffer(
                 &fd,
-                self.width,
-                self.height,
-                self.width * 4,
-                wl_shm::Format::Abgr8888,
+                self.width(),
+                self.height(),
+                self.width() * 4,
+                shm_format(self.format).unwrap(),
             );
 
             data.type_ = spa_sys::SPA_DATA_MemFd;
-            data.flags = 0;
+            data.flags = spa_sys::SPA_DATA_FLAG_READABLE | spa_sys::SPA_DATA_FLAG_MAPPABLE;
             data.fd = fd.into_raw_fd() as _;
             data.data = std::ptr::null_mut();
-            data.maxsize = self.width * self.height * 4;
+            data.maxsize = self.width() * self.height() * 4;
             data.mapoffset = 0;
 
             let chunk = unsafe { &mut *data.chunk };
-            chunk.size = self.width * self.height * 4;
+            chunk.size = self.width() * self.height() * 4;
             chunk.offset = 0;
-            chunk.stride = 4 * self.width as i32;
+            chunk.stride = 4 * self.width() as i32;
         }
 
         let user_data = Box::into_raw(Box::new(wl_buffer)) as *mut c_void;
         unsafe { (*buffer).user_data = user_data };
     }
 
-    fn remove_buffer(&mut self, _stream: &StreamRef, buffer: *mut pw_buffer) {
+    fn remove_buffer(&mut self, _stream: &Stream, buffer: *mut pw_buffer) {
         let buf = unsafe { &mut *(*buffer).buffer };
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
 
@@ -295,15 +430,20 @@ impl StreamData {
         wl_buffer.destroy();
     }
 
-    fn process(&mut self, stream: &StreamRef) {
+    fn process(&mut self, stream: &Stream) {
+        if self.session.is_stopped() {
+            let _ = self.thread_stop_tx.send(());
+            // TODO: Causes segfault
+            // let _ = stream.disconnect();
+        }
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
             let full_damage = &[Rect {
                 x: 0,
                 y: 0,
-                width: self.width as i32,
-                height: self.height as i32,
+                width: self.width() as i32,
+                height: self.height() as i32,
             }];
             let damage = self
                 .buffer_damage
@@ -331,8 +471,15 @@ impl StreamData {
                     }
                 }
                 Err(err) => {
-                    log::error!("screencopy failed: {:?}", err);
-                    // TODO terminate screencasting?
+                    if err == WEnum::Value(FailureReason::BufferConstraints) {
+                        let changed = self.update_formats(stream);
+                        if !changed {
+                            log::error!("screencopy buffer constraints error, but no new formats?");
+                        }
+                    } else {
+                        log::error!("screencopy failed: {:?}", err);
+                        // TODO terminate screencasting?
+                    }
                 }
             }
             unsafe { stream.queue_raw_buffer(buffer) };
@@ -345,16 +492,17 @@ fn start_stream(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
     overlay_cursor: bool,
+    thread_stop_tx: pipewire::channel::Sender<()>,
 ) -> anyhow::Result<(
-    pipewire::main_loop::MainLoop,
-    pipewire::stream::Stream,
+    pipewire::main_loop::MainLoopRc,
+    pipewire::stream::StreamRc,
     pipewire::stream::StreamListener<StreamData>,
-    pipewire::context::Context,
+    pipewire::context::ContextRc,
     oneshot::Receiver<anyhow::Result<u32>>,
 )> {
-    let loop_ = pipewire::main_loop::MainLoop::new(None)?;
-    let context = pipewire::context::Context::new(&loop_)?;
-    let core = context.connect(None)?;
+    let loop_ = pipewire::main_loop::MainLoopRc::new(None)?;
+    let context = pipewire::context::ContextRc::new(&loop_, None)?;
+    let core = context.connect_rc(None)?;
 
     let name = "cosmic-screenshot".to_string(); // XXX randomize?
 
@@ -367,12 +515,11 @@ fn start_stream(
             "failed to get formats for image copy; session stopped"
         ));
     };
-    let (width, height) = formats.buffer_size;
 
     let dmabuf_helper = wayland_helper.dmabuf();
 
-    let stream = pipewire::stream::Stream::new(
-        &core,
+    let stream = pipewire::stream::StreamRc::new(
+        core,
         &name,
         pipewire::properties::properties! {
             "media.class" => "Video/Source",
@@ -380,11 +527,8 @@ fn start_stream(
         },
     )?;
 
-    let initial_params = params(width, height, 1, dmabuf_helper.as_ref(), None, &formats);
-    let mut initial_params: Vec<_> = initial_params
-        .iter()
-        .map(|x| Pod::from_bytes(x.as_slice()).unwrap())
-        .collect();
+    let initial_params = format_params(dmabuf_helper.as_ref(), None, &formats);
+    let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
 
     //let flags = pipewire::stream::StreamFlags::MAP_BUFFERS;
     let flags = pipewire::stream::StreamFlags::ALLOC_BUFFERS;
@@ -400,12 +544,11 @@ fn start_stream(
         dmabuf_helper,
         session,
         formats,
-        // XXX Should use implicit modifier if none set?
-        modifier: gbm::Modifier::Linear,
-        width,
-        height,
+        format: gbm::Format::Abgr8888,
+        modifier: None,
         node_id_tx: Some(node_id_tx),
         buffer_damage: HashMap::new(),
+        thread_stop_tx,
     };
 
     let listener = stream
@@ -443,12 +586,39 @@ unsafe fn buffer_find_meta_data<'a, T>(
     buffer: *const pipewire_sys::pw_buffer,
     type_: u32,
 ) -> Option<&'a mut T> {
-    let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size_of::<T>());
-    (ptr as *mut T).as_mut()
+    unsafe {
+        let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size_of::<T>());
+        (ptr as *mut T).as_mut()
+    }
 }
 
-fn meta() -> Vec<u8> {
-    value_to_bytes(pod::Value::Object(pod::Object {
+struct OwnedPod(Vec<u8>);
+
+impl OwnedPod {
+    fn new(content: Vec<u8>) -> Self {
+        assert!(Pod::from_bytes(&content).is_some());
+        Self(content)
+    }
+
+    fn serialize(value: &pod::Value) -> Self {
+        let mut bytes = Vec::new();
+        let mut cursor = io::Cursor::new(&mut bytes);
+        PodSerializer::serialize(&mut cursor, value).unwrap();
+        Self::new(bytes)
+    }
+}
+
+impl std::ops::Deref for OwnedPod {
+    type Target = Pod;
+
+    fn deref(&self) -> &Pod {
+        // Unchecked version of `Pod::from_bytes`
+        unsafe { Pod::from_raw(self.0.as_ptr().cast()) }
+    }
+}
+
+fn meta() -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
         id: spa_sys::SPA_PARAM_Meta,
         properties: vec![
@@ -467,20 +637,50 @@ fn meta() -> Vec<u8> {
     // TODO: header, video damage
 }
 
-fn params(
-    width: u32,
-    height: u32,
-    blocks: u32,
+fn format_params(
     dmabuf: Option<&DmabufHelper>,
-    fixated_modifier: Option<gbm::Modifier>,
+    fixated: Option<(gbm::Format, gbm::Modifier)>,
     formats: &Formats,
-) -> Vec<Vec<u8>> {
+) -> Vec<OwnedPod> {
+    let (width, height) = formats.buffer_size;
+
+    let mut pods = Vec::new();
+    if let Some((fixated_format, fixated_modifier)) = fixated {
+        pods.extend(format(
+            width,
+            height,
+            None,
+            fixated_format,
+            Some(fixated_modifier),
+            formats,
+        ));
+    }
+    // Favor dmabuf over shm by listing it first
+    if let Some(dmabuf) = dmabuf {
+        for (gbm_format, _) in &formats.dmabuf_formats {
+            if let Ok(gbm_format) = gbm::Format::try_from(*gbm_format) {
+                pods.extend(format(
+                    width,
+                    height,
+                    Some(dmabuf),
+                    gbm_format,
+                    None,
+                    formats,
+                ));
+            }
+        }
+    }
+    for shm_format in &formats.shm_formats {
+        if let Some(gbm_format) = shm_format_to_gbm(*shm_format) {
+            pods.extend(format(width, height, None, gbm_format, None, formats));
+        }
+    }
+    pods
+}
+
+fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<OwnedPod> {
     [
-        Some(buffers(width, height, blocks)),
-        fixated_modifier.map(|x| format(width, height, None, Some(x), formats)),
-        // Favor dmabuf over shm by listing it first
-        dmabuf.map(|x| format(width, height, Some(x), None, formats)),
-        Some(format(width, height, None, None, formats)),
+        Some(buffers(width, height, blocks, allow_dmabuf)),
         Some(meta()),
     ]
     .into_iter()
@@ -488,15 +688,8 @@ fn params(
     .collect()
 }
 
-fn value_to_bytes(value: pod::Value) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    let mut cursor = io::Cursor::new(&mut bytes);
-    PodSerializer::serialize(&mut cursor, &value).unwrap();
-    bytes
-}
-
-fn buffers(width: u32, height: u32, blocks: u32) -> Vec<u8> {
-    value_to_bytes(pod::Value::Object(pod::Object {
+fn buffers(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_ParamBuffers,
         id: spa_sys::SPA_PARAM_Buffers,
         properties: vec![
@@ -505,9 +698,19 @@ fn buffers(width: u32, height: u32, blocks: u32) -> Vec<u8> {
                 flags: pod::PropertyFlags::empty(),
                 value: pod::Value::Choice(pod::ChoiceValue::Int(spa::utils::Choice(
                     spa::utils::ChoiceFlags::empty(),
-                    spa::utils::ChoiceEnum::Flags {
-                        default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
-                        flags: vec![1 << spa_sys::SPA_DATA_MemFd, 1 << spa_sys::SPA_DATA_DmaBuf],
+                    if allow_dmabuf {
+                        spa::utils::ChoiceEnum::Flags {
+                            default: 1 << spa_sys::SPA_DATA_DmaBuf, // ?
+                            flags: vec![
+                                1 << spa_sys::SPA_DATA_MemFd,
+                                1 << spa_sys::SPA_DATA_DmaBuf,
+                            ],
+                        }
+                    } else {
+                        spa::utils::ChoiceEnum::Flags {
+                            default: 1 << spa_sys::SPA_DATA_MemFd,
+                            flags: vec![1 << spa_sys::SPA_DATA_MemFd],
+                        }
                     },
                 ))),
             },
@@ -552,9 +755,10 @@ fn format(
     width: u32,
     height: u32,
     dmabuf: Option<&DmabufHelper>,
+    format: gbm::Format,
     fixated_modifier: Option<gbm::Modifier>,
     formats: &Formats,
-) -> Vec<u8> {
+) -> Option<OwnedPod> {
     let mut properties = vec![
         pod::Property {
             key: spa_sys::SPA_FORMAT_mediaType,
@@ -569,7 +773,7 @@ fn format(
         pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_format,
             flags: pod::PropertyFlags::empty(),
-            value: pod::Value::Id(Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)), // XXX support others?
+            value: pod::Value::Id(spa_format(format)?),
         },
         pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_size,
@@ -589,20 +793,23 @@ fn format(
             flags: pod::PropertyFlags::MANDATORY,
             value: pod::Value::Long(u64::from(modifier) as i64),
         });
-    } else if let Some(dmabuf) = dmabuf {
+    } else if let Some(_dmabuf) = dmabuf {
         // TODO: Support other formats
-        let format = gbm::Format::Abgr8888 as u32;
-        let mut modifiers = formats
+        let modifiers = formats
             .dmabuf_formats
             .iter()
-            .find(|(x, _)| *x == format)
-            .map(|(_, modifiers)| modifiers.iter().map(|x| *x as i64).collect::<Vec<_>>())
+            .find(|(x, _)| *x == format as u32)
+            .map(|(_, modifiers)| modifiers.as_slice())
             .unwrap_or_default();
-        if modifiers.is_empty() {
-            // TODO
-            modifiers.push(u64::from(gbm::Modifier::Invalid) as _);
-        }
-        let default = *modifiers.first().unwrap();
+        let modifiers = modifiers
+            .iter()
+            // Don't allow implict modifiers, which don't work well with multi-GPU
+            // TODO: If needed for anything, allow this but only on single-GPU system
+            .filter(|m| **m != u64::from(gbm::Modifier::Invalid))
+            .map(|x| *x as i64)
+            .collect::<Vec<_>>();
+
+        let default = modifiers.first().copied()?;
 
         properties.push(pod::Property {
             key: spa_sys::SPA_FORMAT_VIDEO_modifier,
@@ -616,9 +823,9 @@ fn format(
             ))),
         });
     }
-    value_to_bytes(pod::Value::Object(pod::Object {
+    Some(OwnedPod::serialize(&pod::Value::Object(pod::Object {
         type_: spa_sys::SPA_TYPE_OBJECT_Format,
         id: spa_sys::SPA_PARAM_EnumFormat,
         properties,
-    }))
+    })))
 }

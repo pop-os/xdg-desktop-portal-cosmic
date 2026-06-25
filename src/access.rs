@@ -1,27 +1,28 @@
 #![allow(dead_code, unused_variables)]
 
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
+use cosmic::iced::keyboard::Key;
+use cosmic::iced::keyboard::key::Named;
+use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+    destroy_layer_surface, get_layer_surface,
+};
+use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced_winit::commands::layer_surface::{destroy_layer_surface, get_layer_surface};
+use cosmic::iced::widget::{column, row};
+use cosmic::iced::{Alignment, window};
 use cosmic::widget::autosize::autosize;
-use cosmic::widget::{self, button, dropdown, icon, text, Column, Id};
-use cosmic::{
-    iced::{
-        keyboard::{key::Named, Key},
-        widget::{column, row},
-        window,
-    },
-    iced_core::Alignment,
-};
+use cosmic::widget::{self, Column, Id, button, dropdown, icon, text};
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
+use crate::app::CosmicPortal;
 use crate::wayland::WaylandHelper;
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
-use crate::{app::CosmicPortal, fl};
-use crate::{subscription, PortalResponse};
+use crate::{PortalResponse, fl, subscription};
+
+//(ID returned with the response, choices (ID, label), label, initial selection or "" meaning the portal should choose)
+type AccessDialogChoice = (String, String, Vec<(String, String)>, String);
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Debug, Clone)]
 #[zvariant(signature = "a{sv}")]
@@ -30,9 +31,7 @@ pub(crate) struct AccessDialogOptions {
     deny_label: Option<String>,
     grant_label: Option<String>,
     icon: Option<String>,
-    //(ID returned with the response, choices (ID, label), label, initial selection or "" meaning the portal should choose)
-    #[allow(clippy::type_complexity)]
-    choices: Option<Vec<(String, String, Vec<(String, String)>, String)>>,
+    choices: Option<Vec<AccessDialogChoice>>,
 }
 
 #[derive(zvariant::SerializeDict, zvariant::Type, Debug, Clone)]
@@ -151,7 +150,7 @@ impl AccessDialogArgs {
                 layer: cosmic_client_toolkit::sctk::shell::wlr_layer::Layer::Top,
                 keyboard_interactivity:
                     cosmic_client_toolkit::sctk::shell::wlr_layer::KeyboardInteractivity::OnDemand,
-                pointer_interactivity: true,
+                input_zone: None,
                 anchor: cosmic_client_toolkit::sctk::shell::wlr_layer::Anchor::empty(),
                 output: IcedOutput::Active,
                 namespace: "access portal".to_string(),
@@ -169,7 +168,7 @@ impl AccessDialogArgs {
     }
 }
 
-pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
+pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let spacing = portal.core.system_theme().cosmic().spacing;
     let Some(args) = portal.access_args.as_ref() else {
         return text("Oops, no access dialog args").into();
@@ -185,7 +184,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
             .active_choices
             .get(id)
             .and_then(|choice_id| choices.iter().position(|(x, _)| x == choice_id));
-        let dropdown = dropdown(&choice_labels, active_choice, move |j| Msg::Choice(i, j));
+        let dropdown = dropdown(choice_labels, active_choice, move |j| Msg::Choice(i, j));
         options.push(row![label, dropdown].into());
     }
 
@@ -230,7 +229,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<Msg> {
             .icon(icon)
             .secondary_action(cancel_button)
             .primary_action(allow_button),
-        |key| match key {
+        |key, _| match key {
             Key::Named(Named::Enter) => Some(Msg::Allow),
             Key::Named(Named::Escape) => Some(Msg::Cancel),
             _ => None,
@@ -268,11 +267,11 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         }
         Msg::Choice(i, j) => {
             let args = portal.access_args.as_mut().unwrap();
-            if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i)) {
-                if let Some((option_id, _)) = choice.2.get(j) {
-                    args.active_choices
-                        .insert(choice.0.clone(), option_id.clone());
-                }
+            if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i))
+                && let Some((option_id, _)) = choice.2.get(j)
+            {
+                args.active_choices
+                    .insert(choice.0.clone(), option_id.clone());
             }
             cosmic::iced::Task::none()
         }

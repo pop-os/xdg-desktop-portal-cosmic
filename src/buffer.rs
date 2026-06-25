@@ -1,7 +1,4 @@
-use std::{
-    ffi::CStr,
-    os::fd::{AsFd, OwnedFd},
-};
+use std::os::fd::{AsFd, OwnedFd};
 
 pub struct Plane<Fd: AsFd> {
     pub fd: Fd,
@@ -19,7 +16,7 @@ pub struct Dmabuf<Fd: AsFd> {
 
 pub fn create_memfd(width: u32, height: u32) -> OwnedFd {
     // TODO: BSD support using shm_open
-    let name = unsafe { CStr::from_bytes_with_nul_unchecked(b"pipewire-screencopy\0") };
+    let name = c"pipewire-screencopy";
     let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC).unwrap(); // XXX
     rustix::fs::ftruncate(&fd, (width * height * 4) as _).unwrap();
     fd
@@ -27,6 +24,7 @@ pub fn create_memfd(width: u32, height: u32) -> OwnedFd {
 
 pub fn create_dmabuf<T: AsFd>(
     device: &gbm::Device<T>,
+    format: gbm::Format,
     modifier: gbm::Modifier,
     width: u32,
     height: u32,
@@ -36,23 +34,18 @@ pub fn create_dmabuf<T: AsFd>(
             .create_buffer_object_with_modifiers2::<()>(
                 width,
                 height,
-                gbm::Format::Abgr8888,
+                format,
                 [modifier].into_iter(),
                 gbm::BufferObjectFlags::empty(),
             )
             .unwrap()
     } else {
         device
-            .create_buffer_object::<()>(
-                width,
-                height,
-                gbm::Format::Abgr8888,
-                gbm::BufferObjectFlags::empty(),
-            )
+            .create_buffer_object::<()>(width, height, format, gbm::BufferObjectFlags::empty())
             .unwrap()
     };
     Dmabuf {
-        format: gbm::Format::Abgr8888,
+        format,
         modifier,
         width,
         height,

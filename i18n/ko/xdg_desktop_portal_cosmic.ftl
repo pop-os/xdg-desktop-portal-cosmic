@@ -1,0 +1,14 @@
+allow = 허용
+share = 공유
+output = 출력
+capture = 캡처
+window = 창
+share-screen = 화면 공유
+    .description = 시스템이 "{ $app_name }" 앱에 화면 내용을 공유하려고 합니다. 공유할 화면 또는 창을 선택하세요.
+unknown-application = 알 수 없는 앱
+choose-folder = 폴더 선택
+save-to = 저장
+    .clipboard = 클립보드에 { save-to }
+    .pictures = 사진에 { save-to }
+    .documents = 문서에 { save-to }
+cancel = 취소

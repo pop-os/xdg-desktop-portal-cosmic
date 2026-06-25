@@ -1,17 +1,10 @@
-use cosmic::{
-    iced::Limits,
-    iced_core::{
-        layout::Node,
-        mouse,
-        renderer::Quad,
-        widget::{
-            tree::{self, State},
-            Tree,
-        },
-        Background, Border, Color, Length, Renderer, Shadow, Size,
-    },
-    widget::Widget,
-};
+use cosmic::iced::Limits;
+use cosmic::iced::core::layout::Node;
+use cosmic::iced::core::renderer::Quad;
+use cosmic::iced::core::widget::Tree;
+use cosmic::iced::core::widget::tree::{self, State};
+use cosmic::iced::core::{Background, Border, Color, Length, Renderer, Shadow, Size, mouse};
+use cosmic::widget::Widget;
 
 pub struct OutputSelection<Msg> {
     on_enter: Msg,
@@ -29,15 +22,15 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         Size::new(Length::Fill, Length::Fill)
     }
 
-    fn state(&self) -> cosmic::iced_core::widget::tree::State {
+    fn state(&self) -> cosmic::iced::core::widget::tree::State {
         State::new(MyState::default())
     }
 
-    fn tag(&self) -> cosmic::iced_core::widget::tree::Tag {
+    fn tag(&self) -> cosmic::iced::core::widget::tree::Tag {
         tree::Tag::of::<MyState>()
     }
 
-    fn layout(&self, _tree: &mut Tree, _renderer: &cosmic::Renderer, limits: &Limits) -> Node {
+    fn layout(&mut self, _tree: &mut Tree, _renderer: &cosmic::Renderer, limits: &Limits) -> Node {
         let limits = limits.width(Length::Fill).height(Length::Fill);
         Node::new(limits.resolve(Length::Fill, Length::Fill, Size::ZERO))
     }
@@ -47,10 +40,10 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
         tree: &Tree,
         renderer: &mut cosmic::Renderer,
         theme: &cosmic::Theme,
-        _style: &cosmic::iced_core::renderer::Style,
-        layout: cosmic::iced_core::Layout<'_>,
-        _cursor: cosmic::iced_core::mouse::Cursor,
-        _viewport: &cosmic::iced_core::Rectangle,
+        _style: &cosmic::iced::core::renderer::Style,
+        layout: cosmic::iced::core::Layout<'_>,
+        _cursor: cosmic::iced::core::mouse::Cursor,
+        _viewport: &cosmic::iced::core::Rectangle,
     ) {
         let cosmic = theme.cosmic();
         let radius_s = cosmic.radius_s();
@@ -76,6 +69,7 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
                     color: accent,
                 },
                 shadow: Shadow::default(),
+                snap: true,
             },
             Background::Color(Color::TRANSPARENT),
         );
@@ -99,55 +93,48 @@ impl<Msg: Clone + 'static> Widget<Msg, cosmic::Theme, cosmic::Renderer> for Outp
     fn mouse_interaction(
         &self,
         _state: &Tree,
-        layout: cosmic::iced_core::Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
-        _viewport: &cosmic::iced_core::Rectangle,
+        layout: cosmic::iced::core::Layout<'_>,
+        cursor: cosmic::iced::core::mouse::Cursor,
+        _viewport: &cosmic::iced::core::Rectangle,
         _renderer: &cosmic::Renderer,
-    ) -> cosmic::iced_core::mouse::Interaction {
+    ) -> cosmic::iced::core::mouse::Interaction {
         if cursor.is_over(layout.bounds()) {
-            cosmic::iced_core::mouse::Interaction::Pointer
+            cosmic::iced::core::mouse::Interaction::Pointer
         } else {
-            cosmic::iced_core::mouse::Interaction::default()
+            cosmic::iced::core::mouse::Interaction::default()
         }
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         state: &mut Tree,
-        event: cosmic::iced_core::Event,
-        layout: cosmic::iced_core::Layout<'_>,
-        cursor: cosmic::iced_core::mouse::Cursor,
+        event: &cosmic::iced::core::Event,
+        layout: cosmic::iced::core::Layout<'_>,
+        cursor: cosmic::iced::core::mouse::Cursor,
         _renderer: &cosmic::Renderer,
-        _clipboard: &mut dyn cosmic::iced_core::Clipboard,
-        shell: &mut cosmic::iced_core::Shell<'_, Msg>,
-        _viewport: &cosmic::iced_core::Rectangle,
-    ) -> cosmic::iced_core::event::Status {
+        _clipboard: &mut dyn cosmic::iced::core::Clipboard,
+        shell: &mut cosmic::iced::core::Shell<'_, Msg>,
+        _viewport: &cosmic::iced::core::Rectangle,
+    ) {
         // update hover state
         let my_state = state.state.downcast_mut::<MyState>();
         let hovered = cursor.is_over(layout.bounds());
         let changed = my_state.hovered != hovered;
         my_state.hovered = hovered;
 
-        let mut ret = match event {
-            cosmic::iced_core::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                shell.publish(self.on_press.clone());
-                cosmic::iced_core::event::Status::Captured
-            }
-            _ => cosmic::iced_core::event::Status::Ignored,
-        };
-
-        if changed {
-            ret = match event {
-                cosmic::iced_core::Event::Mouse(mouse::Event::CursorMoved { .. })
-                | cosmic::iced_core::Event::Mouse(mouse::Event::CursorEntered) => {
-                    shell.publish(self.on_enter.clone());
-                    cosmic::iced_core::event::Status::Captured
-                }
-                _ => cosmic::iced_core::event::Status::Ignored,
-            };
-        };
-
-        ret
+        if let cosmic::iced::core::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) =
+            event
+        {
+            shell.publish(self.on_press.clone());
+            shell.capture_event();
+        }
+        if changed
+            && let cosmic::iced::core::Event::Mouse(mouse::Event::CursorMoved { .. })
+            | cosmic::iced::core::Event::Mouse(mouse::Event::CursorEntered) = event
+        {
+            shell.publish(self.on_enter.clone());
+            shell.capture_event();
+        }
     }
 }
 

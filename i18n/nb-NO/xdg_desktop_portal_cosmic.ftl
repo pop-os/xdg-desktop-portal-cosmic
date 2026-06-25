@@ -1,0 +1,14 @@
+allow = Tillat
+cancel = Avbryt
+capture = Ta skjermbilde
+share = Del
+save-to = Lagre i
+    .clipboard = { save-to } Utklippstavle
+    .pictures = { save-to } Bilder
+    .documents = { save-to } Dokumenter
+choose-folder = Velg mappe
+share-screen = Del skjermen din
+    .description = Systemet ønsker å dele innholdet på skjermen din med «{ $app_name }». Velg en skjerm eller et vindu å dele.
+unknown-application = Ukjent applikasjon
+output = Utgang
+window = Vindu

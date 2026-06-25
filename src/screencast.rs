@@ -1,16 +1,17 @@
 #![allow(dead_code, unused_variables)]
 
-use ashpd::{desktop::screencast::SourceType, enumflags2::BitFlags};
+use ashpd::desktop::screencast::SourceType;
+use ashpd::enumflags2::BitFlags;
 use futures::stream::{FuturesOrdered, StreamExt};
-use std::{collections::HashMap, mem};
+use std::collections::HashMap;
+use std::mem;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
 use crate::screencast_dialog::{self, CaptureSources};
 use crate::screencast_thread::ScreencastThread;
-use crate::subscription;
 use crate::wayland::{CaptureSource, WaylandHelper};
-use crate::{PortalResponse, Request};
+use crate::{PortalResponse, Request, subscription};
 
 const CURSOR_MODE_HIDDEN: u32 = 1;
 const CURSOR_MODE_EMBEDDED: u32 = 2;
@@ -124,10 +125,20 @@ struct SelectSourcesOptions {
     persist_mode: Option<u32>,
 }
 
+#[derive(Clone, zvariant::SerializeDict, zvariant::Type)]
+#[zvariant(signature = "a{sv}")]
+pub struct StreamProps {
+    position: Option<(i32, i32)>,
+    size: (i32, i32),
+    source_type: u32,
+    // TODO: Add when remote desktop portal is implemented
+    mapping_id: Option<String>,
+}
+
 #[derive(zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
 struct StartResult {
-    streams: Vec<(u32, HashMap<String, zvariant::OwnedValue>)>,
+    streams: Vec<(u32, StreamProps)>,
     persist_mode: Option<u32>,
     restore_data: Option<RestoreData>,
 }
@@ -238,7 +249,7 @@ impl ScreenCast {
 
             let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
                 let session_data = interface.get_mut().await;
-                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_HIDDEN);
+                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_EMBEDDED);
                 let multiple = session_data.multiple;
                 let source_types = session_data.source_types;
                 let persisted_capture_sources = session_data.persisted_capture_sources.clone();
@@ -282,17 +293,49 @@ impl ScreenCast {
             // Use `FuturesOrdered` so streams are in consistent order
             let mut res_futures = FuturesOrdered::new();
             for output in &capture_sources.outputs {
+                let info = self.wayland_helper.output_info(output);
+                let (position, size) = if let Some(info) = info {
+                    (info.logical_position, info.logical_size.unwrap_or((0, 0)))
+                } else {
+                    (Some((0, 0)), (0, 0))
+                };
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
                     CaptureSource::Output(output.clone()),
                     overlay_cursor,
+                    StreamProps {
+                        position,
+                        size,
+                        source_type: SOURCE_TYPE_MONITOR,
+                        mapping_id: None,
+                    },
                 ));
             }
+            let toplevel_infos = self.wayland_helper.toplevels();
             for foreign_toplevel in &capture_sources.toplevels {
+                let info = toplevel_infos
+                    .iter()
+                    .find(|info| info.foreign_toplevel == *foreign_toplevel);
+                let size = if let Some(info) = info {
+                    // Use size on output with greatest area
+                    // XXX: No way to get size of whole toplevel?
+                    info.geometry
+                        .values()
+                        .max_by_key(|info| info.width * info.height)
+                        .map_or((0, 0), |info| (info.width, info.height))
+                } else {
+                    (0, 0)
+                };
                 res_futures.push_back(ScreencastThread::new(
                     self.wayland_helper.clone(),
                     CaptureSource::Toplevel(foreign_toplevel.clone()),
                     overlay_cursor,
+                    StreamProps {
+                        position: None,
+                        size,
+                        source_type: SOURCE_TYPE_WINDOW,
+                        mapping_id: None,
+                    },
                 ));
             }
 
@@ -326,7 +369,7 @@ impl ScreenCast {
 
             let streams = screencast_threads
                 .iter()
-                .map(|thread| (thread.node_id(), HashMap::new()))
+                .map(|thread| (thread.node_id(), thread.stream_props()))
                 .collect();
             interface.get_mut().await.screencast_threads = screencast_threads;
 
@@ -346,8 +389,7 @@ impl ScreenCast {
 
     #[zbus(property)]
     async fn available_source_types(&self) -> u32 {
-        // XXX
-        SOURCE_TYPE_MONITOR
+        SOURCE_TYPE_MONITOR | SOURCE_TYPE_WINDOW
     }
 
     #[zbus(property)]

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use serde::Deserialize;
-use zbus::{zvariant, Result};
+use zbus::{Result, zvariant};
 
 static COSMIC_SCOPE: &str = "app-cosmic-";
 static FLATPAK_SCOPE: &str = "app-flatpak-";

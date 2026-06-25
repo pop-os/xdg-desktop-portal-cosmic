@@ -1,0 +1,14 @@
+cancel = ਰੱਦ ਕਰੋ
+allow = ਮਨਜ਼ੂਰ
+capture = ਕੈਪਚਰ
+share = ਸਾਂਝਾ ਕਰੋ
+save-to = { save-to }ਸੰਭਾਲੋ
+    .clipboard = { save-to } ਕਲਿੱਪਬੋਰਡ ਵਿੱਚ
+    .pictures = { save-to } ਤਸਵੀਰਾਂ
+    .documents = { save-to } ਦਸਤਾਵੇਜ਼ਾਂ ਵਿੱਚ
+choose-folder = ਫ਼ੋਲਡਰ ਨੂੰ ਚੁਣੋ
+unknown-application = ਅਣਪਛਾਤੀ ਐਪਲੀਕੇਸ਼ਨ
+output = ਆਉਟਪੁੱਟ
+window = ਵਿੰਡੋ
+share-screen = ਆਪਣੀ ਸਕਰੀਨ ਸਾਂਝੀ ਕਰੋ
+    .description = ਸਿਸਟਮ "{ $app_name }" ਨਾਲ ਤੁਹਾਡੀ ਸਕਰੀਨ ਦੀ ਸਮਗੱਰੀ ਨੂੰ ਸਾਂਝਾ ਕਰਨਾ ਚਾਹੁੰਦਾ ਹੈ। ਸਾਂਝਾ ਕਰਨ ਲਈ ਸਕਰੀਨ ਜਾਂ ਵਿੰਡੋ ਨੂੰ ਚੁਣੋ।

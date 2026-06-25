@@ -1,8 +1,14 @@
 allow = Разрешить
-cancel = Отменить
-capture = Сделать снимок
+cancel = Отмена
+capture = Снять
 save-to = Сохранить в
     .clipboard = { save-to } буфер обмена
     .pictures = { save-to } Изображения
     .documents = { save-to } Документы
 choose-folder = Выберите папку
+share = Поделиться
+share-screen = Поделитесь экраном
+    .description = Система хочет поделиться содержимым вашего экрана с приложением «{ $app_name }». Выберите экран или окно, которым хотите поделиться.
+unknown-application = Неизвестное приложение
+output = Вывод
+window = Окно

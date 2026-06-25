@@ -1,14 +1,14 @@
 use crate::{
-    access, background, config, file_chooser, fl, screencast_dialog, screenshot, subscription,
+    access, background, config, file_chooser, screencast_dialog, screenshot, subscription,
 };
-use cosmic::iced_core::event::wayland::OutputEvent;
-use cosmic::widget;
-use cosmic::Task;
-use cosmic::{
-    app, cosmic_config,
-    iced::window,
-    iced_futures::{event::listen_with, Subscription},
+use cosmic::iced::core::event::wayland::OutputEvent;
+use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
+use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
+    IcedMargin, SctkLayerSurfaceSettings,
 };
+use cosmic::iced::{Event, Length, Limits, Subscription, event, window};
+use cosmic::{Task, app, cosmic_config, widget};
+use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
 use wayland_client::protocol::wl_output::WlOutput;
 
@@ -43,6 +43,7 @@ pub struct CosmicPortal {
 
     pub outputs: Vec<OutputState>,
     pub active_output: Option<WlOutput>,
+    pub dummy_id: window::Id,
 }
 
 #[derive(Debug, Clone)]
@@ -91,8 +92,9 @@ impl cosmic::Application for CosmicPortal {
         core: app::Core,
         _: Self::Flags,
     ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
-        let wayland_conn = crate::wayland::connect_to_wayland();
+        let wayland_conn = wayland_client::Connection::connect_to_env().unwrap();
         let wayland_helper = crate::wayland::WaylandHelper::new(wayland_conn);
+        let dummy_id = window::Id::unique();
         (
             Self {
                 core,
@@ -110,16 +112,29 @@ impl cosmic::Application for CosmicPortal {
                 active_output: Default::default(),
                 wayland_helper,
                 tx: None,
+                dummy_id,
             },
-            cosmic::iced::Task::none(),
+            get_layer_surface(SctkLayerSurfaceSettings {
+                id: dummy_id,
+                layer: wlr_layer::Layer::Bottom,
+                keyboard_interactivity: wlr_layer::KeyboardInteractivity::None,
+                input_zone: Some(Vec::new()),
+                anchor: wlr_layer::Anchor::empty(),
+                output: cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedOutput::Active,
+                namespace: "cosmic_portal_dummy".into(),
+                margin: IcedMargin::default(),
+                size: Some((Some(6), Some(6))),
+                exclusive_zone: -1,
+                size_limits: Limits::NONE,
+            }),
         )
     }
 
-    fn view(&self) -> cosmic::prelude::Element<Self::Message> {
+    fn view(&self) -> cosmic::Element<'_, Self::Message> {
         unimplemented!()
     }
 
-    fn view_window(&self, id: window::Id) -> cosmic::prelude::Element<Self::Message> {
+    fn view_window(&self, id: window::Id) -> cosmic::Element<'_, Self::Message> {
         if Some(id) == self.access_args.as_ref().map(|args| args.access_id) {
             access::view(self).map(Msg::Access)
         } else if id == *screencast_dialog::SCREENCAST_ID {
@@ -128,6 +143,11 @@ impl cosmic::Application for CosmicPortal {
             screenshot::view(self, id).map(Msg::Screenshot)
         } else if self.background_prompts.contains_key(&id) {
             background::view(self, id).map(Msg::Background)
+        } else if self.dummy_id == id {
+            widget::space::Space::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else {
             file_chooser::view(self, id)
         }
@@ -172,6 +192,10 @@ impl cosmic::Application for CosmicPortal {
                     self.tx_conf = Some(tx_conf);
                     self.config_handler = handler;
                     self.update(Msg::ConfigSubUpdate(config))
+                }
+                subscription::Event::NameLost => {
+                    log::warn!("'{}' name on bus lost. Exiting.", crate::DBUS_NAME);
+                    cosmic::iced::exit()
                 }
             },
             Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::Action::App),
@@ -286,14 +310,12 @@ impl cosmic::Application for CosmicPortal {
     }
 
     #[allow(clippy::collapsible_match)]
-    fn subscription(&self) -> cosmic::iced_futures::Subscription<Self::Message> {
+    fn subscription(&self) -> Subscription<Self::Message> {
         let mut subscriptions = vec![
             subscription::portal_subscription(self.wayland_helper.clone()).map(Msg::Portal),
-            listen_with(|e, _, _| match e {
-                cosmic::iced_core::Event::PlatformSpecific(
-                    cosmic::iced_core::event::PlatformSpecific::Wayland(w_e),
-                ) => match w_e {
-                    cosmic::iced_core::event::wayland::Event::Output(o_event, wl_output) => {
+            event::listen_with(|e, _, _| match e {
+                Event::PlatformSpecific(event::PlatformSpecific::Wayland(w_e)) => match w_e {
+                    event::wayland::Event::Output(o_event, wl_output) => {
                         Some(Msg::Output(o_event, wl_output))
                     }
                     _ => None,
@@ -302,8 +324,13 @@ impl cosmic::Application for CosmicPortal {
             }),
         ];
         for (id, (_args, dialog)) in self.file_choosers.iter() {
-            let id = id.clone();
-            subscriptions.push(dialog.subscription().map(move |x| Msg::FileChooser(id, x)));
+            let id = *id;
+            subscriptions.push(
+                dialog
+                    .subscription()
+                    .with(id)
+                    .map(|(id, x)| Msg::FileChooser(id, x)),
+            );
         }
         Subscription::batch(subscriptions)
     }
@@ -315,12 +342,12 @@ impl cosmic::Application for CosmicPortal {
     ) -> app::Task<Self::Message> {
         let old = self.core.system_is_dark();
         let new = new_theme.is_dark;
-        if new != old {
-            if let Some(tx) = self.tx.clone() {
-                tokio::spawn(async move {
-                    _ = tx.send(subscription::Event::IsDark(new)).await;
-                });
-            }
+        if new != old
+            && let Some(tx) = self.tx.clone()
+        {
+            tokio::spawn(async move {
+                _ = tx.send(subscription::Event::IsDark(new)).await;
+            });
         }
         Task::none()
     }
@@ -332,10 +359,6 @@ impl cosmic::Application for CosmicPortal {
     ) -> cosmic::iced::Task<cosmic::Action<Self::Message>> {
         let old = self.core.system_theme().cosmic();
         let mut msgs = Vec::with_capacity(3);
-
-        if old.is_dark != new_theme.is_dark {
-            return Task::none();
-        }
 
         if old.accent_color() != new_theme.accent_color() {
             msgs.push(subscription::Event::Accent(new_theme.accent_color()));

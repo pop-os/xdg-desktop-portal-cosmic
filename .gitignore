@@ -5,3 +5,5 @@ target
 debian/xdg-desktop-portal-cosmic*
 debian/*debhelper*
 debian/files
+data/dbus-1/org.freedesktop.impl.portal.desktop.cosmic.service
+data/org.freedesktop.impl.portal.desktop.cosmic.service

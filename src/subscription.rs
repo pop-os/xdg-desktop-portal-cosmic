@@ -1,17 +1,23 @@
 // contains the subscription which sends portal events and response channels to iced.
 
 use std::any::TypeId;
+use std::hash::Hash;
 
 use anyhow::Context;
-use cosmic::{cosmic_theme::palette::Srgba, iced::Subscription};
-use futures::{future, SinkExt};
+use cosmic::cosmic_theme::palette::Srgba;
+use cosmic::iced::Subscription;
+use futures::{SinkExt, StreamExt, future};
 use tokio::sync::mpsc::Receiver;
-use zbus::{zvariant, Connection};
+use zbus::{Connection, fdo, zvariant};
 
+use crate::access::Access;
+use crate::background::Background;
+use crate::file_chooser::FileChooser;
+use crate::screencast::ScreenCast;
+use crate::screenshot::Screenshot;
 use crate::{
-    access::Access, background::Background, config, file_chooser::FileChooser,
-    screencast::ScreenCast, screenshot::Screenshot, wayland, ColorScheme, Contrast, Settings,
-    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, DBUS_NAME, DBUS_PATH,
+    ACCENT_COLOR_KEY, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, CONTRAST_KEY, ColorScheme, Contrast,
+    DBUS_NAME, DBUS_PATH, Settings, config, wayland,
 };
 
 #[derive(Clone, Debug)]
@@ -32,6 +38,7 @@ pub enum Event {
         tx_conf: tokio::sync::watch::Sender<config::Config>,
         handler: Option<cosmic::cosmic_config::Config>,
     },
+    NameLost,
 }
 
 pub enum State {
@@ -42,27 +49,40 @@ pub enum State {
 pub(crate) fn portal_subscription(
     helper: wayland::WaylandHelper,
 ) -> cosmic::iced::Subscription<Event> {
-    struct PortalSubscription;
     struct ConfigSubscription;
-    struct WaylandHelperSubscription;
-    let helper_portal = helper.clone();
+    struct Wrapper {
+        helper: wayland::WaylandHelper,
+    }
+    impl Hash for Wrapper {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            std::any::TypeId::of::<wayland::WaylandHelper>().hash(state);
+        }
+    }
+    struct WaylandHelperSubscription {
+        helper: wayland::WaylandHelper,
+    }
+    impl Hash for WaylandHelperSubscription {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            std::any::TypeId::of::<WaylandHelperSubscription>().hash(state);
+        }
+    }
+    let helper_sub = helper.clone();
     Subscription::batch([
-        Subscription::run_with_id(
-            TypeId::of::<PortalSubscription>(),
-            cosmic::iced_futures::stream::channel(10, |mut output| async move {
+        Subscription::run_with(Wrapper { helper }, |Wrapper { helper }| {
+            let helper = helper.clone();
+            cosmic::iced::stream::channel(10, |mut output| async move {
                 let mut state = State::Init;
                 loop {
-                    if let Err(err) = process_changes(&mut state, &mut output, &helper_portal).await
-                    {
+                    if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
                         log::debug!("Portal Subscription Error: {:?}", err);
                         future::pending::<()>().await;
                     }
                 }
-            }),
-        ),
-        Subscription::run_with_id(
-            TypeId::of::<WaylandHelperSubscription>(),
-            helper.subscription(),
+            })
+        }),
+        Subscription::run_with(
+            WaylandHelperSubscription { helper: helper_sub },
+            |WaylandHelperSubscription { helper }| helper.subscription(),
         )
         .map(|wl_event| match wl_event {
             wayland::Event::ToplevelsUpdated => Event::BackgroundToplevels,
@@ -94,7 +114,6 @@ pub(crate) async fn process_changes(
             let (tx_conf, rx_conf) = tokio::sync::watch::channel(config);
 
             let connection = zbus::connection::Builder::session()?
-                .name(DBUS_NAME)?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
@@ -112,6 +131,16 @@ pub(crate) async fn process_changes(
                 .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
+
+            // Create name lost stream before requesting name
+            let dbus = fdo::DBusProxy::new(&connection).await?;
+            tokio::spawn(name_lost_task(
+                dbus.receive_name_lost().await?,
+                output.clone(),
+            ));
+
+            connection.request_name(DBUS_NAME).await?;
+
             _ = output
                 .send(Event::Init {
                     tx,
@@ -230,9 +259,24 @@ pub(crate) async fn process_changes(
                         }
                     }
                     Event::Init { .. } => {}
+                    Event::NameLost => {}
                 }
             }
         }
     };
     Ok(())
+}
+
+async fn name_lost_task(
+    mut name_lost_stream: fdo::NameLostStream,
+    mut output: futures::channel::mpsc::Sender<Event>,
+) {
+    while let Some(name_lost) = name_lost_stream.next().await {
+        let Ok(args) = name_lost.args() else {
+            return;
+        };
+        if args.name == DBUS_NAME {
+            let _ = output.send(Event::NameLost).await;
+        }
+    }
 }

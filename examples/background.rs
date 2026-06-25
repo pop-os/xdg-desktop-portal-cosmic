@@ -2,10 +2,11 @@
 
 use ashpd::desktop::background::Background;
 use cosmic::{
+    Task,
     app::{self, Core},
     executor,
     iced::{Length, Size},
-    widget, Task,
+    widget,
 };
 
 #[derive(Clone, Debug)]

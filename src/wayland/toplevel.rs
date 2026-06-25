@@ -1,7 +1,5 @@
-use cosmic_client_toolkit::{
-    toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
-    wayland_client::{Connection, QueueHandle},
-};
+use cosmic_client_toolkit::toplevel_info::{ToplevelInfoHandler, ToplevelInfoState};
+use cosmic_client_toolkit::wayland_client::{Connection, QueueHandle};
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 
 use super::AppData;

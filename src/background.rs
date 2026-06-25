@@ -20,11 +20,11 @@ use tokio::{
 use zbus::{fdo, object_server::SignalEmitter, zvariant};
 
 use crate::{
+    PortalResponse,
     app::CosmicPortal,
     config::{self, background::PermissionDialog},
     fl, subscription, systemd,
     wayland::WaylandHelper,
-    PortalResponse,
 };
 
 /// Background portal backend
@@ -172,7 +172,9 @@ impl Background {
             match fs::remove_file(&launch_entry).await {
                 Ok(()) => Ok(false),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    log::warn!("Service asked to disable autostart for {appid} but the entry doesn't exist");
+                    log::warn!(
+                        "Service asked to disable autostart for {appid} but the entry doesn't exist"
+                    );
                     Ok(false)
                 }
                 Err(e) => {
@@ -215,7 +217,9 @@ impl Background {
             let exec = match shlex::try_join(exec.iter().map(|term| term.as_str())) {
                 Ok(exec) => exec,
                 Err(e) => {
-                    log::error!("Failed to sanitize command line for {appid}\n\tCommand: {exec:?}\n\tError: {e}");
+                    log::error!(
+                        "Failed to sanitize command line for {appid}\n\tCommand: {exec:?}\n\tError: {e}"
+                    );
                     return Err(fdo::Error::InvalidArgs(format!("{e}: {exec:?}")));
                 }
             };

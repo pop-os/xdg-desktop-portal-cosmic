@@ -1,0 +1,14 @@
+allow = Дазволіць
+cancel = Скасаваць
+capture = Зрабіць здымак
+share = Абагуліць
+save-to = Захаваць у
+    .clipboard = { save-to } Буфер абмену
+    .pictures = { save-to } Відарысы
+    .documents = { save-to } Дакументы
+choose-folder = Выбраць папку
+unknown-application = Невядомая праграма
+window = Акно
+share-screen = Абагуліць свой экран
+    .description = Сістэма хоча абагуліць змесціва вашага экрана з "{ $app_name }". Выберыце экран або акно для сумеснага выкарыстання.
+output = Вывад
