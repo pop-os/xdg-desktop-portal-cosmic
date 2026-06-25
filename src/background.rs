@@ -4,7 +4,7 @@ use std::{collections::HashMap, io, path::Path};
 
 use cosmic::{iced::window, widget};
 use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
-use futures::{FutureExt, TryFutureExt};
+use futures::TryFutureExt;
 use tokio::{
     fs,
     io::AsyncWriteExt,
@@ -13,7 +13,7 @@ use tokio::{
 use zbus::{fdo, object_server::SignalEmitter, zvariant};
 
 use crate::{
-    PortalResponse,
+    PortalResponse, Request,
     app::CosmicPortal,
     config::{self, background::PermissionDialog},
     fl, subscription, systemd,
@@ -80,22 +80,18 @@ impl Background {
     /// Notifies the user that an app is running in the background
     async fn notify_background(
         &self,
+        #[zbus(connection)] connection: &zbus::Connection,
         handle: zvariant::ObjectPath<'_>,
         app_id: String,
         name: String,
     ) -> PortalResponse<NotifyBackgroundResult> {
         log::debug!("Request handle: {handle:?}");
 
-        // Request a copy of the config from the main app instance
-        // This is also cleaner than storing the config because it's difficult to keep it
-        // updated without synch primitives and we also avoid &mut self.
-        //
-        // &mut self with Zbus can lead to deadlocks.
-        // See: https://dbus2.github.io/zbus/faq.html#1-a-interface-method-that-takes-a-mut-self-argument-is-taking-too-long
+        // Read config through the watch receiver to avoid a `&mut self` method, which holds the
+        // zbus interface lock and can deadlock.
         let config = self.rx_conf.borrow().background;
 
         match config.default_perm {
-            // Skip dialog based on default response set in configs
             PermissionDialog::Allow => {
                 log::debug!("AUTO ALLOW {name} based on default permission");
                 PortalResponse::Success(NotifyBackgroundResult {
@@ -108,28 +104,42 @@ impl Background {
                     result: PermissionResponse::Deny,
                 })
             }
-            // Dialog
             PermissionDialog::Ask => {
-                log::debug!("Requesting background permission for running app {app_id} ({name})",);
+                log::debug!("Requesting background permission for running app {app_id} ({name})");
 
                 let handle = handle.to_owned();
                 let id = window::Id::unique();
                 let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-                self.tx
-                    .send(subscription::Event::Background(Args {
-                        handle,
-                        id,
-                        app_id,
-                        tx,
-                    }))
-                    .inspect_err(|e| {
-                        log::error!("Failed to send message to register permissions dialog: {e:?}")
-                    })
-                    .map_ok(|_| PortalResponse::<NotifyBackgroundResult>::Other)
-                    .map_err(|_| ())
-                    .and_then(|_| rx.recv().map(|out| out.ok_or(())))
-                    .unwrap_or_else(|_| PortalResponse::Other)
-                    .await
+                let args_handle = handle.clone();
+                let tx_cancel = self.tx.clone();
+
+                // Wrap in a Request so the frontend can withdraw the prompt via `Request.Close`.
+                Request::run(
+                    connection,
+                    &handle,
+                    move || async move {
+                        let _ = tx_cancel
+                            .send(subscription::Event::CancelBackground(id))
+                            .await;
+                    },
+                    async move {
+                        if let Err(e) = self
+                            .tx
+                            .send(subscription::Event::Background(Args {
+                                handle: args_handle,
+                                id,
+                                app_id,
+                                tx,
+                            }))
+                            .await
+                        {
+                            log::error!("Failed to register background permission dialog: {e:?}");
+                            return PortalResponse::Other;
+                        }
+                        rx.recv().await.unwrap_or(PortalResponse::Other)
+                    },
+                )
+                .await
             }
         }
     }
@@ -352,15 +362,7 @@ pub enum Msg {
         id: window::Id,
         choice: PermissionResponse,
     },
-    Cancel(window::Id),
 }
-
-// #[bitflags]
-// #[repr(u32)]
-// #[derive(Clone, Copy, Debug, PartialEq)]
-// enum AutostartFlags {
-//     DBus = 0x01,
-// }
 
 /// Permissions dialog
 pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg> {
@@ -445,32 +447,16 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
 
             destroy_dialog_surface(id)
         }
-        Msg::Cancel(id) => {
-            let Some(Args {
-                handle,
-                id,
-                app_id,
-                tx,
-            }) = portal.background_prompts.remove(&id)
-            else {
-                log::warn!("Window {id:?} doesn't exist for some reason");
-                return cosmic::Task::none();
-            };
+    }
+}
 
-            log::trace!(
-                "User cancelled dialog for (window: {:?}) (app: {}) (handle: {})",
-                id,
-                app_id,
-                handle
-            );
-            tokio::spawn(async move {
-                if let Err(e) = tx.send(PortalResponse::Cancelled).await {
-                    log::error!("Failed to send cancellation response to background handler {e:?}");
-                }
-            });
-
-            destroy_dialog_surface(id)
-        }
+/// Close a background prompt withdrawn by the frontend via `Request.Close`.
+pub fn cancel(portal: &mut CosmicPortal, id: window::Id) -> cosmic::Task<crate::app::Msg> {
+    if portal.background_prompts.remove(&id).is_some() {
+        log::trace!("Background prompt {id:?} cancelled by the portal frontend");
+        destroy_dialog_surface(id)
+    } else {
+        cosmic::Task::none()
     }
 }
 

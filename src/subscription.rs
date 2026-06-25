@@ -28,6 +28,7 @@ pub enum Event {
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
     Background(crate::background::Args),
+    CancelBackground(cosmic::iced::window::Id),
     BackgroundToplevels,
     Accent(Srgba),
     IsDark(bool),
@@ -181,6 +182,11 @@ pub(crate) async fn process_changes(
                     Event::Background(args) => {
                         if let Err(err) = output.send(Event::Background(args)).await {
                             log::error!("Error sending background event: {:?}", err);
+                        }
+                    }
+                    Event::CancelBackground(id) => {
+                        if let Err(err) = output.send(Event::CancelBackground(id)).await {
+                            log::error!("Error sending background cancel: {:?}", err);
                         }
                     }
                     Event::BackgroundToplevels => {

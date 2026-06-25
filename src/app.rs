@@ -177,6 +177,9 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Background(args) => {
                     background::update_args(self, args).map(cosmic::Action::App)
                 }
+                subscription::Event::CancelBackground(id) => {
+                    background::cancel(self, id).map(cosmic::Action::App)
+                }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
