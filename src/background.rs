@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::{
-    collections::HashMap,
-    hash::Hash,
-    io,
-    path::Path,
-    sync::{Arc, Condvar, Mutex},
-};
+use std::{collections::HashMap, io, path::Path};
 
-// use ashpd::enumflags2::{bitflags, BitFlag, BitFlags};
 use cosmic::{iced::window, widget};
 use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
 use futures::{FutureExt, TryFutureExt};
@@ -404,10 +397,10 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<Msg
         .into()
 }
 
-/// Update Background dialog args for a specific window
+/// Register Background dialog args for a specific window and open its surface.
 pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate::app::Msg> {
-    if let Some(old) = portal.background_prompts.insert(args.id, args) {
-        // xxx Can this even happen?
+    let id = args.id;
+    if let Some(old) = portal.background_prompts.insert(id, args) {
         log::trace!(
             "Replaced old dialog args for (window: {:?}) (app: {}) (handle: {})",
             old.id,
@@ -416,7 +409,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
         )
     }
 
-    cosmic::Task::none()
+    get_dialog_surface(id)
 }
 
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
@@ -449,6 +442,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     );
                 }
             });
+
+            destroy_dialog_surface(id)
         }
         Msg::Cancel(id) => {
             let Some(Args {
@@ -473,8 +468,31 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     log::error!("Failed to send cancellation response to background handler {e:?}");
                 }
             });
+
+            destroy_dialog_surface(id)
         }
     }
+}
 
-    cosmic::Task::none()
+fn get_dialog_surface(id: window::Id) -> cosmic::Task<crate::app::Msg> {
+    use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
+    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
+        IcedOutput, SctkLayerSurfaceSettings,
+    };
+    use cosmic_client_toolkit::sctk::shell::wlr_layer;
+
+    get_layer_surface(SctkLayerSurfaceSettings {
+        id,
+        layer: wlr_layer::Layer::Top,
+        keyboard_interactivity: wlr_layer::KeyboardInteractivity::OnDemand,
+        input_zone: None,
+        anchor: wlr_layer::Anchor::empty(),
+        output: IcedOutput::Active,
+        namespace: "background portal".to_string(),
+        ..Default::default()
+    })
+}
+
+fn destroy_dialog_surface(id: window::Id) -> cosmic::Task<crate::app::Msg> {
+    cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(id)
 }
