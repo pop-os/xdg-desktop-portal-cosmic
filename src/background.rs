@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, io, path::Path};
 
-use cosmic::{iced::window, widget};
+use cosmic::{iced::window, widget, widget::autosize::autosize};
 use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
 use futures::TryFutureExt;
 use tokio::{
@@ -382,7 +382,7 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
         })
         .unwrap_or("Invalid window id");
 
-    widget::dialog()
+    let dialog = widget::dialog()
         .title(fl!("bg-dialog-title"))
         .body(fl!("bg-dialog-body", appname = name))
         .icon(widget::icon::from_name("dialog-warning-symbolic").size(64))
@@ -403,8 +403,11 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
                 id,
                 choice: PermissionResponse::Deny,
             }),
-        )
-        .into()
+        );
+
+    // Wrap in `autosize` so the layer surface sizes itself to the dialog. Without it the
+    // surface has no size (anchor is empty and no explicit size is set) and never renders.
+    autosize(dialog, widget::Id::new("background-dialog")).into()
 }
 
 /// Register Background dialog args for a specific window and open its surface.
