@@ -114,8 +114,7 @@ impl cosmic::Application for App {
 }
 
 // TODO: Write a small flatpak manifest in order to test this better
-#[tokio::main]
-async fn main() -> cosmic::iced::Result {
+fn main() -> cosmic::iced::Result {
     env_logger::Builder::from_default_env().init();
     let settings = app::Settings::default()
         .resizable(None)
