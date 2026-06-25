@@ -62,7 +62,7 @@ impl cosmic::Application for App {
         )
     }
 
-    fn view(&self) -> cosmic::Element<Self::Message> {
+    fn view(&self) -> cosmic::Element<'_, Self::Message> {
         widget::row::with_children(vec![
             widget::text::title3(if self.background_allowed {
                 "Running in background"
