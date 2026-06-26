@@ -26,7 +26,7 @@ vendor := '0'
 vendor-args := if vendor == '0' { '' } else { '--frozen' }
 
 bin-src := cargo-target-dir / target / name
-bin-dst := base-dir / 'libexec' / name
+bin-dst := absolute_path(clean(rootdir / libexecdir)) / name
 
 [private]
 default: build
