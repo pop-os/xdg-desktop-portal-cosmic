@@ -30,7 +30,8 @@ pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", featur
     "v0_3_33",
 ] }
 png = "0.18"
-rustix = { version = "1.1", features = ["fs"] }
+reis = { version = "0.7", features = ["tokio"] }
+rustix = { version = "1.1", features = ["fs", "time"] }
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
 zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"

@@ -1,4 +1,7 @@
-use crate::{access, config, file_chooser, screencast_dialog, screenshot, subscription};
+use crate::{
+    access, config, file_chooser, remote_desktop_dialog, screencast_dialog, screenshot,
+    subscription,
+};
 use cosmic::iced::core::event::wayland::OutputEvent;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
@@ -38,6 +41,7 @@ pub struct CosmicPortal {
     pub screencast_args: Option<screencast_dialog::Args>,
     pub screencast_tab_model:
         widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
+    pub remote_desktop_args: Option<remote_desktop_dialog::Args>,
     pub location_options: Vec<String>,
     pub prev_rectangle: Option<screenshot::Rect>,
     pub wayland_helper: crate::wayland::WaylandHelper,
@@ -64,6 +68,7 @@ pub enum Msg {
     FileChooser(window::Id, file_chooser::Msg),
     Screenshot(screenshot::Msg),
     Screencast(screencast_dialog::Msg),
+    RemoteDesktop(remote_desktop_dialog::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
     ConfigSetScreenshot(config::screenshot::Screenshot),
@@ -114,6 +119,7 @@ impl cosmic::Application for CosmicPortal {
                 screenshot_args: Default::default(),
                 screencast_args: Default::default(),
                 screencast_tab_model: Default::default(),
+                remote_desktop_args: Default::default(),
                 location_options: Vec::new(),
                 prev_rectangle: Default::default(),
                 outputs: Default::default(),
@@ -147,6 +153,8 @@ impl cosmic::Application for CosmicPortal {
             access::view(self).map(Msg::Access)
         } else if id == *screencast_dialog::SCREENCAST_ID {
             screencast_dialog::view(self).map(Msg::Screencast)
+        } else if id == *remote_desktop_dialog::REMOTE_DESKTOP_ID {
+            remote_desktop_dialog::view(self).map(Msg::RemoteDesktop)
         } else if self.outputs.iter().any(|o| o.id == id) {
             screenshot::view(self, id).map(Msg::Screenshot)
         } else if self.dummy_id == id {
@@ -180,6 +188,12 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::CancelScreencast(handle) => {
                     screencast_dialog::cancel(self, handle).map(cosmic::Action::App)
                 }
+                subscription::Event::RemoteDesktop(args) => {
+                    remote_desktop_dialog::update_args(self, args).map(cosmic::Action::App)
+                }
+                subscription::Event::CancelRemoteDesktop(handle) => {
+                    remote_desktop_dialog::cancel(self, handle).map(cosmic::Action::App)
+                }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
@@ -195,6 +209,9 @@ impl cosmic::Application for CosmicPortal {
             },
             Msg::Screenshot(m) => screenshot::update_msg(self, m).map(cosmic::Action::App),
             Msg::Screencast(m) => screencast_dialog::update_msg(self, m).map(cosmic::Action::App),
+            Msg::RemoteDesktop(m) => {
+                remote_desktop_dialog::update_msg(self, m).map(cosmic::Action::App)
+            }
             Msg::Output(o_event, wl_output) => {
                 match o_event {
                     OutputEvent::Created(Some(info))

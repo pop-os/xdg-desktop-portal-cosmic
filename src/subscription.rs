@@ -11,6 +11,7 @@ use zbus::{Connection, fdo, zvariant};
 
 use crate::access::Access;
 use crate::file_chooser::FileChooser;
+use crate::remote_desktop::RemoteDesktop;
 use crate::screencast::ScreenCast;
 use crate::screenshot::Screenshot;
 use crate::{
@@ -25,6 +26,8 @@ pub enum Event {
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
+    RemoteDesktop(crate::remote_desktop_dialog::Args),
+    CancelRemoteDesktop(zvariant::ObjectPath<'static>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -92,6 +95,10 @@ pub(crate) async fn process_changes(
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
+                    RemoteDesktop::new(wayland_helper.clone(), tx.clone()),
+                )?
+                .serve_at(
+                    DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
                 )?
                 .serve_at(
@@ -140,6 +147,16 @@ pub(crate) async fn process_changes(
                     Event::CancelScreencast(handle) => {
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
                             log::error!("Error sending screencast cancel: {:?}", err);
+                        };
+                    }
+                    Event::RemoteDesktop(args) => {
+                        if let Err(err) = output.send(Event::RemoteDesktop(args)).await {
+                            log::error!("Error sending remote desktop event: {:?}", err);
+                        };
+                    }
+                    Event::CancelRemoteDesktop(handle) => {
+                        if let Err(err) = output.send(Event::CancelRemoteDesktop(handle)).await {
+                            log::error!("Error sending remote desktop cancel: {:?}", err);
                         };
                     }
                     Event::Accent(a) => {

@@ -8,6 +8,7 @@ use std::mem;
 use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
+use crate::remote_desktop::RemoteDesktopData;
 use crate::screencast_dialog::{self, CaptureSources};
 use crate::screencast_thread::ScreencastThread;
 use crate::wayland::{CaptureSource, WaylandHelper};
@@ -27,14 +28,14 @@ struct CreateSessionResult {
     session_id: String,
 }
 
-#[derive(Clone)]
-struct PersistedCaptureSources {
-    pub outputs: Vec<String>,
-    pub toplevels: Vec<String>,
+#[derive(Clone, Default)]
+pub(crate) struct PersistedCaptureSources {
+    pub(crate) outputs: Vec<String>,
+    pub(crate) toplevels: Vec<String>,
 }
 
 impl PersistedCaptureSources {
-    fn from_capture_sources(
+    pub(crate) fn from_capture_sources(
         wayland_helper: &WaylandHelper,
         sources: &CaptureSources,
     ) -> Option<Self> {
@@ -73,38 +74,51 @@ impl PersistedCaptureSources {
 
         Some(CaptureSources { outputs, toplevels })
     }
+
+    /// Whether every persisted output and window still maps to a live source.
+    pub(crate) fn resolves(&self, wayland_helper: &WaylandHelper) -> bool {
+        self.to_capture_sources(wayland_helper).is_some()
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, zvariant::Type)]
 #[zvariant(signature = "(suv)")]
-struct RestoreData {
+pub(crate) struct RestoreData {
     vendor: String,
     version: u32,
     data: zvariant::OwnedValue,
 }
 
-impl From<PersistedCaptureSources> for RestoreData {
-    fn from(sources: PersistedCaptureSources) -> RestoreData {
+impl RestoreData {
+    /// Wrap an implementation-private structure as a `("COSMIC", 1, v)` blob.
+    pub(crate) fn cosmic_v1(data: zvariant::Structure) -> Self {
         RestoreData {
             vendor: "COSMIC".to_string(),
             version: 1,
-            data: zvariant::Value::from(zvariant::Structure::from((
-                sources.outputs,
-                sources.toplevels,
-            )))
-            .try_to_owned()
-            .unwrap(),
+            data: zvariant::Value::from(data).try_to_owned().unwrap(),
         }
+    }
+
+    /// Return the private payload if this is a `("COSMIC", 1, _)` blob.
+    pub(crate) fn cosmic_v1_data(&self) -> Option<&zvariant::OwnedValue> {
+        ((&*self.vendor, self.version) == ("COSMIC", 1)).then_some(&self.data)
+    }
+}
+
+impl From<PersistedCaptureSources> for RestoreData {
+    fn from(sources: PersistedCaptureSources) -> RestoreData {
+        RestoreData::cosmic_v1(zvariant::Structure::from((
+            sources.outputs,
+            sources.toplevels,
+        )))
     }
 }
 
 impl TryFrom<&RestoreData> for PersistedCaptureSources {
     type Error = ();
     fn try_from(restore_data: &RestoreData) -> Result<Self, ()> {
-        if (&*restore_data.vendor, restore_data.version) != ("COSMIC", 1) {
-            return Err(());
-        }
-        let structure = zvariant::Structure::try_from(&*restore_data.data).map_err(|_| ())?;
+        let data = restore_data.cosmic_v1_data().ok_or(())?;
+        let structure = zvariant::Structure::try_from(&**data).map_err(|_| ())?;
         let (outputs, toplevels) = structure.try_into().map_err(|_| ())?;
         Ok(PersistedCaptureSources { outputs, toplevels })
     }
@@ -135,6 +149,14 @@ pub struct StreamProps {
     mapping_id: Option<String>,
 }
 
+impl StreamProps {
+    /// The stream's global logical offset (the captured output's position in the
+    /// compositor layout), used to map absolute input to global coordinates.
+    pub fn position(&self) -> Option<(i32, i32)> {
+        self.position
+    }
+}
+
 #[derive(zvariant::SerializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
 struct StartResult {
@@ -144,22 +166,215 @@ struct StartResult {
 }
 
 #[derive(Default)]
-struct SessionData {
+pub(crate) struct SessionData {
     screencast_threads: Vec<ScreencastThread>,
     cursor_mode: Option<u32>,
-    multiple: bool,
-    source_types: BitFlags<SourceType>,
-    persisted_capture_sources: Option<PersistedCaptureSources>,
-    closed: bool,
+    pub(crate) multiple: bool,
+    pub(crate) source_types: BitFlags<SourceType>,
+    pub(crate) persisted_capture_sources: Option<PersistedCaptureSources>,
+    pub(crate) closed: bool,
+    pub(crate) remote_desktop: Option<RemoteDesktopData>,
 }
 
 impl SessionData {
-    fn close(&mut self) {
+    pub(crate) fn new_remote_desktop() -> Self {
+        Self {
+            remote_desktop: Some(RemoteDesktopData::default()),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn close(&mut self) {
         for thread in mem::take(&mut self.screencast_threads) {
             thread.stop();
         }
         self.closed = true
     }
+}
+
+pub(crate) struct CaptureResult {
+    pub(crate) streams: Vec<(u32, StreamProps)>,
+    pub(crate) restore_data: Option<RestoreData>,
+    pub(crate) sources: Option<PersistedCaptureSources>,
+}
+
+pub(crate) enum CaptureOutcome {
+    Success(CaptureResult),
+    Cancelled,
+    Other,
+}
+
+pub(crate) async fn capture(
+    connection: &zbus::Connection,
+    wayland_helper: &WaylandHelper,
+    tx: &Sender<subscription::Event>,
+    session_handle: &zvariant::ObjectPath<'_>,
+    app_id: String,
+) -> CaptureOutcome {
+    let Some(interface) = crate::session_interface::<SessionData>(connection, session_handle).await
+    else {
+        return CaptureOutcome::Other;
+    };
+
+    let (multiple, source_types, persisted_capture_sources) = {
+        let session_data = interface.get().await;
+        (
+            session_data.multiple,
+            session_data.source_types,
+            session_data.persisted_capture_sources.clone(),
+        )
+    };
+
+    // XXX
+    let outputs = wayland_helper.outputs();
+    if outputs.is_empty() {
+        log::error!("No output");
+        return CaptureOutcome::Other;
+    }
+
+    let capture_sources = if let Some(capture_sources) =
+        persisted_capture_sources.and_then(|x| x.to_capture_sources(wayland_helper))
+    {
+        capture_sources
+    } else {
+        // Show dialog to prompt for what to capture
+        let resp = screencast_dialog::show_screencast_prompt(
+            tx,
+            session_handle,
+            app_id,
+            multiple,
+            source_types,
+            wayland_helper,
+        )
+        .await;
+        let Some(capture_sources) = resp else {
+            return CaptureOutcome::Cancelled;
+        };
+        capture_sources
+    };
+
+    capture_from_sources(connection, wayland_helper, session_handle, capture_sources).await
+}
+
+pub(crate) async fn capture_from_sources(
+    connection: &zbus::Connection,
+    wayland_helper: &WaylandHelper,
+    session_handle: &zvariant::ObjectPath<'_>,
+    capture_sources: CaptureSources,
+) -> CaptureOutcome {
+    let Some(interface) = crate::session_interface::<SessionData>(connection, session_handle).await
+    else {
+        return CaptureOutcome::Other;
+    };
+
+    let cursor_mode = interface
+        .get()
+        .await
+        .cursor_mode
+        .unwrap_or(CURSOR_MODE_EMBEDDED);
+    let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
+    // Use `FuturesOrdered` so streams are in consistent order
+    let mut res_futures = FuturesOrdered::new();
+    for output in &capture_sources.outputs {
+        let info = wayland_helper.output_info(output);
+        let (position, size) = if let Some(info) = info {
+            // Advertise the *physical* (current-mode) size, matching the actual video
+            // buffer, so the consumer maps absolute pointer input 1:1 over the video.
+            // The portal converts these physical coordinates back to the compositor's
+            // logical space on input
+            let physical = info
+                .modes
+                .iter()
+                .find(|m| m.current)
+                .map(|m| m.dimensions)
+                .or(info.logical_size)
+                .unwrap_or((0, 0));
+            (info.logical_position, physical)
+        } else {
+            (Some((0, 0)), (0, 0))
+        };
+        res_futures.push_back(ScreencastThread::new(
+            wayland_helper.clone(),
+            CaptureSource::Output(output.clone()),
+            overlay_cursor,
+            StreamProps {
+                position,
+                size,
+                source_type: SOURCE_TYPE_MONITOR,
+                mapping_id: None,
+            },
+        ));
+    }
+    let toplevel_infos = wayland_helper.toplevels();
+    for foreign_toplevel in &capture_sources.toplevels {
+        let info = toplevel_infos
+            .iter()
+            .find(|info| info.foreign_toplevel == *foreign_toplevel);
+        let size = if let Some(info) = info {
+            // Use size on output with greatest area
+            // XXX: No way to get size of whole toplevel?
+            info.geometry
+                .values()
+                .max_by_key(|info| info.width * info.height)
+                .map_or((0, 0), |info| (info.width, info.height))
+        } else {
+            (0, 0)
+        };
+        res_futures.push_back(ScreencastThread::new(
+            wayland_helper.clone(),
+            CaptureSource::Toplevel(foreign_toplevel.clone()),
+            overlay_cursor,
+            StreamProps {
+                position: None,
+                size,
+                source_type: SOURCE_TYPE_WINDOW,
+                mapping_id: None,
+            },
+        ));
+    }
+
+    let mut failed = false;
+    let mut screencast_threads = Vec::new();
+    while let Some(res) = res_futures.next().await {
+        match res {
+            Ok(thread) => screencast_threads.push(thread),
+            Err(err) => {
+                log::error!("Screencast thread failed: {}", err);
+                failed = true;
+            }
+        }
+    }
+
+    // Stop any thread that didn't fail
+    if failed {
+        for thread in screencast_threads {
+            thread.stop();
+        }
+        return CaptureOutcome::Other;
+    }
+
+    // Session may have already been cancelled
+    if interface.get().await.closed {
+        for thread in screencast_threads {
+            thread.stop();
+        }
+        return CaptureOutcome::Cancelled;
+    }
+
+    let streams = screencast_threads
+        .iter()
+        .map(|thread| (thread.node_id(), thread.stream_props()))
+        .collect();
+    interface.get_mut().await.screencast_threads = screencast_threads;
+
+    let persisted_capture_sources =
+        PersistedCaptureSources::from_capture_sources(wayland_helper, &capture_sources);
+
+    CaptureOutcome::Success(CaptureResult {
+        streams,
+        restore_data: persisted_capture_sources.clone().map(|x| x.into()),
+        sources: persisted_capture_sources,
+    })
 }
 
 pub struct ScreenCast {
@@ -224,6 +439,10 @@ impl ScreenCast {
                         log::warn!("unrecognized screencopy restore data: {:?}", restore_data);
                     }
                 }
+                // RemoteDesktop sessions capture in RemoteDesktop.Start, not here.
+                if let Some(remote_desktop) = session_data.remote_desktop.as_mut() {
+                    remote_desktop.screen_cast_enabled = true;
+                }
                 PortalResponse::Success(HashMap::new())
             }
             None => PortalResponse::Other,
@@ -241,148 +460,23 @@ impl ScreenCast {
     ) -> PortalResponse<StartResult> {
         let on_cancel = || screencast_dialog::hide_screencast_prompt(&self.tx, &session_handle);
         Request::run(connection, &handle, on_cancel, async {
-            let Some(interface) =
-                crate::session_interface::<SessionData>(connection, &session_handle).await
-            else {
-                return PortalResponse::Other;
-            };
-
-            let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
-                let session_data = interface.get_mut().await;
-                let cursor_mode = session_data.cursor_mode.unwrap_or(CURSOR_MODE_EMBEDDED);
-                let multiple = session_data.multiple;
-                let source_types = session_data.source_types;
-                let persisted_capture_sources = session_data.persisted_capture_sources.clone();
-                (
-                    cursor_mode,
-                    multiple,
-                    source_types,
-                    persisted_capture_sources,
-                )
-            };
-
-            // XXX
-            let outputs = self.wayland_helper.outputs();
-            if outputs.is_empty() {
-                log::error!("No output");
-                return PortalResponse::Other;
-            }
-
-            let capture_sources = if let Some(capture_sources) =
-                persisted_capture_sources.and_then(|x| x.to_capture_sources(&self.wayland_helper))
-            {
-                capture_sources
-            } else {
-                // Show dialog to prompt for what to capture
-                let resp = screencast_dialog::show_screencast_prompt(
-                    &self.tx,
-                    &session_handle,
-                    app_id,
-                    multiple,
-                    source_types,
-                    &self.wayland_helper,
-                )
-                .await;
-                let Some(capture_sources) = resp else {
-                    return PortalResponse::Cancelled;
-                };
-                capture_sources
-            };
-
-            let overlay_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
-            // Use `FuturesOrdered` so streams are in consistent order
-            let mut res_futures = FuturesOrdered::new();
-            for output in &capture_sources.outputs {
-                let info = self.wayland_helper.output_info(output);
-                let (position, size) = if let Some(info) = info {
-                    (info.logical_position, info.logical_size.unwrap_or((0, 0)))
-                } else {
-                    (Some((0, 0)), (0, 0))
-                };
-                res_futures.push_back(ScreencastThread::new(
-                    self.wayland_helper.clone(),
-                    CaptureSource::Output(output.clone()),
-                    overlay_cursor,
-                    StreamProps {
-                        position,
-                        size,
-                        source_type: SOURCE_TYPE_MONITOR,
-                        mapping_id: None,
-                    },
-                ));
-            }
-            let toplevel_infos = self.wayland_helper.toplevels();
-            for foreign_toplevel in &capture_sources.toplevels {
-                let info = toplevel_infos
-                    .iter()
-                    .find(|info| info.foreign_toplevel == *foreign_toplevel);
-                let size = if let Some(info) = info {
-                    // Use size on output with greatest area
-                    // XXX: No way to get size of whole toplevel?
-                    info.geometry
-                        .values()
-                        .max_by_key(|info| info.width * info.height)
-                        .map_or((0, 0), |info| (info.width, info.height))
-                } else {
-                    (0, 0)
-                };
-                res_futures.push_back(ScreencastThread::new(
-                    self.wayland_helper.clone(),
-                    CaptureSource::Toplevel(foreign_toplevel.clone()),
-                    overlay_cursor,
-                    StreamProps {
-                        position: None,
-                        size,
-                        source_type: SOURCE_TYPE_WINDOW,
-                        mapping_id: None,
-                    },
-                ));
-            }
-
-            let mut failed = false;
-            let mut screencast_threads = Vec::new();
-            while let Some(res) = res_futures.next().await {
-                match res {
-                    Ok(thread) => screencast_threads.push(thread),
-                    Err(err) => {
-                        log::error!("Screencast thread failed: {}", err);
-                        failed = true;
-                    }
-                }
-            }
-
-            // Stop any thread that didn't fail
-            if failed {
-                for thread in screencast_threads {
-                    thread.stop();
-                }
-                return PortalResponse::Other;
-            }
-
-            // Session may have already been cancelled
-            if interface.get().await.closed {
-                for thread in screencast_threads {
-                    thread.stop();
-                }
-                return PortalResponse::Cancelled;
-            }
-
-            let streams = screencast_threads
-                .iter()
-                .map(|thread| (thread.node_id(), thread.stream_props()))
-                .collect();
-            interface.get_mut().await.screencast_threads = screencast_threads;
-
-            let persisted_capture_sources = PersistedCaptureSources::from_capture_sources(
+            match capture(
+                connection,
                 &self.wayland_helper,
-                &capture_sources,
-            );
-
-            PortalResponse::Success(StartResult {
-                streams,
-                persist_mode: None,
-                restore_data: persisted_capture_sources.map(|x| x.into()),
-            })
+                &self.tx,
+                &session_handle,
+                app_id,
+            )
+            .await
+            {
+                CaptureOutcome::Success(result) => PortalResponse::Success(StartResult {
+                    streams: result.streams,
+                    persist_mode: None,
+                    restore_data: result.restore_data,
+                }),
+                CaptureOutcome::Cancelled => PortalResponse::Cancelled,
+                CaptureOutcome::Other => PortalResponse::Other,
+            }
         })
         .await
     }
