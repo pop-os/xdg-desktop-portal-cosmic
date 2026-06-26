@@ -11,6 +11,7 @@ mod access;
 mod app;
 mod background;
 mod buffer;
+mod cgroup;
 mod documents;
 mod file_chooser;
 mod localize;
@@ -19,7 +20,6 @@ mod screencast_dialog;
 mod screencast_thread;
 mod screenshot;
 mod subscription;
-mod systemd;
 mod wayland;
 mod widget;
 

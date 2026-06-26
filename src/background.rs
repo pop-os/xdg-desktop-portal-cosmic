@@ -15,8 +15,9 @@ use zbus::{fdo, object_server::SignalEmitter, zvariant};
 use crate::{
     PortalResponse, Request,
     app::CosmicPortal,
+    cgroup,
     config::{self, background::PermissionDialog},
-    fl, subscription, systemd,
+    fl, subscription,
     wayland::WaylandHelper,
 };
 
@@ -67,11 +68,8 @@ impl Background {
 #[zbus::interface(name = "org.freedesktop.impl.portal.Background")]
 impl Background {
     /// Status on running apps (active, running, or background)
-    async fn get_app_state(
-        &self,
-        #[zbus(connection)] connection: &zbus::Connection,
-    ) -> HashMap<String, AppStatus> {
-        get_app_state_impl(connection, self.wayland_helper.clone())
+    async fn get_app_state(&self) -> HashMap<String, AppStatus> {
+        get_app_state_impl(self.wayland_helper.clone())
             .await
             .inspect_err(|_| log::error!("Failed to enumerate running apps"))
             .unwrap_or_default()
@@ -260,22 +258,16 @@ impl Background {
 
 /// Internal implementation of [`Background::get_app_state`].
 async fn get_app_state_impl(
-    connection: &zbus::Connection,
     wayland_helper: WaylandHelper,
 ) -> fdo::Result<HashMap<String, AppStatus>> {
-    let apps: HashMap<_, _> = systemd::Systemd1Proxy::new(connection)
+    let apps: HashMap<_, _> = cgroup::running_app_ids()
         .await
-        .inspect_err(|e| log::error!("Error connecting to systemd proxy: {e}"))?
-        .list_units()
-        .await
-        .inspect_err(|e| log::error!("Error fetching units from systemd: {e}"))?
+        .inspect_err(|e| log::error!("Error reading running apps from /proc: {e}"))
+        .map_err(|e| fdo::Error::IOError(e.to_string()))?
         .into_iter()
         // Apps launched by COSMIC/Flatpak are considered to be running in the
         // background by default as they don't have open top levels.
-        .filter_map(|unit| {
-            unit.cosmic_flatpak_name()
-                .map(|app_id| (app_id.to_owned(), AppStatus::Background))
-        })
+        .map(|app_id| (app_id, AppStatus::Background))
         .chain(
             wayland_helper
                 .toplevels()
