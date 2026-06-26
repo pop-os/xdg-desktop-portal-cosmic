@@ -1,3 +1,4 @@
+pub mod color_picker;
 pub mod keyboard_wrapper;
 pub mod output_arrangement;
 pub mod output_selection;
