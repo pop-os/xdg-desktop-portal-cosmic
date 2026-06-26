@@ -9,7 +9,9 @@ pub use cosmic_portal_config as config;
 
 mod access;
 mod app;
+mod background;
 mod buffer;
+mod cgroup;
 mod documents;
 mod file_chooser;
 mod localize;

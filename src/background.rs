@@ -1,0 +1,488 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+use std::{collections::HashMap, io, path::Path};
+
+use cosmic::{iced::window, widget, widget::autosize::autosize};
+use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
+use futures::TryFutureExt;
+use tokio::{
+    fs,
+    io::AsyncWriteExt,
+    sync::{mpsc, watch},
+};
+use zbus::{fdo, object_server::SignalEmitter, zvariant};
+
+use crate::{
+    PortalResponse, Request,
+    app::CosmicPortal,
+    cgroup,
+    config::{self, background::PermissionDialog},
+    fl, subscription,
+    wayland::WaylandHelper,
+};
+
+/// Background portal backend
+///
+/// https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.impl.portal.Background.html
+pub struct Background {
+    wayland_helper: WaylandHelper,
+    tx: mpsc::Sender<subscription::Event>,
+    rx_conf: watch::Receiver<config::Config>,
+}
+
+impl Background {
+    pub const fn new(
+        wayland_helper: WaylandHelper,
+        tx: mpsc::Sender<subscription::Event>,
+        rx_conf: watch::Receiver<config::Config>,
+    ) -> Self {
+        Self {
+            wayland_helper,
+            tx,
+            rx_conf,
+        }
+    }
+
+    /// Write `desktop_entry` to path `launch_entry`.
+    ///
+    /// The primary purpose of this function is to ease error handling.
+    async fn write_autostart(
+        autostart_entry: &Path,
+        desktop_entry: &freedesktop_desktop_entry::DesktopEntry,
+    ) -> io::Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o644)
+            .open(&autostart_entry)
+            .map_ok(tokio::io::BufWriter::new)
+            .await?;
+
+        file.write_all(desktop_entry.to_string().as_bytes()).await?;
+        // Shouldn't be needed, but the file never seemed to flush to disk until I did it manually
+        file.flush().await
+    }
+}
+
+#[zbus::interface(name = "org.freedesktop.impl.portal.Background")]
+impl Background {
+    /// Status on running apps (active, running, or background)
+    async fn get_app_state(&self) -> HashMap<String, AppStatus> {
+        get_app_state_impl(self.wayland_helper.clone())
+            .await
+            .inspect_err(|_| log::error!("Failed to enumerate running apps"))
+            .unwrap_or_default()
+    }
+
+    /// Notifies the user that an app is running in the background
+    async fn notify_background(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        handle: zvariant::ObjectPath<'_>,
+        app_id: String,
+        name: String,
+    ) -> PortalResponse<NotifyBackgroundResult> {
+        log::debug!("Request handle: {handle:?}");
+
+        // Read config through the watch receiver to avoid a `&mut self` method, which holds the
+        // zbus interface lock and can deadlock.
+        let config = self.rx_conf.borrow().background;
+
+        match config.default_perm {
+            PermissionDialog::Allow => {
+                log::debug!("AUTO ALLOW {name} based on default permission");
+                PortalResponse::Success(NotifyBackgroundResult {
+                    result: PermissionResponse::Allow,
+                })
+            }
+            PermissionDialog::Deny => {
+                log::debug!("AUTO DENY {name} based on default permission");
+                PortalResponse::Success(NotifyBackgroundResult {
+                    result: PermissionResponse::Deny,
+                })
+            }
+            PermissionDialog::Ask => {
+                log::debug!("Requesting background permission for running app {app_id} ({name})");
+
+                let handle = handle.to_owned();
+                let id = window::Id::unique();
+                let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                let args_handle = handle.clone();
+                let tx_cancel = self.tx.clone();
+
+                // Wrap in a Request so the frontend can withdraw the prompt via `Request.Close`.
+                Request::run(
+                    connection,
+                    &handle,
+                    move || async move {
+                        let _ = tx_cancel
+                            .send(subscription::Event::CancelBackground(id))
+                            .await;
+                    },
+                    async move {
+                        if let Err(e) = self
+                            .tx
+                            .send(subscription::Event::Background(Args {
+                                handle: args_handle,
+                                id,
+                                app_id,
+                                name,
+                                tx,
+                            }))
+                            .await
+                        {
+                            log::error!("Failed to register background permission dialog: {e:?}");
+                            return PortalResponse::Other;
+                        }
+                        rx.recv().await.unwrap_or(PortalResponse::Other)
+                    },
+                )
+                .await
+            }
+        }
+    }
+
+    /// Enable or disable autostart for an application
+    ///
+    /// Deprecated in terms of the portal but seemingly still in use
+    /// Spec: https://specifications.freedesktop.org/autostart-spec/latest/
+    async fn enable_autostart(
+        &self,
+        appid: String,
+        enable: bool,
+        exec: Vec<String>,
+        flags: u32,
+    ) -> fdo::Result<bool> {
+        log::info!(
+            "{} autostart for {appid}",
+            if enable { "Enabling" } else { "Disabling" }
+        );
+
+        let Some((autostart_dir, launch_entry)) = dirs::config_dir().map(|config| {
+            let autostart = config.join("autostart");
+            (
+                autostart.clone(),
+                autostart.join(format!("{appid}.desktop")),
+            )
+        }) else {
+            return Err(fdo::Error::FileNotFound("XDG_CONFIG_HOME".into()));
+        };
+
+        if !enable {
+            log::debug!("Removing autostart entry {}", launch_entry.display());
+            match fs::remove_file(&launch_entry).await {
+                Ok(()) => Ok(false),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    log::warn!(
+                        "Service asked to disable autostart for {appid} but the entry doesn't exist"
+                    );
+                    Ok(false)
+                }
+                Err(e) => {
+                    log::error!(
+                        "Error removing autostart entry for {appid}\n\tPath: {}\n\tError: {e}",
+                        launch_entry.display()
+                    );
+                    Err(fdo::Error::FileNotFound(format!(
+                        "{e}: ({})",
+                        launch_entry.display()
+                    )))
+                }
+            }
+        } else {
+            match fs::create_dir(&autostart_dir).await {
+                Ok(()) => log::debug!("Created autostart directory at {}", autostart_dir.display()),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+                Err(e) => {
+                    log::error!(
+                        "Error creating autostart directory: {e} (app: {appid}) (dir: {})",
+                        autostart_dir.display()
+                    );
+                    return Err(fdo::Error::IOError(format!(
+                        "{e}: ({})",
+                        autostart_dir.display()
+                    )));
+                }
+            }
+
+            let mut autostart_fde = freedesktop_desktop_entry::DesktopEntry {
+                appid: appid.clone(),
+                path: Default::default(),
+                groups: Default::default(),
+                ubuntu_gettext_domain: None,
+            };
+            autostart_fde.add_desktop_entry("Type".into(), "Application".into());
+            autostart_fde.add_desktop_entry("Name".into(), appid.clone());
+
+            log::debug!("{appid} autostart command line: {exec:?}");
+            let exec = match shlex::try_join(exec.iter().map(|term| term.as_str())) {
+                Ok(exec) => exec,
+                Err(e) => {
+                    log::error!(
+                        "Failed to sanitize command line for {appid}\n\tCommand: {exec:?}\n\tError: {e}"
+                    );
+                    return Err(fdo::Error::InvalidArgs(format!("{e}: {exec:?}")));
+                }
+            };
+            log::debug!("{appid} sanitized autostart command line: {exec}");
+            autostart_fde.add_desktop_entry("Exec".into(), exec);
+
+            // TODO: Replace with enumflags later when it's added as a dependency instead of adding
+            // it now for one bit (literally)
+            let dbus_activation = flags & 0x1 == 1;
+            if dbus_activation {
+                autostart_fde.add_desktop_entry("DBusActivatable".into(), "true".into());
+            }
+
+            // GNOME and KDE both set this key
+            autostart_fde.add_desktop_entry("X-Flatpak".into(), appid.clone());
+
+            Self::write_autostart(&launch_entry, &autostart_fde)
+                .inspect_err(|e| {
+                    log::error!(
+                        "Failed to write autostart entry for {appid} to `{}`: {e}",
+                        launch_entry.display()
+                    );
+                })
+                .map_err(|e| fdo::Error::IOError(format!("{e}: {}", launch_entry.display())))
+                .map_ok(|()| true)
+                .await
+        }
+    }
+
+    /// Emitted when running applications change their state
+    #[zbus(signal)]
+    pub async fn running_applications_changed(context: &SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+/// Internal implementation of [`Background::get_app_state`].
+async fn get_app_state_impl(
+    wayland_helper: WaylandHelper,
+) -> fdo::Result<HashMap<String, AppStatus>> {
+    let apps: HashMap<_, _> = cgroup::running_app_ids()
+        .await
+        .inspect_err(|e| log::error!("Error reading running apps from /proc: {e}"))
+        .map_err(|e| fdo::Error::IOError(e.to_string()))?
+        .into_iter()
+        // Apps launched by COSMIC/Flatpak are considered to be running in the
+        // background by default as they don't have open top levels.
+        .map(|app_id| (app_id, AppStatus::Background))
+        .chain(
+            wayland_helper
+                .toplevels()
+                .into_iter()
+                // Evaluate apps with open top levels next; overwrite any background app
+                // statuses if an app has open top levels.
+                .map(|info| {
+                    let status = if info
+                        .state
+                        .contains(&zcosmic_toplevel_handle_v1::State::Activated)
+                    {
+                        // Focused top levels
+                        AppStatus::Active
+                    } else {
+                        // Unfocused top levels
+                        AppStatus::Running
+                    };
+
+                    (info.app_id, status)
+                }),
+        )
+        .collect();
+
+    log::debug!("GetAppState is returning {} open apps", apps.len());
+    #[cfg(debug_assertions)]
+    log::trace!("App statuses: {apps:#?}");
+
+    Ok(apps)
+}
+
+/// Status of running apps for [`Background::get_app_state`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, zvariant::Type)]
+#[zvariant(signature = "v")]
+#[repr(u32)]
+enum AppStatus {
+    /// No open windows
+    Background = 0,
+    /// At least one opened window
+    Running,
+    /// In the foreground
+    Active,
+}
+
+impl serde::Serialize for AppStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        zvariant::Value::U32(*self as u32).serialize(serializer)
+    }
+}
+
+/// Result vardict for [`Background::notify_background`]
+#[derive(Clone, Copy, Debug, zvariant::SerializeDict, zvariant::Type)]
+#[zvariant(signature = "a{sv}")]
+struct NotifyBackgroundResult {
+    result: PermissionResponse,
+}
+
+/// Response for apps requesting to run in the background for [`Background::notify_background`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, zvariant::Type)]
+#[zvariant(signature = "u")]
+pub enum PermissionResponse {
+    /// Background permission denied
+    Deny = 0,
+    /// Background permission allowed whenever asked
+    Allow,
+    /// Background permission allowed for a single instance
+    AllowOnce,
+}
+
+/// Background permissions dialog state
+#[derive(Clone, Debug)]
+pub struct Args {
+    pub handle: zvariant::ObjectPath<'static>,
+    pub id: window::Id,
+    pub app_id: String,
+    /// Human-readable application name supplied by the portal frontend.
+    pub name: String,
+    tx: mpsc::Sender<PortalResponse<NotifyBackgroundResult>>,
+}
+
+/// Background permissions dialog response
+#[derive(Debug, Clone)]
+pub enum Msg {
+    Response {
+        id: window::Id,
+        choice: PermissionResponse,
+    },
+}
+
+/// Permissions dialog
+pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_, Msg> {
+    // Prefer the human-readable name; fall back to the app id if the frontend omitted it.
+    let name = portal
+        .background_prompts
+        .get(&id)
+        .map(|args| {
+            if args.name.is_empty() {
+                args.app_id.as_str()
+            } else {
+                args.name.as_str()
+            }
+        })
+        .unwrap_or("Invalid window id");
+
+    let dialog = widget::dialog()
+        .title(fl!("bg-dialog-title"))
+        .body(fl!("bg-dialog-body", appname = name))
+        .icon(widget::icon::from_name("dialog-warning-symbolic").size(64))
+        .primary_action(
+            widget::button::suggested(fl!("allow")).on_press(Msg::Response {
+                id,
+                choice: PermissionResponse::Allow,
+            }),
+        )
+        .secondary_action(
+            widget::button::suggested(fl!("allow-once")).on_press(Msg::Response {
+                id,
+                choice: PermissionResponse::AllowOnce,
+            }),
+        )
+        .tertiary_action(
+            widget::button::destructive(fl!("deny")).on_press(Msg::Response {
+                id,
+                choice: PermissionResponse::Deny,
+            }),
+        );
+
+    // Wrap in `autosize` so the layer surface sizes itself to the dialog. Without it the
+    // surface has no size (anchor is empty and no explicit size is set) and never renders.
+    autosize(dialog, widget::Id::new("background-dialog")).into()
+}
+
+/// Register Background dialog args for a specific window and open its surface.
+pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate::app::Msg> {
+    let id = args.id;
+    if let Some(old) = portal.background_prompts.insert(id, args) {
+        log::trace!(
+            "Replaced old dialog args for (window: {:?}) (app: {}) (handle: {})",
+            old.id,
+            old.app_id,
+            old.handle
+        )
+    }
+
+    get_dialog_surface(id)
+}
+
+pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
+    match msg {
+        Msg::Response { id, choice } => {
+            let Some(Args {
+                handle,
+                id,
+                app_id,
+                tx,
+                ..
+            }) = portal.background_prompts.remove(&id)
+            else {
+                log::warn!("Window {id:?} doesn't exist for some reason");
+                return cosmic::Task::none();
+            };
+
+            log::trace!(
+                "User selected {choice:?} for (app: {app_id}) (handle: {handle}) on window {id:?}"
+            );
+            // Return result to portal handler and update the config
+            tokio::spawn(async move {
+                if let Err(e) = tx
+                    .send(PortalResponse::Success(NotifyBackgroundResult {
+                        result: choice,
+                    }))
+                    .await
+                {
+                    log::error!(
+                        "Failed to send response from user to the background handler: {e:?}"
+                    );
+                }
+            });
+
+            destroy_dialog_surface(id)
+        }
+    }
+}
+
+/// Close a background prompt withdrawn by the frontend via `Request.Close`.
+pub fn cancel(portal: &mut CosmicPortal, id: window::Id) -> cosmic::Task<crate::app::Msg> {
+    if portal.background_prompts.remove(&id).is_some() {
+        log::trace!("Background prompt {id:?} cancelled by the portal frontend");
+        destroy_dialog_surface(id)
+    } else {
+        cosmic::Task::none()
+    }
+}
+
+fn get_dialog_surface(id: window::Id) -> cosmic::Task<crate::app::Msg> {
+    use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
+    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
+        IcedOutput, SctkLayerSurfaceSettings,
+    };
+    use cosmic_client_toolkit::sctk::shell::wlr_layer;
+
+    get_layer_surface(SctkLayerSurfaceSettings {
+        id,
+        layer: wlr_layer::Layer::Top,
+        keyboard_interactivity: wlr_layer::KeyboardInteractivity::OnDemand,
+        input_zone: None,
+        anchor: wlr_layer::Anchor::empty(),
+        output: IcedOutput::Active,
+        namespace: "background portal".to_string(),
+        ..Default::default()
+    })
+}
+
+fn destroy_dialog_surface(id: window::Id) -> cosmic::Task<crate::app::Msg> {
+    cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(id)
+}

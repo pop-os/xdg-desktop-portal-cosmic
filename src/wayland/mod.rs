@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
+use tokio::sync::broadcast;
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_buffer, wl_output, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
@@ -36,6 +37,8 @@ use crate::buffer;
 mod gbm_devices;
 mod toplevel;
 mod workspaces;
+
+const SUB_BACKLOG: usize = 10;
 
 #[derive(Clone)]
 pub struct DmabufHelper {
@@ -77,6 +80,7 @@ struct WaylandHelperInner {
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
     output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ExtForeignToplevelHandleV1>>>,
     toplevels: Mutex<Vec<ToplevelInfo>>,
+    event_tx: broadcast::Sender<Event>,
     qh: QueueHandle<AppData>,
     capturer: Capturer,
     wl_shm: wl_shm::WlShm,
@@ -237,6 +241,7 @@ impl WaylandHelper {
         let screencopy_state = ScreencopyState::new(&globals, &qh);
         let shm_state = Shm::bind(&globals, &qh).unwrap();
         let zwp_dmabuf = globals.bind(&qh, 4..=4, sctk::globals::GlobalData).ok();
+        let (event_tx, _) = broadcast::channel(SUB_BACKLOG);
         let wayland_helper = WaylandHelper {
             inner: Arc::new(WaylandHelperInner {
                 conn,
@@ -244,6 +249,7 @@ impl WaylandHelper {
                 output_infos: Mutex::new(HashMap::new()),
                 output_toplevels: Mutex::new(HashMap::new()),
                 toplevels: Mutex::new(Vec::new()),
+                event_tx,
                 qh: qh.clone(),
                 capturer: screencopy_state.capturer().clone(),
                 wl_shm: shm_state.wl_shm().clone(),
@@ -484,6 +490,23 @@ impl WaylandHelper {
             (),
         )
     }
+
+    /// Subscribe to compositor events such as toplevel changes.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.inner.event_tx.subscribe()
+    }
+
+    /// Notify subscribers that the set of toplevels changed (created or destroyed).
+    pub fn notify_toplevels_changed(&self) {
+        let _ = self.inner.event_tx.send(Event::ToplevelsUpdated);
+    }
+}
+
+/// Events broadcast from the compositor, such as toplevel changes.
+#[derive(Clone, Copy, Debug)]
+pub enum Event {
+    /// Toplevels were created or destroyed.
+    ToplevelsUpdated,
 }
 
 pub struct ShmImage<T: AsFd> {

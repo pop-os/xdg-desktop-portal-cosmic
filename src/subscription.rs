@@ -3,13 +3,16 @@
 use std::any::TypeId;
 use std::hash::Hash;
 
+use anyhow::Context;
 use cosmic::cosmic_theme::palette::Srgba;
 use cosmic::iced::Subscription;
 use futures::{SinkExt, StreamExt, future};
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::Receiver;
 use zbus::{Connection, fdo, zvariant};
 
 use crate::access::Access;
+use crate::background::Background;
 use crate::file_chooser::FileChooser;
 use crate::screencast::ScreenCast;
 use crate::screenshot::Screenshot;
@@ -25,17 +28,27 @@ pub enum Event {
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
+    Background(crate::background::Args),
+    CancelBackground(cosmic::iced::window::Id),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
     Config(config::Config),
-    Init(tokio::sync::mpsc::Sender<Event>),
+    Init {
+        tx: tokio::sync::mpsc::Sender<Event>,
+        tx_conf: tokio::sync::watch::Sender<config::Config>,
+        handler: Option<cosmic::cosmic_config::Config>,
+    },
     NameLost,
 }
 
 pub enum State {
     Init,
-    Waiting(Connection, Receiver<Event>),
+    Waiting(
+        Connection,
+        Receiver<Event>,
+        broadcast::Receiver<wayland::Event>,
+    ),
 }
 
 pub(crate) fn portal_subscription(
@@ -86,13 +99,19 @@ pub(crate) async fn process_changes(
     match state {
         State::Init => {
             let (tx, rx) = tokio::sync::mpsc::channel(10);
+            let (config, handler) = config::Config::load();
+            let (tx_conf, rx_conf) = tokio::sync::watch::channel(config);
 
             let connection = zbus::connection::Builder::session()?
                 .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
+                .serve_at(
+                    DBUS_PATH,
+                    Background::new(wayland_helper.clone(), tx.clone(), rx_conf.clone()),
+                )?
                 .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
                 .serve_at(
                     DBUS_PATH,
-                    Screenshot::new(wayland_helper.clone(), tx.clone()),
+                    Screenshot::new(wayland_helper.clone(), tx.clone(), rx_conf.clone()),
                 )?
                 .serve_at(
                     DBUS_PATH,
@@ -111,11 +130,41 @@ pub(crate) async fn process_changes(
 
             connection.request_name(DBUS_NAME).await?;
 
-            _ = output.send(Event::Init(tx)).await;
-            *state = State::Waiting(connection, rx);
+            let wl_rx = wayland_helper.subscribe();
+            _ = output
+                .send(Event::Init {
+                    tx,
+                    tx_conf,
+                    handler,
+                })
+                .await;
+            *state = State::Waiting(connection, rx, wl_rx);
         }
-        State::Waiting(conn, rx) => {
-            while let Some(event) = rx.recv().await {
+        State::Waiting(conn, rx, wl_rx) => {
+            loop {
+                let event = tokio::select! {
+                    event = rx.recv() => match event {
+                        Some(event) => event,
+                        None => break,
+                    },
+                    wl_event = wl_rx.recv() => {
+                        match wl_event {
+                            Ok(wayland::Event::ToplevelsUpdated) => {
+                                // Coalesce a burst of updates (e.g. the initial toplevel
+                                // enumeration) into a single signal.
+                                while !matches!(
+                                    wl_rx.try_recv(),
+                                    Err(broadcast::error::TryRecvError::Empty
+                                        | broadcast::error::TryRecvError::Closed)
+                                ) {}
+                                emit_running_applications_changed(conn).await?;
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => break,
+                        }
+                        continue;
+                    }
+                };
                 match event {
                     Event::Access(args) => {
                         if let Err(err) = output.send(Event::Access(args)).await {
@@ -141,6 +190,16 @@ pub(crate) async fn process_changes(
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
                             log::error!("Error sending screencast cancel: {:?}", err);
                         };
+                    }
+                    Event::Background(args) => {
+                        if let Err(err) = output.send(Event::Background(args)).await {
+                            log::error!("Error sending background event: {:?}", err);
+                        }
+                    }
+                    Event::CancelBackground(id) => {
+                        if let Err(err) = output.send(Event::CancelBackground(id)).await {
+                            log::error!("Error sending background cancel: {:?}", err);
+                        }
                     }
                     Event::Accent(a) => {
                         let object_server = conn.object_server();
@@ -202,13 +261,29 @@ pub(crate) async fn process_changes(
                             log::error!("Error sending config update: {:?}", err)
                         }
                     }
-                    Event::Init(_) => {}
+                    Event::Init { .. } => {}
                     Event::NameLost => {}
                 }
             }
+
+            // The loop only exits at shutdown once all senders drop. Park instead of
+            // returning so the outer subscription loop doesn't busy-loop back into Init.
+            future::pending::<()>().await;
         }
     };
     Ok(())
+}
+
+/// Emit the Background portal's `RunningApplicationsChanged` signal.
+async fn emit_running_applications_changed(conn: &Connection) -> anyhow::Result<()> {
+    let background = conn
+        .object_server()
+        .interface::<_, Background>(DBUS_PATH)
+        .await
+        .context("Connecting to Background portal D-Bus interface")?;
+    Background::running_applications_changed(background.signal_emitter())
+        .await
+        .context("Emitting RunningApplicationsChanged for the Background portal")
 }
 
 async fn name_lost_task(

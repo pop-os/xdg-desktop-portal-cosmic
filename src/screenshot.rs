@@ -23,6 +23,7 @@ use std::io;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::watch;
 
 use wayland_client::protocol::wl_output::WlOutput;
 use zbus::zvariant;
@@ -164,11 +165,20 @@ pub struct RectDimension {
 pub struct Screenshot {
     wayland_helper: WaylandHelper,
     tx: Sender<subscription::Event>,
+    rx_conf: watch::Receiver<config::Config>,
 }
 
 impl Screenshot {
-    pub fn new(wayland_helper: WaylandHelper, tx: Sender<subscription::Event>) -> Self {
-        Self { wayland_helper, tx }
+    pub fn new(
+        wayland_helper: WaylandHelper,
+        tx: Sender<subscription::Event>,
+        rx_conf: watch::Receiver<config::Config>,
+    ) -> Self {
+        Self {
+            wayland_helper,
+            tx,
+            rx_conf,
+        }
     }
 
     async fn interactive_toplevel_images(
@@ -448,12 +458,9 @@ impl Screenshot {
     ) -> PortalResponse<ScreenshotResult> {
         // connection.object_server().at(&handle, Request);
 
-        // The screenshot handler is created when the portal is launched, but requests are
-        // handled on demand. The handler does not store extra state such as a reference to the
-        // portal. Storing a copy of the config is unideal because it would remain out of date.
-        //
-        // The most straightforward solution is to load the screenshot config here
-        let config = config::Config::load().0.screenshot;
+        // borrow() is simpler here as we don't need &mut self and reading a possibly out of
+        // date config isn't a major issue
+        let config = self.rx_conf.borrow().screenshot.clone();
 
         // TODO create handle, show dialog
         let mut outputs = Vec::new();
@@ -646,6 +653,14 @@ pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_,
     .into()
 }
 
+fn portal_screenshot_config(portal: &CosmicPortal) -> config::screenshot::Screenshot {
+    portal
+        .tx_conf
+        .as_ref()
+        .map(|tx| tx.borrow().screenshot.clone())
+        .unwrap_or_default()
+}
+
 pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::app::Msg> {
     match msg {
         Msg::Capture => {
@@ -791,6 +806,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
         }
         Msg::Choice(c) => {
             let choice = (&c).into();
+            let current = portal_screenshot_config(portal);
             // Only save config when drag is finished to avoid disk writes on every mouse motion
             let should_save_config =
                 !matches!(&c, Choice::Rectangle(_, s) if *s != DragState::None);
@@ -803,7 +819,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     bottom: r.bottom,
                 })
             } else {
-                portal.config.screenshot.last_rectangle
+                current.last_rectangle
             };
 
             if let Some(args) = portal.screenshot_args.as_mut() {
@@ -816,7 +832,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                     config::screenshot::Screenshot {
                         choice,
                         last_rectangle: last_rect,
-                        ..portal.config.screenshot
+                        ..current
                     },
                 ))
             } else {
@@ -851,6 +867,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
             update_msg(portal, Msg::Capture)
         }
         Msg::Location(loc) => {
+            let current = portal_screenshot_config(portal);
             if let Some(args) = portal.screenshot_args.as_mut() {
                 let loc = match loc {
                     loc if loc == ImageSaveLocation::Clipboard as usize => {
@@ -868,8 +885,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> cosmic::Task<crate::ap
                 cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
                     config::screenshot::Screenshot {
                         save_location: loc,
-                        choice: (&mut portal.config.screenshot.choice).into(),
-                        last_rectangle: portal.config.screenshot.last_rectangle,
+                        ..current
                     },
                 ))
             } else {

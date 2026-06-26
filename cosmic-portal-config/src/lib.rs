@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+pub mod background;
 pub mod screenshot;
 
 use cosmic_config::CosmicConfigEntry;
 use cosmic_config::cosmic_config_derive::CosmicConfigEntry;
 use serde::{Deserialize, Serialize};
 
+use background::Background;
 use screenshot::Screenshot;
 
 pub const APP_ID: &str = "com.system76.CosmicPortal";
@@ -18,6 +20,8 @@ pub const CONFIG_VERSION: u64 = 1;
 pub struct Config {
     /// Interactive screenshot settings
     pub screenshot: Screenshot,
+    /// Background portal settings
+    pub background: Background,
 }
 
 impl Config {
