@@ -124,6 +124,7 @@ fn create_dialog() -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     cosmic::surface::surface_task::<crate::app::Msg>(cosmic::surface::action::simple_layer_shell::<
         crate::app::Msg,
     >(
+        || Default::default(),
         move || SctkLayerSurfaceSettings {
             id: *SCREENCAST_ID,
             keyboard_interactivity: KeyboardInteractivity::Exclusive,
