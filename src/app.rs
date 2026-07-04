@@ -76,7 +76,7 @@ pub enum Msg {
     Screencast(screencast_dialog::Msg),
     RemoteDesktop(remote_desktop_dialog::Msg),
     Print(print::Msg),
-    Portal(subscription::Event),
+    Portal(Box<subscription::Event>),
     Output(OutputEvent, WlOutput),
     ConfigSetScreenshot(config::screenshot::Screenshot),
     /// Update config from external changes
@@ -206,7 +206,7 @@ impl cosmic::Application for CosmicPortal {
         match message {
             Msg::Access(m) => access::update_msg(self, m),
             Msg::FileChooser(id, m) => file_chooser::update_msg(self, id, m),
-            Msg::Portal(e) => match e {
+            Msg::Portal(e) => match *e {
                 subscription::Event::Access(args) => access::update_args(self, args),
                 subscription::Event::FileChooser(args) => file_chooser::update_args(self, args),
                 subscription::Event::Screenshot(args) => screenshot::update_args(self, args),
@@ -221,7 +221,7 @@ impl cosmic::Application for CosmicPortal {
                     remote_desktop_dialog::cancel(self, handle).map(cosmic::Action::App)
                 }
                 subscription::Event::Print(args) => {
-                    print::update_args(self, args).map(cosmic::Action::App)
+                    print::update_args(self, *args).map(cosmic::Action::App)
                 }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)

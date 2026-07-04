@@ -478,16 +478,16 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                 dialog
                     .printers
                     .retain(|p| !(p.id == id && p.backend == backend));
-                if let Some(sel) = dialog.selected_printer_index {
-                    if sel >= dialog.printers.len() {
-                        if dialog.printers.is_empty() {
-                            dialog.selected_printer_index = None;
-                            dialog.printer_options = None;
-                            dialog.printer_media = None;
-                        } else {
-                            dialog.selected_printer_index = Some(0);
-                            return fetch_printer_details(&dialog.printers[0]);
-                        }
+                if let Some(sel) = dialog.selected_printer_index
+                    && sel >= dialog.printers.len()
+                {
+                    if dialog.printers.is_empty() {
+                        dialog.selected_printer_index = None;
+                        dialog.printer_options = None;
+                        dialog.printer_media = None;
+                    } else {
+                        dialog.selected_printer_index = Some(0);
+                        return fetch_printer_details(&dialog.printers[0]);
                     }
                 }
             }
@@ -529,7 +529,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                     .duplex_values
                     .iter()
                     .position(|v| *v == opt.default_value)
-                    .or_else(|| {
+                    .or({
                         if dialog.duplex_values.is_empty() {
                             None
                         } else {
@@ -548,7 +548,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                     .media_source_values
                     .iter()
                     .position(|v| *v == opt.default_value)
-                    .or_else(|| {
+                    .or({
                         if dialog.media_source_values.is_empty() {
                             None
                         } else {
@@ -567,7 +567,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                     .media_type_values
                     .iter()
                     .position(|v| *v == opt.default_value)
-                    .or_else(|| {
+                    .or({
                         if dialog.media_type_values.is_empty() {
                             None
                         } else {
@@ -586,7 +586,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                     .print_quality_values
                     .iter()
                     .position(|v| *v == opt.default_value)
-                    .or_else(|| {
+                    .or({
                         if dialog.print_quality_values.is_empty() {
                             None
                         } else {
@@ -617,7 +617,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                     .media
                     .iter()
                     .position(|m| m.name == opt.default_value)
-                    .or_else(|| {
+                    .or({
                         if media.media.is_empty() {
                             None
                         } else {
@@ -1501,10 +1501,10 @@ pub fn apply_xdg_hints(
     page_setup: &HashMap<String, zvariant::OwnedValue>,
 ) {
     // n-copies
-    if let Some(s) = get_str(settings, "n-copies") {
-        if let Ok(n) = s.parse::<u32>() {
-            dialog.copies = n;
-        }
+    if let Some(s) = get_str(settings, "n-copies")
+        && let Ok(n) = s.parse::<u32>()
+    {
+        dialog.copies = n;
     }
 
     // use-color
@@ -1562,23 +1562,23 @@ pub fn apply_xdg_hints(
     }
 
     // scale
-    if let Some(s) = get_str(settings, "scale") {
-        if let Ok(n) = s.parse::<u32>() {
-            if n == 100 {
-                dialog.scaling = ScalingMode::Auto;
-            } else {
-                dialog.scaling = ScalingMode::Custom;
-                dialog.custom_scaling_input = n;
-            }
+    if let Some(s) = get_str(settings, "scale")
+        && let Ok(n) = s.parse::<u32>()
+    {
+        if n == 100 {
+            dialog.scaling = ScalingMode::Auto;
+        } else {
+            dialog.scaling = ScalingMode::Custom;
+            dialog.custom_scaling_input = n;
         }
     }
 
     // number-up
-    if let Some(s) = get_str(settings, "number-up") {
-        if let Ok(n) = s.parse::<u32>() {
-            let pps = [1u32, 2, 4, 6, 9, 16];
-            dialog.pages_per_sheet_index = pps.iter().position(|&v| v == n);
-        }
+    if let Some(s) = get_str(settings, "number-up")
+        && let Ok(n) = s.parse::<u32>()
+    {
+        let pps = [1u32, 2, 4, 6, 9, 16];
+        dialog.pages_per_sheet_index = pps.iter().position(|&v| v == n);
     }
 
     // number-up-layout
@@ -1626,10 +1626,10 @@ pub fn apply_xdg_hints(
     }
 
     // paper-format (paper size index)
-    if let Some(name) = get_str(settings, "paper-format") {
-        if let Some(media) = &dialog.printer_media {
-            dialog.selected_paper_size_index = media.media.iter().position(|m| m.name == name);
-        }
+    if let Some(name) = get_str(settings, "paper-format")
+        && let Some(media) = &dialog.printer_media
+    {
+        dialog.selected_paper_size_index = media.media.iter().position(|m| m.name == name);
     }
 
     // margins
@@ -1657,17 +1657,17 @@ pub fn apply_xdg_hints(
 
     // App-specific keys, Firefox seems to be using `gtk-print-backgrounds`
     // and `gtk-print-header-footer`
-    if let Some(val) = settings.get("gtk-print-backgrounds") {
-        if let Ok(b) = bool::try_from(val.clone()) {
-            dialog.show_print_background_toggle = true;
-            dialog.print_background = b;
-        }
+    if let Some(val) = settings.get("gtk-print-backgrounds")
+        && let Ok(b) = bool::try_from(val.clone())
+    {
+        dialog.show_print_background_toggle = true;
+        dialog.print_background = b;
     }
-    if let Some(val) = settings.get("gtk-print-header-footer") {
-        if let Ok(b) = bool::try_from(val.clone()) {
-            dialog.show_print_header_footer_toggle = true;
-            dialog.print_header_footer = b;
-        }
+    if let Some(val) = settings.get("gtk-print-header-footer")
+        && let Ok(b) = bool::try_from(val.clone())
+    {
+        dialog.show_print_header_footer_toggle = true;
+        dialog.print_header_footer = b;
     }
 }
 
@@ -1789,41 +1789,40 @@ pub fn build_xdg_response(
     }
 
     // default-source
-    if let Some(idx) = dialog.paper_tray_index {
-        if let Some(val) = dialog.media_source_values.get(idx) {
-            settings.insert("default-source".into(), to_owned_value(val.clone()));
-        }
+    if let Some(idx) = dialog.paper_tray_index
+        && let Some(val) = dialog.media_source_values.get(idx)
+    {
+        settings.insert("default-source".into(), to_owned_value(val.clone()));
     }
 
     // media-type
-    if let Some(idx) = dialog.paper_type_index {
-        if let Some(val) = dialog.media_type_values.get(idx) {
-            settings.insert("media-type".into(), to_owned_value(val.clone()));
-        }
+    if let Some(idx) = dialog.paper_type_index
+        && let Some(val) = dialog.media_type_values.get(idx)
+    {
+        settings.insert("media-type".into(), to_owned_value(val.clone()));
     }
 
     // paper-format / paper-width / paper-height
-    if let Some(idx) = dialog.selected_paper_size_index {
-        if let Some(m) = dialog
+    if let Some(idx) = dialog.selected_paper_size_index
+        && let Some(m) = dialog
             .printer_media
             .as_ref()
             .and_then(|mc| mc.media.get(idx))
-        {
-            settings.insert("paper-format".into(), to_owned_value(m.name.clone()));
-            settings.insert(
-                "paper-width".into(),
-                to_owned_value((m.width as f64 / 100.0).to_string()),
-            );
-            settings.insert(
-                "paper-height".into(),
-                to_owned_value((m.length as f64 / 100.0).to_string()),
-            );
-            page_setup.insert("PPDName".into(), to_owned_value(m.name.clone()));
-            page_setup.insert("Name".into(), to_owned_value(m.name.clone()));
-            page_setup.insert("DisplayName".into(), to_owned_value(m.name.clone()));
-            page_setup.insert("Width".into(), to_owned_value(m.width as f64 / 100.0));
-            page_setup.insert("Height".into(), to_owned_value(m.length as f64 / 100.0));
-        }
+    {
+        settings.insert("paper-format".into(), to_owned_value(m.name.clone()));
+        settings.insert(
+            "paper-width".into(),
+            to_owned_value((m.width as f64 / 100.0).to_string()),
+        );
+        settings.insert(
+            "paper-height".into(),
+            to_owned_value((m.length as f64 / 100.0).to_string()),
+        );
+        page_setup.insert("PPDName".into(), to_owned_value(m.name.clone()));
+        page_setup.insert("Name".into(), to_owned_value(m.name.clone()));
+        page_setup.insert("DisplayName".into(), to_owned_value(m.name.clone()));
+        page_setup.insert("Width".into(), to_owned_value(m.width as f64 / 100.0));
+        page_setup.insert("Height".into(), to_owned_value(m.length as f64 / 100.0));
     }
 
     // orientation for page_setup
@@ -1903,10 +1902,10 @@ pub fn build_cpdb_settings(dialog: &PrintDialog) -> Vec<(String, String)> {
     ));
 
     // sides
-    if let Some(idx) = dialog.duplex_index {
-        if let Some(val) = dialog.duplex_values.get(idx) {
-            out.push(("sides".into(), val.clone()));
-        }
+    if let Some(idx) = dialog.duplex_index
+        && let Some(val) = dialog.duplex_values.get(idx)
+    {
+        out.push(("sides".into(), val.clone()));
     }
 
     // copies
@@ -1934,10 +1933,10 @@ pub fn build_cpdb_settings(dialog: &PrintDialog) -> Vec<(String, String)> {
     ));
 
     // print-quality
-    if let Some(idx) = dialog.print_quality_index {
-        if let Some(val) = dialog.print_quality_values.get(idx) {
-            out.push(("print-quality".into(), val.clone()));
-        }
+    if let Some(idx) = dialog.print_quality_index
+        && let Some(val) = dialog.print_quality_values.get(idx)
+    {
+        out.push(("print-quality".into(), val.clone()));
     }
 
     // print-scaling
@@ -1959,26 +1958,25 @@ pub fn build_cpdb_settings(dialog: &PrintDialog) -> Vec<(String, String)> {
     out.push(("page-border".into(), dialog.border.as_cpdb_str().into()));
 
     // media
-    if let Some(idx) = dialog.selected_paper_size_index {
-        if let Some(m) = dialog
+    if let Some(idx) = dialog.selected_paper_size_index
+        && let Some(m) = dialog
             .printer_media
             .as_ref()
             .and_then(|mc| mc.media.get(idx))
-        {
-            out.push(("media".into(), m.name.clone()));
-        }
+    {
+        out.push(("media".into(), m.name.clone()));
     }
 
     // media-source / media-type
-    if let Some(idx) = dialog.paper_tray_index {
-        if let Some(val) = dialog.media_source_values.get(idx) {
-            out.push(("media-source".into(), val.clone()));
-        }
+    if let Some(idx) = dialog.paper_tray_index
+        && let Some(val) = dialog.media_source_values.get(idx)
+    {
+        out.push(("media-source".into(), val.clone()));
     }
-    if let Some(idx) = dialog.paper_type_index {
-        if let Some(val) = dialog.media_type_values.get(idx) {
-            out.push(("media-type".into(), val.clone()));
-        }
+    if let Some(idx) = dialog.paper_type_index
+        && let Some(val) = dialog.media_type_values.get(idx)
+    {
+        out.push(("media-type".into(), val.clone()));
     }
 
     // margins
@@ -2092,14 +2090,14 @@ pub fn sync_print_models(portal: &mut CosmicPortal) {
             .build();
         let page_active = page_selection_model.iter().find(|&id| {
             if let Some(data) = page_selection_model.data::<PageSetSelection>(id) {
-                match (data, &dialog.page_selection) {
-                    (PageSetSelection::All, PageSetSelection::All) => true,
-                    (PageSetSelection::Current, PageSetSelection::Current) => true,
-                    (PageSetSelection::Odd, PageSetSelection::Odd) => true,
-                    (PageSetSelection::Even, PageSetSelection::Even) => true,
-                    (PageSetSelection::Custom(_), PageSetSelection::Custom(_)) => true,
-                    _ => false,
-                }
+                matches!(
+                    (data, &dialog.page_selection),
+                    (PageSetSelection::All, PageSetSelection::All)
+                        | (PageSetSelection::Current, PageSetSelection::Current)
+                        | (PageSetSelection::Odd, PageSetSelection::Odd)
+                        | (PageSetSelection::Even, PageSetSelection::Even)
+                        | (PageSetSelection::Custom(_), PageSetSelection::Custom(_))
+                )
             } else {
                 false
             }

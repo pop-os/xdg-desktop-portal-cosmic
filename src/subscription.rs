@@ -29,7 +29,7 @@ pub enum Event {
     CancelScreencast(zvariant::ObjectPath<'static>),
     RemoteDesktop(crate::remote_desktop_dialog::Args),
     CancelRemoteDesktop(zvariant::ObjectPath<'static>),
-    Print(crate::print::PrintArgs),
+    Print(Box<crate::print::PrintArgs>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),

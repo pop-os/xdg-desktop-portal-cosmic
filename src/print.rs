@@ -81,7 +81,7 @@ impl Print {
 
         if let Err(err) = self
             .tx
-            .send(subscription::Event::Print(PrintArgs {
+            .send(subscription::Event::Print(Box::new(PrintArgs {
                 handle: handle.to_owned(),
                 app_id: app_id.to_string(),
                 title: title.to_string(),
@@ -94,7 +94,7 @@ impl Print {
                     options,
                     tx,
                 }),
-            }))
+            })))
             .await
         {
             log::error!("Failed to send print portal request: {err}");
@@ -132,7 +132,7 @@ impl Print {
 
         if let Err(err) = self
             .tx
-            .send(subscription::Event::Print(PrintArgs {
+            .send(subscription::Event::Print(Box::new(PrintArgs {
                 handle: handle.to_owned(),
                 app_id: app_id.to_string(),
                 title: title.to_string(),
@@ -144,7 +144,7 @@ impl Print {
                     options,
                     tx,
                 }),
-            }))
+            })))
             .await
         {
             log::error!("Failed to send print portal request: {err}");
