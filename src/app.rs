@@ -1,5 +1,5 @@
 use crate::{
-    access, config, file_chooser, remote_desktop_dialog, screencast_dialog, screenshot,
+    access, config, file_chooser, print, remote_desktop_dialog, screencast_dialog, screenshot,
     subscription,
 };
 use cosmic::iced::core::event::wayland::OutputEvent;
@@ -8,6 +8,7 @@ use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedMargin, SctkLayerSurfaceSettings,
 };
 use cosmic::iced::{Event, Length, Limits, Subscription, event, window};
+use cosmic::widget::segmented_button::{self, SingleSelect};
 use cosmic::{Task, app, cosmic_config, widget};
 use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
@@ -40,8 +41,12 @@ pub struct CosmicPortal {
 
     pub screenshot_args: Option<screenshot::Args>,
     pub screencast_args: Option<screencast_dialog::Args>,
-    pub screencast_tab_model:
-        widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
+    pub screencast_tab_model: segmented_button::Model<SingleSelect>,
+    pub print_args: Option<print::PrintArgs>,
+    pub print_color_model: segmented_button::Model<SingleSelect>,
+    pub print_orientation_model: segmented_button::Model<SingleSelect>,
+    pub print_layout_direction_model: segmented_button::Model<SingleSelect>,
+    pub print_page_selection_model: segmented_button::Model<SingleSelect>,
     pub remote_desktop_args: Option<remote_desktop_dialog::Args>,
     pub location_options: Vec<String>,
     pub prev_rectangle: Option<screenshot::Rect>,
@@ -70,6 +75,7 @@ pub enum Msg {
     Screenshot(screenshot::Msg),
     Screencast(screencast_dialog::Msg),
     RemoteDesktop(remote_desktop_dialog::Msg),
+    Print(print::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
     ConfigSetScreenshot(config::screenshot::Screenshot),
@@ -120,6 +126,11 @@ impl cosmic::Application for CosmicPortal {
                 file_choosers: Default::default(),
                 screenshot_args: Default::default(),
                 screencast_args: Default::default(),
+                print_args: Default::default(),
+                print_color_model: Default::default(),
+                print_orientation_model: Default::default(),
+                print_layout_direction_model: Default::default(),
+                print_page_selection_model: Default::default(),
                 screencast_tab_model: Default::default(),
                 remote_desktop_args: Default::default(),
                 location_options: Vec::new(),
@@ -164,8 +175,30 @@ impl cosmic::Application for CosmicPortal {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
+        } else if Some(id) == self.print_args.as_ref().map(|args| args.window_id) {
+            print::view(self).map(Msg::Print)
         } else {
             file_chooser::view(self, id)
+        }
+    }
+
+    fn on_close_requested(&self, id: window::Id) -> Option<Self::Message> {
+        if Some(id) == self.print_args.as_ref().map(|args| args.window_id) {
+            Some(Msg::Print(print::Msg::Dialog(
+                crate::print_dialog::Msg::Cancel,
+            )))
+        } else {
+            None
+        }
+    }
+
+    fn on_close_requested(&self, id: window::Id) -> Option<Self::Message> {
+        if Some(id) == self.print_args.as_ref().map(|args| args.window_id) {
+            Some(Msg::Print(print::Msg::Dialog(
+                crate::print_dialog::Msg::Cancel,
+            )))
+        } else {
+            None
         }
     }
 
@@ -187,6 +220,9 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::CancelRemoteDesktop(handle) => {
                     remote_desktop_dialog::cancel(self, handle).map(cosmic::Action::App)
                 }
+                subscription::Event::Print(args) => {
+                    print::update_args(self, args).map(cosmic::Action::App)
+                }
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
@@ -205,6 +241,7 @@ impl cosmic::Application for CosmicPortal {
             Msg::RemoteDesktop(m) => {
                 remote_desktop_dialog::update_msg(self, m).map(cosmic::Action::App)
             }
+            Msg::Print(m) => print::update_msg(self, m).map(cosmic::Action::App),
             Msg::Output(o_event, wl_output) => {
                 if self.wayland_helper.is_none()
                     && let Some(backend) = wl_output.backend().upgrade()
@@ -348,6 +385,13 @@ impl cosmic::Application for CosmicPortal {
                     .subscription()
                     .with(id)
                     .map(|(id, x)| Msg::FileChooser(id, x)),
+            );
+        }
+        if let Some(args) = &self.print_args {
+            subscriptions.push(
+                args.dialog
+                    .subscription()
+                    .map(|x| Msg::Print(print::Msg::Dialog(x))),
             );
         }
         Subscription::batch(subscriptions)
