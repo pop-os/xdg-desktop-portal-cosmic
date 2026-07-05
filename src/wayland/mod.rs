@@ -265,13 +265,30 @@ impl WaylandHelper {
             toplevel_info_state: ToplevelInfoState::new(&registry_state, &qh),
             registry_state,
         };
-        event_queue.flush().unwrap();
+        if let Err(err) = event_queue.flush() {
+            log::error!("Failed initial flush of Wayland event queue: {err}");
+            std::process::exit(1);
+        }
 
-        event_queue.roundtrip(&mut data).unwrap();
+        if let Err(err) = event_queue.roundtrip(&mut data) {
+            log::error!("Failed initial roundtrip of Wayland event queue: {err}");
+            std::process::exit(1);
+        }
 
         thread::spawn(move || {
             loop {
-                event_queue.blocking_dispatch(&mut data).unwrap();
+                if let Err(err) = event_queue.blocking_dispatch(&mut data) {
+                    // The compositor connection is gone (e.g. a client disconnected
+                    // abruptly mid-request, or the compositor itself went away).
+                    // There's nothing more this thread can usefully do with a dead
+                    // connection, so log and exit cleanly instead of panicking the
+                    // whole process (this binary is built with `panic = "abort"`,
+                    // which previously turned any such error into a SIGABRT that
+                    // took down the entire portal, and with it any in-flight
+                    // requests from unrelated clients).
+                    log::error!("Wayland event queue dispatch failed, exiting: {err}");
+                    std::process::exit(1);
+                }
             }
         });
 
