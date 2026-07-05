@@ -506,6 +506,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                     p.accepting_jobs = accepting_jobs;
                 }
             }
+            _ => {}
         },
         Msg::PrinterSelected(index) => {
             if index < dialog.printers.len() {
