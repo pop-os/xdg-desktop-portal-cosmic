@@ -92,4 +92,3 @@ cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", 
 [profile.release]
 opt-level = 3
 lto = "thin"
-panic = "abort"
