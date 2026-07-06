@@ -147,6 +147,7 @@ impl AccessDialogArgs {
             self.access_id = id;
             cosmic::surface::surface_task::<crate::app::Msg>(
                 cosmic::surface::action::simple_layer_shell::<crate::app::Msg>(
+                    || Default::default(),
                     move || {
                         SctkLayerSurfaceSettings {
                         id: id,

@@ -959,6 +959,7 @@ pub fn update_args(
                     let name = name.clone();
                     cosmic::surface::surface_task::<crate::app::Msg>(
                 cosmic::surface::action::simple_layer_shell::<crate::app::Msg>(
+                    || Default::default(),
                         move || {
                             SctkLayerSurfaceSettings {
                                     id: id,
