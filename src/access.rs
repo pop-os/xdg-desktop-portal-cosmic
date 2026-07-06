@@ -2,9 +2,7 @@
 
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
-use cosmic::iced::platform_specific::shell::commands::layer_surface::{
-    destroy_layer_surface, get_layer_surface,
-};
+use cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
@@ -147,10 +145,10 @@ impl AccessDialogArgs {
             self.access_id = id;
             cosmic::surface::surface_task::<crate::app::Msg>(
                 cosmic::surface::action::simple_layer_shell::<crate::app::Msg>(
-                    || Default::default(),
+                    Default::default,
                     move || {
                         SctkLayerSurfaceSettings {
-                        id: id,
+                        id,
                         layer: cosmic_client_toolkit::sctk::shell::wlr_layer::Layer::Top,
                         keyboard_interactivity:
                             cosmic_client_toolkit::sctk::shell::wlr_layer::KeyboardInteractivity::OnDemand,

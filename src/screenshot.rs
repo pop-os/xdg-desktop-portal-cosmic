@@ -4,9 +4,7 @@ use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
-use cosmic::iced::platform_specific::shell::commands::layer_surface::{
-    destroy_layer_surface, get_layer_surface,
-};
+use cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface;
 use cosmic::iced::runtime::clipboard;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
@@ -954,15 +952,15 @@ pub fn update_args(
                 |OutputState {
                      output, id, name, ..
                  }| {
-                    let id = id.clone();
+                    let id = *id;
                     let output = output.clone();
                     let name = name.clone();
                     cosmic::surface::surface_task::<crate::app::Msg>(
                 cosmic::surface::action::simple_layer_shell::<crate::app::Msg>(
-                    || Default::default(),
+                    Default::default,
                         move || {
                             SctkLayerSurfaceSettings {
-                                    id: id,
+                                    id,
                                     layer: Layer::Overlay,
                                     keyboard_interactivity: KeyboardInteractivity::Exclusive,
                                     input_zone: None,

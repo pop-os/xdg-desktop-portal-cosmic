@@ -10,17 +10,17 @@ use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::{self, window};
 use fde::IconSource;
 
+use cosmic::desktop::fde;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
-    KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,
+    KeyboardInteractivity, Layer, destroy_layer_surface,
 };
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::SctkLayerSurfaceSettings;
 use cosmic::widget::autosize;
 use cosmic::{theme, widget};
 use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
-use freedesktop_desktop_entry as fde;
-use freedesktop_desktop_entry::unicase::Ascii;
-use freedesktop_desktop_entry::{DesktopEntry, get_languages_from_env};
+use fde::unicase::Ascii;
+use fde::{DesktopEntry, get_languages_from_env};
 use std::mem;
 use std::sync::LazyLock;
 use tokio::sync::mpsc;
@@ -124,7 +124,7 @@ fn create_dialog() -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     cosmic::surface::surface_task::<crate::app::Msg>(cosmic::surface::action::simple_layer_shell::<
         crate::app::Msg,
     >(
-        || Default::default(),
+        Default::default,
         move || SctkLayerSurfaceSettings {
             id: *SCREENCAST_ID,
             keyboard_interactivity: KeyboardInteractivity::Exclusive,

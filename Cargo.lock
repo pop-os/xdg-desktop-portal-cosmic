@@ -9119,7 +9119,6 @@ dependencies = [
  "cosmic-protocols",
  "dirs 6.0.0",
  "env_logger",
- "freedesktop-desktop-entry",
  "futures",
  "gbm",
  "gstreamer",
