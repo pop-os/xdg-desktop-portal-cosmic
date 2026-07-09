@@ -341,6 +341,10 @@ fn main() -> cosmic::iced::Result {
         .with(env_filter)
         .try_init()
         .unwrap();
+
+    log_panics::init();
+
     localize::localize();
+
     app::run()
 }
