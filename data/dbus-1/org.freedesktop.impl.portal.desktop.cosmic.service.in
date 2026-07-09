@@ -1,3 +1,4 @@
 [D-BUS Service]
 Name=org.freedesktop.impl.portal.desktop.cosmic
 Exec=@libexecdir@/xdg-desktop-portal-cosmic
+SystemdService=org.freedesktop.impl.portal.desktop.cosmic.service
