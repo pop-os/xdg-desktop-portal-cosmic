@@ -221,7 +221,7 @@ impl ScreenCast {
                     if let Ok(persisted_capture_sources) = restore_data.try_into() {
                         session_data.persisted_capture_sources = Some(persisted_capture_sources);
                     } else {
-                        log::warn!("unrecognized screencopy restore data: {:?}", restore_data);
+                        tracing::warn!("unrecognized screencopy restore data: {:?}", restore_data);
                     }
                 }
                 PortalResponse::Success(HashMap::new())
@@ -264,7 +264,7 @@ impl ScreenCast {
             // XXX
             let outputs = self.wayland_helper.outputs();
             if outputs.is_empty() {
-                log::error!("No output");
+                tracing::error!("No output");
                 return PortalResponse::Other;
             }
 
@@ -345,7 +345,7 @@ impl ScreenCast {
                 match res {
                     Ok(thread) => screencast_threads.push(thread),
                     Err(err) => {
-                        log::error!("Screencast thread failed: {}", err);
+                        tracing::error!("Screencast thread failed: {}", err);
                         failed = true;
                     }
                 }

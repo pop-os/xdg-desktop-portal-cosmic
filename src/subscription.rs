@@ -57,7 +57,7 @@ pub(crate) fn portal_subscription(
                 let mut state = State::Init;
                 loop {
                     if let Err(err) = process_changes(&mut state, &mut output, &helper).await {
-                        log::debug!("Portal Subscription Error: {:?}", err);
+                        tracing::debug!("Portal Subscription Error: {:?}", err);
                         future::pending::<()>().await;
                     }
                 }
@@ -70,7 +70,7 @@ pub(crate) fn portal_subscription(
         )
         .map(|update| {
             for error in update.errors {
-                log::warn!("Error updating config: {:?}", error);
+                tracing::warn!("Error updating config: {:?}", error);
             }
 
             Event::Config(update.config)
@@ -119,27 +119,27 @@ pub(crate) async fn process_changes(
                 match event {
                     Event::Access(args) => {
                         if let Err(err) = output.send(Event::Access(args)).await {
-                            log::error!("Error sending access event: {:?}", err);
+                            tracing::error!("Error sending access event: {:?}", err);
                         };
                     }
                     Event::FileChooser(args) => {
                         if let Err(err) = output.send(Event::FileChooser(args)).await {
-                            log::error!("Error sending access event: {:?}", err);
+                            tracing::error!("Error sending access event: {:?}", err);
                         };
                     }
                     Event::Screenshot(args) => {
                         if let Err(err) = output.send(Event::Screenshot(args)).await {
-                            log::error!("Error sending screenshot event: {:?}", err);
+                            tracing::error!("Error sending screenshot event: {:?}", err);
                         };
                     }
                     Event::Screencast(args) => {
                         if let Err(err) = output.send(Event::Screencast(args)).await {
-                            log::error!("Error sending screencast event: {:?}", err);
+                            tracing::error!("Error sending screencast event: {:?}", err);
                         };
                     }
                     Event::CancelScreencast(handle) => {
                         if let Err(err) = output.send(Event::CancelScreencast(handle)).await {
-                            log::error!("Error sending screencast cancel: {:?}", err);
+                            tracing::error!("Error sending screencast cancel: {:?}", err);
                         };
                     }
                     Event::Accent(a) => {
@@ -199,7 +199,7 @@ pub(crate) async fn process_changes(
                     }
                     Event::Config(config) => {
                         if let Err(err) = output.send(Event::Config(config)).await {
-                            log::error!("Error sending config update: {:?}", err)
+                            tracing::error!("Error sending config update: {:?}", err)
                         }
                     }
                     Event::Init(_) => {}

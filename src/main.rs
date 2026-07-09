@@ -2,6 +2,9 @@ use cosmic::cosmic_theme::palette::Srgba;
 use futures::future::{AbortHandle, abortable};
 use std::collections::HashMap;
 use std::future::Future;
+use tracing::metadata::LevelFilter;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, fmt};
 use zbus::object_server::{InterfaceRef, SignalEmitter};
 use zbus::zvariant::{self, OwnedValue};
 
@@ -329,7 +332,15 @@ impl Settings {
 }
 
 fn main() -> cosmic::iced::Result {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    let trace = tracing_subscriber::registry();
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::WARN.into())
+        .from_env_lossy();
+    trace
+        .with(fmt::layer())
+        .with(env_filter)
+        .try_init()
+        .unwrap();
     localize::localize();
     app::run()
 }
