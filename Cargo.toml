@@ -5,8 +5,9 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 
 [features]
-default = []
+default = ["systemd"]
 wgpu = ["libcosmic/wgpu"]
+systemd = ["dep:tracing-journald"]
 
 [workspace]
 members = ["cosmic-portal-config"]
@@ -54,6 +55,7 @@ tempfile = "3.27.0"
 tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.14" }
 tracing = "0.1.44"
+tracing-journald = { version = "0.3.2", optional = true }
 tracing-subscriber = "0.3.23"
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
 
