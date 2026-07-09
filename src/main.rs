@@ -336,6 +336,23 @@ fn main() -> cosmic::iced::Result {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::WARN.into())
         .from_env_lossy();
+    #[cfg(feature = "systemd")]
+    if let Ok(journald) = tracing_journald::layer() {
+        trace
+            .with(journald)
+            .with(fmt::layer())
+            .with(env_filter)
+            .try_init()
+            .unwrap();
+    } else {
+        trace
+            .with(fmt::layer())
+            .with(env_filter)
+            .try_init()
+            .unwrap();
+        tracing::warn!("failed to connect to journald");
+    }
+    #[cfg(not(feature = "systemd"))]
     trace
         .with(fmt::layer())
         .with(env_filter)
