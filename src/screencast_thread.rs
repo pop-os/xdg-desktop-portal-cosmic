@@ -156,11 +156,11 @@ impl StreamData {
         let gbm = match gbm_devices.gbm_device(dev) {
             Ok(Some((_, gbm))) => gbm,
             Ok(None) => {
-                log::error!("Failed to find gbm device for '{dev}'");
+                tracing::error!("Failed to find gbm device for '{dev}'");
                 return None;
             }
             Err(err) => {
-                log::error!("Failed to open gbm device for '{dev}': {err}");
+                tracing::error!("Failed to open gbm device for '{dev}': {err}");
                 return None;
             }
         };
@@ -173,7 +173,7 @@ impl StreamData {
             ) {
                 Ok(_bo) => Some(gbm::Modifier::Invalid),
                 Err(err) => {
-                    log::error!(
+                    tracing::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
                         err
                     );
@@ -190,7 +190,7 @@ impl StreamData {
             ) {
                 Ok(bo) => Some(bo.modifier()),
                 Err(err) => {
-                    log::error!(
+                    tracing::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
                         err
                     );
@@ -215,7 +215,7 @@ impl StreamData {
         let initial_params = format_params(self.dmabuf_helper.as_ref(), None, &formats);
         let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
         if let Err(err) = stream.update_params(&mut initial_params) {
-            log::error!("failed to update pipewire params: {}", err);
+            tracing::error!("failed to update pipewire params: {}", err);
         }
 
         self.formats = formats;
@@ -224,7 +224,7 @@ impl StreamData {
     }
 
     fn state_changed(&mut self, stream: &Stream, old: StreamState, new: StreamState) {
-        log::info!("state-changed '{:?}' -> '{:?}'", old, new);
+        tracing::info!("state-changed '{:?}' -> '{:?}'", old, new);
         match new {
             StreamState::Paused => {
                 if let Some(node_id_tx) = self.node_id_tx.take() {
@@ -252,20 +252,20 @@ impl StreamData {
         let object = match pod.as_object() {
             Ok(object) => object,
             Err(err) => {
-                log::error!("format param not an object?: {}", err);
+                tracing::error!("format param not an object?: {}", err);
                 return;
             }
         };
 
         let mut pwr_format = spa::param::video::VideoInfoRaw::new();
         if let Err(err) = pwr_format.parse(pod) {
-            log::error!("error parsing pipewire video info: {}", err);
+            tracing::error!("error parsing pipewire video info: {}", err);
         }
 
         self.format = if let Some(gbm_format) = spa_format_to_gbm(Id(pwr_format.format().0)) {
             gbm_format
         } else {
-            log::error!("pipewire format not recognized: {:?}", pwr_format);
+            tracing::error!("pipewire format not recognized: {:?}", pwr_format);
             return;
         };
 
@@ -275,7 +275,7 @@ impl StreamData {
             let Ok((_, pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(_, choice))))) =
                 &value
             else {
-                log::error!("invalid modifier prop: {:?}", value);
+                tracing::error!("invalid modifier prop: {:?}", value);
                 return;
             };
 
@@ -289,11 +289,11 @@ impl StreamData {
                 } = choice
                 else {
                     // TODO How does C code deal with variants of choice?
-                    log::error!("invalid modifier prop choice: {:?}", choice);
+                    tracing::error!("invalid modifier prop choice: {:?}", choice);
                     return;
                 };
 
-                log::info!(
+                tracing::info!(
                     "modifier param-changed: (default: {}, alternatives: {:?})",
                     default,
                     alternatives
@@ -315,22 +315,22 @@ impl StreamData {
                     );
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                     if let Err(err) = stream.update_params(&mut params) {
-                        log::error!("failed to update pipewire params: {}", err);
+                        tracing::error!("failed to update pipewire params: {}", err);
                     }
                     return;
                 } else {
-                    log::error!("failed to choose modifier from {:?}", modifiers);
+                    tracing::error!("failed to choose modifier from {:?}", modifiers);
                     let params = format_params(None, None, &self.formats);
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                     if let Err(err) = stream.update_params(&mut params) {
-                        log::error!("failed to update pipewire params: {}", err);
+                        tracing::error!("failed to update pipewire params: {}", err);
                     }
                     return;
                 }
             }
         }
 
-        log::info!("modifier fixated. Setting other params.");
+        tracing::info!("modifier fixated. Setting other params.");
 
         let blocks = self
             .modifier
@@ -339,7 +339,7 @@ impl StreamData {
         let params = other_params(self.width(), self.height(), blocks, self.modifier.is_some());
         let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
         if let Err(err) = stream.update_params(&mut params) {
-            log::error!("failed to update pipewire params: {}", err);
+            tracing::error!("failed to update pipewire params: {}", err);
         }
     }
 
@@ -350,7 +350,7 @@ impl StreamData {
 
         let wl_buffer;
         if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
-            log::info!("Allocate dmabuf buffer");
+            tracing::info!("Allocate dmabuf buffer");
             let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
             let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
             let dev = self
@@ -384,7 +384,7 @@ impl StreamData {
                 chunk.stride = plane.stride as i32;
             }
         } else {
-            log::info!("Allocate shm buffer");
+            tracing::info!("Allocate shm buffer");
             assert_eq!(datas.len(), 1);
             let data = &mut datas[0];
 
@@ -474,10 +474,12 @@ impl StreamData {
                     if err == WEnum::Value(FailureReason::BufferConstraints) {
                         let changed = self.update_formats(stream);
                         if !changed {
-                            log::error!("screencopy buffer constraints error, but no new formats?");
+                            tracing::error!(
+                                "screencopy buffer constraints error, but no new formats?"
+                            );
                         }
                     } else {
-                        log::error!("screencopy failed: {:?}", err);
+                        tracing::error!("screencopy failed: {:?}", err);
                         // TODO terminate screencasting?
                     }
                 }

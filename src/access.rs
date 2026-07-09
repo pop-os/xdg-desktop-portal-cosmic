@@ -64,7 +64,9 @@ impl Access {
     ) -> PortalResponse<AccessDialogResult> {
         // TODO send event to subscription via channel
         // await response via channel
-        log::debug!("Access dialog {app_id} {parent_window} {title} {subtitle} {body} {options:?}");
+        tracing::debug!(
+            "Access dialog {app_id} {parent_window} {title} {subtitle} {body} {options:?}"
+        );
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         // `widget::dialog` needs a slice of labels
         let choice_labels: Vec<Vec<String>> = options
@@ -97,7 +99,7 @@ impl Access {
             }))
             .await
         {
-            log::error!("Failed to send access dialog event, {err}");
+            tracing::error!("Failed to send access dialog event, {err}");
         }
         if let Some(res) = rx.recv().await {
             res

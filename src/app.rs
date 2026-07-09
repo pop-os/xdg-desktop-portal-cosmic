@@ -181,7 +181,7 @@ impl cosmic::Application for CosmicPortal {
                     Task::none()
                 }
                 subscription::Event::NameLost => {
-                    log::warn!("'{}' name on bus lost. Exiting.", crate::DBUS_NAME);
+                    tracing::warn!("'{}' name on bus lost. Exiting.", crate::DBUS_NAME);
                     cosmic::iced::exit()
                 }
             },
@@ -222,7 +222,7 @@ impl cosmic::Application for CosmicPortal {
                                 .unwrap();
                             state.logical_pos = info.logical_position.unwrap();
                         } else {
-                            log::warn!("Updated output {:?} not found", wl_output);
+                            tracing::warn!("Updated output {:?} not found", wl_output);
                             self.outputs.push(OutputState {
                                 output: wl_output,
                                 id: window::Id::unique(),
@@ -238,7 +238,7 @@ impl cosmic::Application for CosmicPortal {
                         }
                     }
                     e => {
-                        log::warn!("Unhandled output event: {:?} {e:?}", wl_output);
+                        tracing::warn!("Unhandled output event: {:?} {e:?}", wl_output);
                     }
                 };
 
@@ -263,10 +263,10 @@ impl cosmic::Application for CosmicPortal {
                 match &mut self.config_handler {
                     Some(handler) => {
                         if let Err(e) = self.config.set_screenshot(handler, screenshot) {
-                            log::error!("Failed to save screenshot config: {e}")
+                            tracing::error!("Failed to save screenshot config: {e}")
                         }
                     }
-                    None => log::error!("Failed to save config: No config handler"),
+                    None => tracing::error!("Failed to save config: No config handler"),
                 }
 
                 cosmic::iced::Task::none()
