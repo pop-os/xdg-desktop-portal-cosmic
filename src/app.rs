@@ -69,6 +69,8 @@ pub enum Msg {
     ConfigSetScreenshot(config::screenshot::Screenshot),
     /// Update config from external changes
     ConfigSubUpdate(config::Config),
+    /// A layer surface was closed by the compositor (e.g. output disconnected)
+    LayerClosed(window::Id),
 }
 
 #[derive(Clone, Debug)]
@@ -124,10 +126,10 @@ impl cosmic::Application for CosmicPortal {
             get_layer_surface(SctkLayerSurfaceSettings {
                 id: dummy_id,
                 layer: wlr_layer::Layer::Bottom,
-                keyboard_interactivity: wlr_layer::KeyboardInteractivity::None,
+                keyboard_interactivity: wlr_layer::KeyboardInteractivity::OnDemand,
                 input_zone: Some(Vec::new()),
                 anchor: wlr_layer::Anchor::empty(),
-                output: cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedOutput::Active,
+                output: cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedOutput::All,
                 namespace: "cosmic_portal_dummy".into(),
                 margin: IcedMargin::default(),
                 size: Some((Some(6), Some(6))),
@@ -280,6 +282,27 @@ impl cosmic::Application for CosmicPortal {
                 self.config = config;
                 cosmic::iced::Task::none()
             }
+            Msg::LayerClosed(id) if id == self.dummy_id => {
+                // The clipboard-owning dummy surface was closed by the compositor
+                // (e.g. an output was disconnected). Re-create it so the portal
+                // always retains a focusable surface to own the clipboard selection.
+                tracing::warn!("Dummy layer surface was closed by compositor, re-creating it");
+                self.dummy_id = window::Id::unique();
+                get_layer_surface(SctkLayerSurfaceSettings {
+                    id: self.dummy_id,
+                    layer: wlr_layer::Layer::Bottom,
+                    keyboard_interactivity: wlr_layer::KeyboardInteractivity::OnDemand,
+                    input_zone: Some(Vec::new()),
+                    anchor: wlr_layer::Anchor::empty(),
+                    output: cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedOutput::All,
+                    namespace: "cosmic_portal_dummy".into(),
+                    margin: IcedMargin::default(),
+                    size: Some((Some(6), Some(6))),
+                    exclusive_zone: -1,
+                    size_limits: Limits::NONE,
+                })
+            }
+            Msg::LayerClosed(_) => cosmic::iced::Task::none(),
         }
     }
 
@@ -289,6 +312,9 @@ impl cosmic::Application for CosmicPortal {
             Event::PlatformSpecific(event::PlatformSpecific::Wayland(w_e)) => match w_e {
                 event::wayland::Event::Output(o_event, wl_output) => {
                     Some(Msg::Output(o_event, wl_output))
+                }
+                event::wayland::Event::Layer(event::wayland::LayerEvent::Done, _surface, id) => {
+                    Some(Msg::LayerClosed(id))
                 }
                 _ => None,
             },
