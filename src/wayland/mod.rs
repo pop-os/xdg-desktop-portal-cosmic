@@ -101,6 +101,13 @@ struct AppData {
     workspace_state: WorkspaceState,
 }
 
+impl Drop for AppData {
+    fn drop(&mut self) {
+        tracing::error!("wayland thread crash; terminating");
+        std::process::exit(1);
+    }
+}
+
 impl AppData {
     pub fn update_output_toplevels(&self) {
         let toplevels = self.toplevel_info_state.toplevels();
