@@ -1667,9 +1667,9 @@ dependencies = [
 
 [[package]]
 name = "cpdb-rs"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77cfa26e180abf57e8e1fd75e456385d54f86e3f141bb57826b4a1cf901b6e61"
+checksum = "b9b84034b8bfeab9180097820a2182b91d629b7f8a89e612a488cabfdbb0a415"
 dependencies = [
  "futures-util",
  "log",
