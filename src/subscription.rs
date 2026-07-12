@@ -29,6 +29,7 @@ pub enum Event {
     CancelScreencast(zvariant::ObjectPath<'static>),
     RemoteDesktop(crate::remote_desktop_dialog::Args),
     CancelRemoteDesktop(zvariant::ObjectPath<'static>),
+    CancelPrint(zvariant::ObjectPath<'static>),
     Print(Box<crate::print::PrintArgs>),
     Accent(Srgba),
     IsDark(bool),
@@ -160,6 +161,11 @@ pub(crate) async fn process_changes(
                     Event::CancelRemoteDesktop(handle) => {
                         if let Err(err) = output.send(Event::CancelRemoteDesktop(handle)).await {
                             tracing::error!("Error sending remote desktop cancel: {:?}", err);
+                        };
+                    }
+                    Event::CancelPrint(handle) => {
+                        if let Err(err) = output.send(Event::CancelPrint(handle)).await {
+                            log::error!("Error sending print cancel: {:?}", err);
                         };
                     }
                     Event::Print(args) => {

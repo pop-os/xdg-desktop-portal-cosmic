@@ -220,9 +220,8 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::CancelRemoteDesktop(handle) => {
                     remote_desktop_dialog::cancel(self, handle).map(cosmic::Action::App)
                 }
-                subscription::Event::Print(args) => {
-                    print::update_args(self, *args).map(cosmic::Action::App)
-                }
+                subscription::Event::CancelPrint(handle) => print::cancel(self, handle),
+                subscription::Event::Print(args) => print::update_args(self, *args),
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)

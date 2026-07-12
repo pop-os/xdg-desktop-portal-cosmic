@@ -17,10 +17,16 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::copy;
+use std::os::fd::{AsFd, OwnedFd};
+use std::sync::Arc;
 use zbus::zvariant;
 
+use crate::PortalResponse;
 use crate::app::CosmicPortal;
+use crate::print::PrintResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PrinterDiscovery;
@@ -155,6 +161,7 @@ pub struct PrintDialog {
 
     // Paper handling
     pub reverse_order: bool,
+    pub accept_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,22 +177,12 @@ impl ColorMode {
             Self::Monochrome => "monochrome",
         }
     }
-
-    pub fn is_color(&self) -> bool {
-        *self == Self::Color
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
     Portrait,
     Landscape,
-}
-
-impl Orientation {
-    pub fn is_portrait(&self) -> bool {
-        *self == Self::Portrait
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,6 +331,7 @@ impl Default for PrintDialog {
             show_print_background_toggle: false,
             print_background: false,
             reverse_order: false,
+            accept_label: None,
         }
     }
 }
@@ -806,7 +804,7 @@ fn counter_button<'a>(label: &'a str, msg: Option<Msg>) -> Element<'a, Msg> {
         hovered: Box::new(|_focused, theme| {
             let theme = theme.cosmic();
             button::Style {
-                background: Some(Background::Color(theme.background.divider.into())),
+                background: Some(Background::Color(theme.background(false).divider.into())),
                 border_radius: 16.0.into(),
                 border_width: 0.0,
                 border_color: Color::TRANSPARENT,
@@ -816,7 +814,7 @@ fn counter_button<'a>(label: &'a str, msg: Option<Msg>) -> Element<'a, Msg> {
         pressed: Box::new(|_focused, theme| {
             let theme = theme.cosmic();
             button::Style {
-                background: Some(Background::Color(theme.background.divider.into())),
+                background: Some(Background::Color(theme.background(false).divider.into())),
                 border_radius: 16.0.into(),
                 border_width: 0.0,
                 border_color: Color::TRANSPARENT,
@@ -1375,7 +1373,8 @@ fn view_status_row(dialog: &PrintDialog) -> Element<'_, Msg> {
     };
 
     let cancel_btn = button::standard("Cancel").on_press(Msg::Cancel);
-    let print_btn = button::suggested("Print").on_press(Msg::Confirm);
+    let confirm_label = dialog.accept_label.as_deref().unwrap_or("Print");
+    let print_btn = button::suggested(confirm_label).on_press(Msg::Confirm);
 
     row![
         text(status_text).size(14),
@@ -1500,7 +1499,11 @@ pub fn apply_xdg_hints(
     dialog: &mut PrintDialog,
     settings: &HashMap<String, zvariant::OwnedValue>,
     page_setup: &HashMap<String, zvariant::OwnedValue>,
+    accept_label: Option<String>,
 ) {
+    // accept label
+    dialog.accept_label = accept_label;
+
     // n-copies
     if let Some(s) = get_str(settings, "n-copies")
         && let Ok(n) = s.parse::<u32>()
@@ -1886,6 +1889,75 @@ pub fn build_xdg_response(
     }
 
     (settings, page_setup)
+}
+
+pub(crate) async fn do_print_execution(
+    printer_id: String,
+    backend: String,
+    settings: Vec<(String, String)>,
+    title: String,
+    fd: Arc<OwnedFd>,
+) -> PortalResponse<PrintResult> {
+    let client = match cpdb_rs::CpdbClient::new().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to create CPDB client for printing: {e:?}");
+            return PortalResponse::Other;
+        }
+    };
+
+    let settings_ref: Vec<(&str, &str)> = settings
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    // CPDB backends (e.g. CUPS) require a printer query to populate internal tables before printing
+    let _ = client.get_all_printers().await;
+
+    log::debug!("Submitting print job to printer '{printer_id}' via backend '{backend}'");
+    let (job_id, cpdb_writable_fd) = match client
+        .print_fd(&printer_id, &backend, &settings_ref, &title)
+        .await
+    {
+        Ok(res) => res,
+        Err(e) => {
+            log::error!("Failed to submit print job via CPDB client: {e:?}");
+            return PortalResponse::Other;
+        }
+    };
+    log::debug!("Print job submitted successfully. Job Id: {job_id}");
+
+    let readable_fd = match fd.as_fd().try_clone_to_owned() {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("Failed to clone document FD: {e:?}");
+            return PortalResponse::Other;
+        }
+    };
+
+    let copy_result = tokio::task::spawn_blocking(move || {
+        let mut reader = File::from(readable_fd);
+        let mut writer = File::from(std::os::fd::OwnedFd::from(cpdb_writable_fd));
+        copy(&mut reader, &mut writer)
+    })
+    .await;
+
+    match copy_result {
+        Ok(Ok(bytes)) => {
+            log::debug!("Copied {bytes} bytes of document data to CPDB");
+            PortalResponse::Success(PrintResult {
+                settings: HashMap::new(),
+            })
+        }
+        Ok(Err(e)) => {
+            log::error!("Failed copying document data to CPDB: {e:?}");
+            PortalResponse::Other
+        }
+        Err(e) => {
+            log::error!("{e:?}");
+            PortalResponse::Other
+        }
+    }
 }
 
 /// Maps dialog state to setting keys expected by the CPDB backends
