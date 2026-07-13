@@ -12,7 +12,7 @@ use cosmic::iced::core::{
 };
 use cosmic::iced::{self, window};
 use cosmic::widget::{
-    self, button, divider, dropdown, icon, image, layer_container, row, space, svg, text,
+    self, button, column, divider, dropdown, icon, image, layer_container, row, space, svg, text,
 };
 use cosmic_bg_config::Source;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -54,6 +54,86 @@ pub struct ScreenshotSelection<'a, Msg> {
 //  - menu
 
 // for now lets just support selecting the output
+
+// Keep window previews clear of the controls, which are positioned 32 logical pixels above the
+// bottom edge. This includes the controls' height and some breathing room above them.
+const WINDOW_PICKER_BOTTOM_INSET: f32 = 128.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WindowGridLayout {
+    columns: usize,
+    cell_width: f32,
+    cell_height: f32,
+    spacing: f32,
+}
+
+fn window_grid_layout(
+    dimensions: &[(u32, u32)],
+    available: Size,
+    spacing: f32,
+) -> WindowGridLayout {
+    if dimensions.is_empty() {
+        return WindowGridLayout {
+            columns: 1,
+            cell_width: available.width.max(1.0),
+            cell_height: available.height.max(1.0),
+            spacing: 0.0,
+        };
+    }
+
+    let mut best = WindowGridLayout {
+        columns: 1,
+        cell_width: available.width.max(1.0),
+        cell_height: available.height.max(1.0),
+        spacing: 0.0,
+    };
+    let mut best_visible_area = -1.0_f32;
+
+    for columns in 1..=dimensions.len() {
+        let rows = dimensions.len().div_ceil(columns);
+        let horizontal_spacing = (columns > 1)
+            .then(|| ((available.width - columns as f32) / (columns - 1) as f32).max(0.0))
+            .unwrap_or(spacing);
+        let vertical_spacing = (rows > 1)
+            .then(|| ((available.height - rows as f32) / (rows - 1) as f32).max(0.0))
+            .unwrap_or(spacing);
+        let candidate_spacing = spacing.min(horizontal_spacing).min(vertical_spacing);
+        let cell_width = ((available.width - candidate_spacing * columns.saturating_sub(1) as f32)
+            / columns as f32)
+            .max(1.0);
+        let cell_height = ((available.height - candidate_spacing * rows.saturating_sub(1) as f32)
+            / rows as f32)
+            .max(1.0);
+
+        // Prefer the arrangement that makes the previews collectively largest. ScaleDown does
+        // not enlarge a preview beyond its captured size, so account for that here as well.
+        let visible_area = dimensions
+            .iter()
+            .map(|&(width, height)| {
+                let width = width as f32;
+                let height = height as f32;
+                if width == 0.0 || height == 0.0 {
+                    return 0.0;
+                }
+
+                let scale = (cell_width / width).min(cell_height / height).min(1.0);
+                width * height * scale * scale
+            })
+            .sum::<f32>();
+
+        if visible_area > best_visible_area {
+            best_visible_area = visible_area;
+            best = WindowGridLayout {
+                columns,
+                cell_width,
+                cell_height,
+                spacing: candidate_spacing,
+            };
+        }
+    }
+
+    best
+}
 
 impl<'a, Msg> ScreenshotSelection<'a, Msg>
 where
@@ -109,33 +189,54 @@ where
                     .get(&output.name)
                     .map(|x| x.as_slice())
                     .unwrap_or_default();
-                let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
+                let space_l = f32::from(space_l);
+                let available = Size::new(
+                    (output.logical_size.0 as f32 - 2.0 * space_l).max(1.0),
+                    (output.logical_size.1 as f32 - space_l - WINDOW_PICKER_BOTTOM_INSET).max(1.0),
+                );
+                let dimensions = imgs
+                    .iter()
+                    .map(|img| (img.width(), img.height()))
+                    .collect::<Vec<_>>();
+                let grid = window_grid_layout(&dimensions, available, space_l);
 
-                let img_buttons = imgs.iter().enumerate().map(|(i, img)| {
-                    let portion =
-                        (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
-                    layer_container(
+                let img_rows = imgs.chunks(grid.columns).enumerate().map(|(row_i, imgs)| {
+                    let img_buttons = imgs.iter().enumerate().map(|(column_i, img)| {
+                        let i = row_i * grid.columns + column_i;
+                        let width = img.width().max(1) as f32;
+                        let height = img.height().max(1) as f32;
+                        let scale = (grid.cell_width / width)
+                            .min(grid.cell_height / height)
+                            .min(1.0);
+
                         button::custom(
                             image::Image::new(img.handle.clone())
+                                .width(Length::Fill)
+                                .height(Length::Fill)
                                 .content_fit(ContentFit::ScaleDown),
                         )
+                        .width(Length::Fixed(width * scale))
+                        .height(Length::Fixed(height * scale))
+                        .padding(0)
                         .on_press(toplevel_chosen(output.name.clone(), i))
-                        .class(cosmic::theme::Button::Image),
-                    )
-                    .align_x(Alignment::Center)
-                    .width(Length::FillPortion(portion as u16))
-                    .height(Length::Shrink)
-                    .into()
-                });
-                layer_container(
+                        .class(cosmic::theme::Button::Image)
+                        .into()
+                    });
+
                     row::with_children(img_buttons)
-                        .spacing(space_l)
-                        .width(Length::Fill)
+                        .spacing(grid.spacing)
                         .align_y(Alignment::Center)
-                        .padding(space_l),
+                        .into()
+                });
+
+                layer_container(
+                    column::with_children(img_rows)
+                        .spacing(grid.spacing)
+                        .align_x(Alignment::Center),
                 )
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
+                .padding([space_l, space_l, WINDOW_PICKER_BOTTOM_INSET, space_l])
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -538,5 +639,46 @@ where
 {
     fn from(w: ScreenshotSelection<'a, Message>) -> cosmic::Element<'a, Message> {
         Element::new(w)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_grid_uses_multiple_rows_for_many_landscape_windows() {
+        let dimensions = vec![(1600, 900); 8];
+        let layout = window_grid_layout(&dimensions, Size::new(1872.0, 876.0), 24.0);
+
+        assert_eq!(layout.columns, 3);
+        assert_eq!(dimensions.len().div_ceil(layout.columns), 3);
+        assert_eq!(layout.cell_width, 608.0);
+        assert_eq!(layout.cell_height, 276.0);
+    }
+
+    #[test]
+    fn window_grid_keeps_every_cell_inside_the_available_area() {
+        let dimensions = [
+            (1920, 1080),
+            (800, 1200),
+            (1000, 700),
+            (600, 900),
+            (1600, 900),
+            (500, 500),
+        ];
+        let available = Size::new(1872.0, 876.0);
+        let spacing = 24.0;
+        let layout = window_grid_layout(&dimensions, available, spacing);
+        let rows = dimensions.len().div_ceil(layout.columns);
+
+        let used_width = layout.cell_width * layout.columns as f32
+            + layout.spacing * layout.columns.saturating_sub(1) as f32;
+        let used_height =
+            layout.cell_height * rows as f32 + layout.spacing * rows.saturating_sub(1) as f32;
+
+        assert!(used_width <= available.width);
+        assert!(used_height <= available.height);
+        assert!(layout.columns < dimensions.len());
     }
 }
