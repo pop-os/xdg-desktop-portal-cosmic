@@ -11,5 +11,6 @@ This document provides a regression testing checklist for the COSMIC XDG desktop
     - [ ] Latest screenshot's copied to clipboard
 - [ ] PipeWire screen capture from OBS with the portal prompt works
 - [ ] Webcam and screen sharing prompted through Firefox works
+    - [ ] The screen share prompt can toggle cursor visibility
 - [ ] The file chooser works from Firefox
 - [ ] The file chooser, webcam, and screen share work from the Slack flatpak
