@@ -315,6 +315,7 @@ where
             let scale = (TARGET_W / bbox_w).min(TARGET_H / bbox_h);
 
             let mut children = Vec::new();
+            let mut messages = Vec::new();
             let mut regions = Vec::new();
             let mut labels = Vec::new();
             let mut selected_flags = Vec::new();
@@ -327,13 +328,15 @@ where
                     height: (h as f32 * scale - GAP).max(1.0),
                 };
                 let is_selected = selected.outputs.contains(output);
+                let msg = on_output(output.clone());
                 children.push(output_thumb_button(
                     is_selected,
                     image.as_ref(),
                     region.width,
                     region.height,
-                    on_output(output.clone()),
+                    msg.clone(),
                 ));
+                messages.push(msg);
                 labels.push(info.name.clone().unwrap_or_default());
                 selected_flags.push(is_selected);
                 regions.push(region);
@@ -342,6 +345,7 @@ where
             let total = iced::core::Size::new(bbox_w * scale, bbox_h * scale);
             let arrangement = crate::widget::output_arrangement::OutputArrangement::new(
                 children,
+                messages,
                 regions,
                 labels,
                 selected_flags,
