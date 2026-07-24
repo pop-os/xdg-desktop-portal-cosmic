@@ -33,7 +33,7 @@ fn find_gbm_device(dev: u64) -> io::Result<Option<(PathBuf, gbm::Device<fs::File
         let i = i?;
         if i.metadata()?.rdev() == dev {
             let file = fs::File::options().read(true).write(true).open(i.path())?;
-            log::info!("Opened gbm main device '{}'", i.path().display());
+            tracing::info!("Opened gbm main device '{}'", i.path().display());
             return Ok(Some((i.path(), gbm::Device::new(file)?)));
         }
     }

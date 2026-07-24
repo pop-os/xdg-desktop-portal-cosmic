@@ -6,6 +6,8 @@
 
 use cosmic_client_toolkit::screencopy::{FailureReason, Formats, Rect};
 use futures::executor::block_on;
+use futures::stream::StreamExt;
+use image::{GenericImage, GenericImageView};
 use pipewire::spa::pod::deserialize::PodDeserializer;
 use pipewire::spa::pod::serialize::PodSerializer;
 use pipewire::spa::pod::{self, Pod};
@@ -16,6 +18,7 @@ use pipewire::sys::pw_buffer;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::os::fd::IntoRawFd;
+use std::task::{Context, Poll, Waker};
 use std::{io, iter, slice};
 use tokio::sync::oneshot;
 use wayland_client::WEnum;
@@ -23,7 +26,19 @@ use wayland_client::protocol::{wl_buffer, wl_output, wl_shm};
 
 use crate::buffer;
 use crate::screencast::StreamProps;
-use crate::wayland::{CaptureSource, DmabufHelper, Session, WaylandHelper};
+use crate::wayland::{
+    CaptureSource, CursorFrame, CursorSession, CursorStream, DmabufHelper, Session, WaylandHelper,
+};
+
+// TODO: Update params dynamically to support different sizes of cursor
+const CURSOR_SIZE: u32 = 64;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CursorMode {
+    Hidden,
+    Embedded,
+    Metadata,
+}
 
 static FORMAT_MAP: &[(gbm::Format, Id)] = &[
     (gbm::Format::Abgr8888, Id(spa_sys::SPA_VIDEO_FORMAT_RGBA)),
@@ -54,6 +69,74 @@ fn shm_format_to_gbm(format: wl_shm::Format) -> Option<gbm::Format> {
     }
 }
 
+#[repr(C)]
+struct MetadataCursor {
+    meta_cursor: spa_sys::spa_meta_cursor,
+    meta_bitmap: spa_sys::spa_meta_bitmap,
+    bytes: [u8],
+}
+
+impl MetadataCursor {
+    pub fn size_of(width: u32, height: u32) -> usize {
+        std::mem::offset_of!(Self, meta_bitmap)
+            + std::mem::size_of::<spa_sys::spa_meta_bitmap>()
+            + width as usize * height as usize * 4
+    }
+
+    fn clear(&mut self) {
+        self.meta_cursor = spa_sys::spa_meta_cursor {
+            id: 0,
+            flags: 0,
+            position: spa_sys::spa_point { x: 0, y: 0 },
+            hotspot: spa_sys::spa_point { x: 0, y: 0 },
+            bitmap_offset: 0,
+        };
+    }
+
+    fn update(&mut self, cursor_frame: Option<&CursorFrame>, position: (i32, i32)) {
+        let (image, hotspot) = if let Some(CursorFrame { image, hotspot }) = cursor_frame {
+            (Some(image), *hotspot)
+        } else {
+            (None, (0, 0))
+        };
+        self.meta_cursor = spa_sys::spa_meta_cursor {
+            id: 1,
+            flags: 0,
+            position: spa_sys::spa_point {
+                x: position.0,
+                y: position.1,
+            },
+            hotspot: spa_sys::spa_point {
+                x: hotspot.0,
+                y: hotspot.1,
+            },
+            bitmap_offset: std::mem::offset_of!(Self, meta_bitmap) as u32,
+        };
+        let Some(image) = image else {
+            self.meta_cursor.bitmap_offset = 0;
+            return;
+        };
+        let image = image::imageops::crop_imm(image, 0, 0, CURSOR_SIZE, CURSOR_SIZE);
+        self.meta_bitmap = spa_sys::spa_meta_bitmap {
+            format: spa_sys::SPA_VIDEO_FORMAT_RGBA,
+            size: spa_sys::spa_rectangle {
+                width: image.width(),
+                height: image.height(),
+            },
+            stride: image.width() as i32 * 4,
+            offset: std::mem::size_of::<spa_sys::spa_meta_bitmap>() as u32,
+        };
+        image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+            image.width(),
+            image.height(),
+            &mut self.bytes,
+        )
+        .unwrap()
+        .copy_from(&*image, 0, 0)
+        .unwrap();
+    }
+}
+
 pub struct ScreencastThread {
     stream_props: StreamProps,
     node_id: u32,
@@ -64,7 +147,7 @@ impl ScreencastThread {
     pub async fn new(
         wayland_helper: WaylandHelper,
         capture_source: CaptureSource,
-        overlay_cursor: bool,
+        cursor_mode: CursorMode,
         stream_props: StreamProps,
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
@@ -74,7 +157,7 @@ impl ScreencastThread {
             match start_stream(
                 wayland_helper,
                 capture_source,
-                overlay_cursor,
+                cursor_mode,
                 thread_stop_tx_clone,
             ) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
@@ -115,6 +198,8 @@ struct StreamData {
     format: gbm::Format,
     modifier: Option<gbm::Modifier>,
     session: Session,
+    cursor_session: Option<(CursorSession, CursorStream)>,
+    cursor_frame: Option<CursorFrame>,
     formats: Formats,
     node_id_tx: Option<oneshot::Sender<Result<u32, anyhow::Error>>>,
     buffer_damage: HashMap<wl_buffer::WlBuffer, Vec<Rect>>,
@@ -156,11 +241,11 @@ impl StreamData {
         let gbm = match gbm_devices.gbm_device(dev) {
             Ok(Some((_, gbm))) => gbm,
             Ok(None) => {
-                log::error!("Failed to find gbm device for '{dev}'");
+                tracing::error!("Failed to find gbm device for '{dev}'");
                 return None;
             }
             Err(err) => {
-                log::error!("Failed to open gbm device for '{dev}': {err}");
+                tracing::error!("Failed to open gbm device for '{dev}': {err}");
                 return None;
             }
         };
@@ -173,7 +258,7 @@ impl StreamData {
             ) {
                 Ok(_bo) => Some(gbm::Modifier::Invalid),
                 Err(err) => {
-                    log::error!(
+                    tracing::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
                         err
                     );
@@ -190,7 +275,7 @@ impl StreamData {
             ) {
                 Ok(bo) => Some(bo.modifier()),
                 Err(err) => {
-                    log::error!(
+                    tracing::error!(
                         "Failed to choose modifier by creating temporary bo: {}",
                         err
                     );
@@ -215,7 +300,7 @@ impl StreamData {
         let initial_params = format_params(self.dmabuf_helper.as_ref(), None, &formats);
         let mut initial_params: Vec<_> = initial_params.iter().map(|x| &**x).collect();
         if let Err(err) = stream.update_params(&mut initial_params) {
-            log::error!("failed to update pipewire params: {}", err);
+            tracing::error!("failed to update pipewire params: {}", err);
         }
 
         self.formats = formats;
@@ -224,7 +309,7 @@ impl StreamData {
     }
 
     fn state_changed(&mut self, stream: &Stream, old: StreamState, new: StreamState) {
-        log::info!("state-changed '{:?}' -> '{:?}'", old, new);
+        tracing::info!("state-changed '{:?}' -> '{:?}'", old, new);
         match new {
             StreamState::Paused => {
                 if let Some(node_id_tx) = self.node_id_tx.take() {
@@ -252,20 +337,20 @@ impl StreamData {
         let object = match pod.as_object() {
             Ok(object) => object,
             Err(err) => {
-                log::error!("format param not an object?: {}", err);
+                tracing::error!("format param not an object?: {}", err);
                 return;
             }
         };
 
         let mut pwr_format = spa::param::video::VideoInfoRaw::new();
         if let Err(err) = pwr_format.parse(pod) {
-            log::error!("error parsing pipewire video info: {}", err);
+            tracing::error!("error parsing pipewire video info: {}", err);
         }
 
         self.format = if let Some(gbm_format) = spa_format_to_gbm(Id(pwr_format.format().0)) {
             gbm_format
         } else {
-            log::error!("pipewire format not recognized: {:?}", pwr_format);
+            tracing::error!("pipewire format not recognized: {:?}", pwr_format);
             return;
         };
 
@@ -275,7 +360,7 @@ impl StreamData {
             let Ok((_, pod::Value::Choice(pod::ChoiceValue::Long(spa::utils::Choice(_, choice))))) =
                 &value
             else {
-                log::error!("invalid modifier prop: {:?}", value);
+                tracing::error!("invalid modifier prop: {:?}", value);
                 return;
             };
 
@@ -289,11 +374,11 @@ impl StreamData {
                 } = choice
                 else {
                     // TODO How does C code deal with variants of choice?
-                    log::error!("invalid modifier prop choice: {:?}", choice);
+                    tracing::error!("invalid modifier prop choice: {:?}", choice);
                     return;
                 };
 
-                log::info!(
+                tracing::info!(
                     "modifier param-changed: (default: {}, alternatives: {:?})",
                     default,
                     alternatives
@@ -315,31 +400,37 @@ impl StreamData {
                     );
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                     if let Err(err) = stream.update_params(&mut params) {
-                        log::error!("failed to update pipewire params: {}", err);
+                        tracing::error!("failed to update pipewire params: {}", err);
                     }
                     return;
                 } else {
-                    log::error!("failed to choose modifier from {:?}", modifiers);
+                    tracing::error!("failed to choose modifier from {:?}", modifiers);
                     let params = format_params(None, None, &self.formats);
                     let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
                     if let Err(err) = stream.update_params(&mut params) {
-                        log::error!("failed to update pipewire params: {}", err);
+                        tracing::error!("failed to update pipewire params: {}", err);
                     }
                     return;
                 }
             }
         }
 
-        log::info!("modifier fixated. Setting other params.");
+        tracing::info!("modifier fixated. Setting other params.");
 
         let blocks = self
             .modifier
             .and_then(|m| self.plane_count(self.format, m))
             .unwrap_or(1);
-        let params = other_params(self.width(), self.height(), blocks, self.modifier.is_some());
+        let params = other_params(
+            self.width(),
+            self.height(),
+            blocks,
+            self.modifier.is_some(),
+            self.cursor_session.is_some(),
+        );
         let mut params: Vec<_> = params.iter().map(|x| &**x).collect();
         if let Err(err) = stream.update_params(&mut params) {
-            log::error!("failed to update pipewire params: {}", err);
+            tracing::error!("failed to update pipewire params: {}", err);
         }
     }
 
@@ -350,7 +441,7 @@ impl StreamData {
 
         let wl_buffer;
         if datas[0].type_ & (1 << spa_sys::SPA_DATA_DmaBuf) != 0 {
-            log::info!("Allocate dmabuf buffer");
+            tracing::info!("Allocate dmabuf buffer");
             let dmabuf_helper = self.dmabuf_helper.as_ref().unwrap();
             let mut gbm_devices = dmabuf_helper.gbm_devices().lock().unwrap();
             let dev = self
@@ -384,7 +475,7 @@ impl StreamData {
                 chunk.stride = plane.stride as i32;
             }
         } else {
-            log::info!("Allocate shm buffer");
+            tracing::info!("Allocate shm buffer");
             assert_eq!(datas.len(), 1);
             let data = &mut datas[0];
 
@@ -436,6 +527,14 @@ impl StreamData {
             // TODO: Causes segfault
             // let _ = stream.disconnect();
         }
+
+        if let Some((_, stream)) = &mut self.cursor_session {
+            let mut context = Context::from_waker(Waker::noop());
+            if let Poll::Ready(frame) = stream.poll_next_unpin(&mut context) {
+                self.cursor_frame = frame;
+            }
+        }
+
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
             let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
@@ -469,15 +568,33 @@ impl StreamData {
                     } {
                         video_transform.transform = convert_transform(frame.transform);
                     }
+                    if let Some((cursor_session, _)) = &self.cursor_session
+                        && let Some(cursor) = unsafe {
+                            buffer_cursor_find_meta_data(
+                                buffer,
+                                spa_sys::SPA_META_Cursor,
+                                MetadataCursor::size_of(CURSOR_SIZE, CURSOR_SIZE),
+                            )
+                        }
+                    {
+                        if cursor_session.cursor_entered() {
+                            let position = cursor_session.cursor_position();
+                            cursor.update(self.cursor_frame.as_ref(), position);
+                        } else {
+                            cursor.clear();
+                        }
+                    }
                 }
                 Err(err) => {
                     if err == WEnum::Value(FailureReason::BufferConstraints) {
                         let changed = self.update_formats(stream);
                         if !changed {
-                            log::error!("screencopy buffer constraints error, but no new formats?");
+                            tracing::error!(
+                                "screencopy buffer constraints error, but no new formats?"
+                            );
                         }
                     } else {
-                        log::error!("screencopy failed: {:?}", err);
+                        tracing::error!("screencopy failed: {:?}", err);
                         // TODO terminate screencasting?
                     }
                 }
@@ -491,7 +608,7 @@ impl StreamData {
 fn start_stream(
     wayland_helper: WaylandHelper,
     capture_source: CaptureSource,
-    overlay_cursor: bool,
+    cursor_mode: CursorMode,
     thread_stop_tx: pipewire::channel::Sender<()>,
 ) -> anyhow::Result<(
     pipewire::main_loop::MainLoopRc,
@@ -504,11 +621,24 @@ fn start_stream(
     let context = pipewire::context::ContextRc::new(&loop_, None)?;
     let core = context.connect_rc(None)?;
 
-    let name = "cosmic-screenshot".to_string(); // XXX randomize?
+    let name = "cosmic-screencast";
 
     let (node_id_tx, node_id_rx) = oneshot::channel();
 
-    let session = wayland_helper.capture_source_session(capture_source, overlay_cursor);
+    let session = wayland_helper
+        .capture_source_session(capture_source.clone(), cursor_mode == CursorMode::Embedded);
+    let mut cursor_session = None;
+    let mut cursor_frame = None;
+    if cursor_mode == CursorMode::Metadata {
+        cursor_session = wayland_helper.capture_source_cursor_session(capture_source);
+        if let Some((_session, stream)) = &mut cursor_session {
+            // Initial poll of stream to start capture
+            let mut context = Context::from_waker(Waker::noop());
+            if let Poll::Ready(frame) = stream.poll_next_unpin(&mut context) {
+                cursor_frame = frame;
+            }
+        }
+    }
 
     let Some(formats) = block_on(session.wait_for_formats(|formats| formats.clone())) else {
         return Err(anyhow::anyhow!(
@@ -520,10 +650,10 @@ fn start_stream(
 
     let stream = pipewire::stream::StreamRc::new(
         core,
-        &name,
+        name,
         pipewire::properties::properties! {
             "media.class" => "Video/Source",
-            "node.name" => "cosmic-screenshot", // XXX
+            "node.name" => name.to_string(),
         },
     )?;
 
@@ -543,6 +673,8 @@ fn start_stream(
         wayland_helper,
         dmabuf_helper,
         session,
+        cursor_frame,
+        cursor_session,
         formats,
         format: gbm::Format::Abgr8888,
         modifier: None,
@@ -578,6 +710,18 @@ fn convert_transform(transform: WEnum<wl_output::Transform>) -> u32 {
             spa_sys::SPA_META_TRANSFORMATION_Flipped270
         }
         WEnum::Value(_) | WEnum::Unknown(_) => unreachable!(),
+    }
+}
+
+// SAFETY: buffer must be non-null, valid as long as return value is used
+unsafe fn buffer_cursor_find_meta_data<'a>(
+    buffer: *const pipewire_sys::pw_buffer,
+    type_: u32,
+    size: usize,
+) -> Option<&'a mut MetadataCursor> {
+    unsafe {
+        let ptr = spa_sys::spa_buffer_find_meta_data((*buffer).buffer, type_, size);
+        (std::ptr::slice_from_raw_parts(ptr, size) as *mut MetadataCursor).as_mut()
     }
 }
 
@@ -637,6 +781,25 @@ fn meta() -> OwnedPod {
     // TODO: header, video damage
 }
 
+fn meta_cursor() -> OwnedPod {
+    OwnedPod::serialize(&pod::Value::Object(pod::Object {
+        type_: spa_sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa_sys::SPA_PARAM_Meta,
+        properties: vec![
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_type,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_Cursor)),
+            },
+            pod::Property {
+                key: spa_sys::SPA_PARAM_META_size,
+                flags: pod::PropertyFlags::empty(),
+                value: pod::Value::Int(MetadataCursor::size_of(CURSOR_SIZE, CURSOR_SIZE) as _),
+            },
+        ],
+    }))
+}
+
 fn format_params(
     dmabuf: Option<&DmabufHelper>,
     fixated: Option<(gbm::Format, gbm::Modifier)>,
@@ -678,10 +841,17 @@ fn format_params(
     pods
 }
 
-fn other_params(width: u32, height: u32, blocks: u32, allow_dmabuf: bool) -> Vec<OwnedPod> {
+fn other_params(
+    width: u32,
+    height: u32,
+    blocks: u32,
+    allow_dmabuf: bool,
+    cursor_metadata: bool,
+) -> Vec<OwnedPod> {
     [
         Some(buffers(width, height, blocks, allow_dmabuf)),
         Some(meta()),
+        cursor_metadata.then_some(meta_cursor()),
     ]
     .into_iter()
     .flatten()

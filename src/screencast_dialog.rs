@@ -160,7 +160,7 @@ impl Args {
     fn send_response(self, response: Option<CaptureSources>) {
         tokio::spawn(async move {
             if let Err(err) = self.tx.send(response).await {
-                log::error!("Failed to send screencast event: {}", err);
+                tracing::error!("Failed to send screencast event: {}", err);
             }
         });
     }

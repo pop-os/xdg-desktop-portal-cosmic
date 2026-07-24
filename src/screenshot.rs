@@ -254,7 +254,7 @@ impl Screenshot {
 
         // Ensure the directory exists
         if let Err(err) = std::fs::create_dir_all(&path) {
-            log::error!("Failed to create screenshot directory {:?}: {}", path, err);
+            tracing::error!("Failed to create screenshot directory {:?}: {}", path, err);
             return None;
         }
 
@@ -457,19 +457,19 @@ impl Screenshot {
         let mut outputs = Vec::new();
         for output in self.wayland_helper.outputs() {
             let Some(info) = self.wayland_helper.output_info(&output) else {
-                log::warn!("Output {:?} has no info", output);
+                tracing::warn!("Output {:?} has no info", output);
                 continue;
             };
             let Some(name) = info.name.clone() else {
-                log::warn!("Output {:?} has no name", output);
+                tracing::warn!("Output {:?} has no name", output);
                 continue;
             };
             let Some(logical_position) = info.logical_position else {
-                log::warn!("Output {:?} has no position", output);
+                tracing::warn!("Output {:?} has no position", output);
                 continue;
             };
             let Some(logical_size) = info.logical_size else {
-                log::warn!("Output {:?} has no size", output);
+                tracing::warn!("Output {:?} has no size", output);
                 continue;
             };
             outputs.push(Output {
@@ -480,7 +480,7 @@ impl Screenshot {
             });
         }
         if outputs.is_empty() {
-            log::error!("No output");
+            tracing::error!("No output");
             return PortalResponse::Other;
         };
 
@@ -541,7 +541,7 @@ impl Screenshot {
                 }))
                 .await
             {
-                log::error!("Failed to send screenshot event, {}", err);
+                tracing::error!("Failed to send screenshot event, {}", err);
                 return PortalResponse::Other;
             }
             if let Some(res) = rx.recv().await {
@@ -554,7 +554,7 @@ impl Screenshot {
         let doc_path = match self.screenshot_inner(&outputs, app_id).await {
             Ok(res) => res,
             Err(err) => {
-                log::error!("Failed to capture screenshot: {}", err);
+                tracing::error!("Failed to capture screenshot: {}", err);
                 return PortalResponse::Other;
             }
         };
@@ -656,7 +656,7 @@ pub fn update_msg(
                 .map(|o| destroy_layer_surface(o.id))
                 .collect();
             let Some(args) = portal.screenshot_args.take() else {
-                log::error!("Failed to find screenshot Args for Capture message.");
+                tracing::error!("Failed to find screenshot Args for Capture message.");
                 return cosmic::Task::batch(cmds);
             };
             let outputs = portal.outputs.clone();
@@ -676,14 +676,14 @@ pub fn update_msg(
                     if let Some(img) = images.remove(&name) {
                         if let Ok(buffer) = Screenshot::save_rgba(&img.rgba, image_path.as_deref())
                             .inspect_err(|err| {
-                                log::error!("Failed to capture screenshot: {:?}", err);
+                                tracing::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             })
                         {
                             cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
                         }
                     } else {
-                        log::error!("Failed to find output {}", name);
+                        tracing::error!("Failed to find output {}", name);
                         success = false;
                     }
                 }
@@ -714,7 +714,7 @@ pub fn update_msg(
 
                         if let Ok(buffer) = Screenshot::save_rgba(&img, image_path.as_deref())
                             .inspect_err(|err| {
-                                log::error!("Failed to capture screenshot: {:?}", err);
+                                tracing::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             })
                         {
@@ -732,7 +732,7 @@ pub fn update_msg(
                     {
                         if let Ok(buffer) = Screenshot::save_rgba(&img.rgba, image_path.as_deref())
                             .inspect_err(|err| {
-                                log::error!("Failed to capture screenshot: {:?}", err);
+                                tracing::error!("Failed to capture screenshot: {:?}", err);
                                 success = false;
                             })
                         {
@@ -761,7 +761,7 @@ pub fn update_msg(
 
             tokio::spawn(async move {
                 if let Err(err) = tx.send(response).await {
-                    log::error!("Failed to send screenshot event");
+                    tracing::error!("Failed to send screenshot event");
                 }
             });
             cosmic::Task::batch(cmds)
@@ -770,7 +770,7 @@ pub fn update_msg(
             if let Some(args) = portal.screenshot_args.as_mut() {
                 args.location = location;
             } else {
-                log::error!("Failed to find screenshot Args for CaptureWithLocation message.");
+                tracing::error!("Failed to find screenshot Args for CaptureWithLocation message.");
                 return cosmic::Task::none();
             }
             update_msg(portal, Msg::Capture)
@@ -778,13 +778,13 @@ pub fn update_msg(
         Msg::Cancel => {
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
             let Some(args) = portal.screenshot_args.take() else {
-                log::error!("Failed to find screenshot Args for Cancel message.");
+                tracing::error!("Failed to find screenshot Args for Cancel message.");
                 return cosmic::Task::batch(cmds);
             };
             let Args { tx, .. } = args;
             tokio::spawn(async move {
                 if let Err(err) = tx.send(PortalResponse::Cancelled).await {
-                    log::error!("Failed to send screenshot event");
+                    tracing::error!("Failed to send screenshot event");
                 }
             });
 
@@ -810,7 +810,7 @@ pub fn update_msg(
             if let Some(args) = portal.screenshot_args.as_mut() {
                 args.choice = c;
             } else {
-                log::error!("Failed to find screenshot Args for Choice message.");
+                tracing::error!("Failed to find screenshot Args for Choice message.");
             }
             if should_save_config {
                 cosmic::task::message(crate::app::Msg::ConfigSetScreenshot(
@@ -835,7 +835,7 @@ pub fn update_msg(
             ) {
                 args.choice = Choice::Output(o);
             } else {
-                log::error!(
+                tracing::error!(
                     "Failed to find output for OutputChange message: {:?}",
                     wl_output
                 );
@@ -847,7 +847,7 @@ pub fn update_msg(
             if let Some(args) = portal.screenshot_args.as_mut() {
                 args.choice = Choice::Window(name, Some(i));
             } else {
-                log::error!("Failed to find screenshot Args for WindowChosen message.");
+                tracing::error!("Failed to find screenshot Args for WindowChosen message.");
             }
             update_msg(portal, Msg::Capture)
         }
@@ -874,7 +874,7 @@ pub fn update_msg(
                     },
                 ))
             } else {
-                log::error!("Failed to find screenshot Args for Location message.");
+                tracing::error!("Failed to find screenshot Args for Location message.");
                 cosmic::Task::none()
             }
         }
@@ -899,13 +899,13 @@ pub fn update_args(
     } = &args;
 
     if portal.outputs.len() != images.len() {
-        log::error!(
+        tracing::error!(
             "Screenshot output count mismatch: {} != {}",
             portal.outputs.len(),
             images.len()
         );
-        log::warn!("Screenshot outputs: {:?}", portal.outputs);
-        log::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
+        tracing::warn!("Screenshot outputs: {:?}", portal.outputs);
+        tracing::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
         return cosmic::Task::none();
     }
 
@@ -917,7 +917,7 @@ pub fn update_args(
         let bg_state = match cosmic_bg_config::state::State::get_entry(&c) {
             Ok(state) => state,
             Err((err, s)) => {
-                log::error!("Failed to get bg config state: {:?}", err);
+                tracing::error!("Failed to get bg config state: {:?}", err);
                 s
             }
         };
@@ -930,7 +930,7 @@ pub fn update_args(
             }));
         }
     } else {
-        log::error!("Failed to get bg config state");
+        tracing::error!("Failed to get bg config state");
         for o in &mut portal.outputs {
             o.bg_source = Some(cosmic_bg_config::Source::Path(
                 "/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg".into(),
@@ -981,7 +981,7 @@ pub fn update_args(
             .collect();
         cosmic::Task::batch(cmds)
     } else {
-        log::info!("Existing screenshot args updated");
+        tracing::info!("Existing screenshot args updated");
         cosmic::Task::none()
     }
 }

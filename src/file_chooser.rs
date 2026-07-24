@@ -152,7 +152,7 @@ impl FileChooser {
         title: &str,
         options: FileChooserOptions,
     ) -> PortalResponse<FileChooserResult> {
-        log::debug!("file chooser {handle}, {app_id}, {parent_window}, {title}, {options:?}");
+        tracing::debug!("file chooser {handle}, {app_id}, {parent_window}, {title}, {options:?}");
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         if let Err(err) = self
@@ -167,7 +167,7 @@ impl FileChooser {
             }))
             .await
         {
-            log::error!("failed to send file chooser event: {}", err);
+            tracing::error!("failed to send file chooser event: {}", err);
             return PortalResponse::Other;
         }
         if let Some(res) = rx.recv().await {
@@ -283,7 +283,7 @@ fn file_chooser_update_msg(
     dialog: Dialog,
     dialog_res: DialogResult,
 ) -> cosmic::Task<cosmic::Action<AppMsg>> {
-    log::debug!("file chooser result {:?}", dialog_res);
+    tracing::debug!("file chooser result {:?}", dialog_res);
     let response = match dialog_res {
         DialogResult::Cancel => PortalResponse::Cancelled,
         DialogResult::Open(paths) => {
@@ -292,7 +292,7 @@ fn file_chooser_update_msg(
                 match url::Url::from_file_path(&path) {
                     Ok(url) => uris.push(url.to_string()),
                     Err(()) => {
-                        log::error!("failed to convert to URL: {:?}", path);
+                        tracing::error!("failed to convert to URL: {:?}", path);
                     }
                 }
             }
@@ -374,7 +374,7 @@ pub fn update_msg(
                 {
                     return dialog.update(dialog_msg).map(move |msg| map_msg(id, msg));
                 }
-                log::warn!("no file chooser dialog with ID {id:?}");
+                tracing::warn!("no file chooser dialog with ID {id:?}");
                 cosmic::Task::none()
             }
         },
@@ -389,14 +389,14 @@ pub fn update_msg(
                     .iter()
                     .find_map(|(k, (_args, dialog))| dialog.contains_surface(&id).then_some(*k))
                 else {
-                    log::warn!("no file chooser dialog with ID {id:?}");
+                    tracing::warn!("no file chooser dialog with ID {id:?}");
                     return cosmic::Task::none();
                 };
 
                 if let Some((args, dialog)) = portal.file_choosers.remove(&k) {
                     return file_chooser_update_msg(args, dialog, dialog_res);
                 }
-                log::warn!("no file chooser dialog with ID {id:?}");
+                tracing::warn!("no file chooser dialog with ID {id:?}");
                 cosmic::Task::none()
             }
         },
@@ -424,7 +424,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
             filename: options.current_name.clone().unwrap_or_default(),
         },
         FileChooserOptions::SaveFiles(options) => {
-            log::error!("{options:?} not supported");
+            tracing::error!("{options:?} not supported");
             DialogKind::OpenFolder
         }
     };
@@ -492,7 +492,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<cosmic
                     0 => DialogFilterPattern::Glob(value),
                     1 => DialogFilterPattern::Mime(value),
                     _ => {
-                        log::warn!("unsupported filter pattern {:?}", (kind, value));
+                        tracing::warn!("unsupported filter pattern {:?}", (kind, value));
                         continue;
                     }
                 });
