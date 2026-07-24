@@ -9,10 +9,13 @@ use cosmic::iced::runtime::clipboard;
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedOutput, SctkLayerSurfaceSettings,
 };
-use cosmic::iced::{Length, Limits, window};
+use cosmic::iced::{Length, Limits, Point, window};
 use cosmic::widget::space;
+use cosmic_client_toolkit::sctk::output::OutputInfo;
 use cosmic_client_toolkit::sctk::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-use futures::stream::{FuturesUnordered, StreamExt};
+use cosmic_client_toolkit::toplevel_info::ToplevelInfo;
+use cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1;
+use futures::stream::{self, StreamExt};
 use image::RgbaImage;
 use rustix::fd::AsFd;
 use std::borrow::Cow;
@@ -20,9 +23,10 @@ use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
-use wayland_client::protocol::wl_output::WlOutput;
+use wayland_client::protocol::wl_output::{self, WlOutput};
 use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
@@ -41,13 +45,29 @@ pub struct ScreenshotImage {
 
 impl ScreenshotImage {
     fn new<T: AsFd>(img: ShmImage<T>) -> anyhow::Result<Self> {
-        let rgba = img.image_transformed()?;
+        Ok(Self::from_rgba(img.image_transformed()?))
+    }
+
+    fn from_rgba(rgba: RgbaImage) -> Self {
         let handle = cosmic::widget::image::Handle::from_rgba(
             rgba.width(),
             rgba.height(),
             rgba.clone().into_vec(),
         );
-        Ok(Self { rgba, handle })
+        Self { rgba, handle }
+    }
+
+    fn placeholder((width, height): (u32, u32)) -> Self {
+        let width = width.max(1);
+        let height = height.max(1);
+        let scale = (640.0 / width.max(height) as f32).min(1.0);
+        let width = (width as f32 * scale).round().max(1.0) as u32;
+        let height = (height as f32 * scale).round().max(1.0) as u32;
+        Self::from_rgba(RgbaImage::from_pixel(
+            width,
+            height,
+            image::Rgba([38, 38, 38, 255]),
+        ))
     }
 
     pub fn width(&self) -> u32 {
@@ -57,6 +77,84 @@ impl ScreenshotImage {
     pub fn height(&self) -> u32 {
         self.rgba.height()
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ToplevelImage {
+    pub image: ScreenshotImage,
+    pub geometry: Option<Rect>,
+    pub preview_dimensions: (u32, u32),
+    pub activated: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PointerSnapshot {
+    pub output: String,
+    pub position: Point,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToplevelImageUpdate {
+    pub handle: zvariant::ObjectPath<'static>,
+    pub images: HashMap<String, Vec<(usize, ScreenshotImage)>>,
+}
+
+#[derive(Clone)]
+struct ToplevelCapture {
+    output: WlOutput,
+    output_name: String,
+    logical_size: (i32, i32),
+    index: usize,
+    info: ToplevelInfo,
+}
+
+const OUTPUT_CAPTURE_DEADLINE: Duration = Duration::from_millis(500);
+const TOPLEVEL_CAPTURE_DEADLINE: Duration = Duration::from_millis(750);
+const OUTPUT_CAPTURE_CONCURRENCY: usize = 4;
+const TOPLEVEL_CAPTURE_CONCURRENCY: usize = 8;
+
+fn logical_pointer_position(
+    (x, y): (i32, i32),
+    (buffer_width, buffer_height): (u32, u32),
+    (logical_width, logical_height): (i32, i32),
+) -> Option<Point> {
+    let x = u32::try_from(x).ok()?;
+    let y = u32::try_from(y).ok()?;
+    let logical_width = u32::try_from(logical_width).ok()?;
+    let logical_height = u32::try_from(logical_height).ok()?;
+    if buffer_width == 0
+        || buffer_height == 0
+        || logical_width == 0
+        || logical_height == 0
+        || x >= buffer_width
+        || y >= buffer_height
+    {
+        return None;
+    }
+
+    Some(Point::new(
+        x as f32 * logical_width as f32 / buffer_width as f32,
+        y as f32 * logical_height as f32 / buffer_height as f32,
+    ))
+}
+
+fn transformed_output_size(info: &OutputInfo) -> Option<(u32, u32)> {
+    let (width, height) = info.modes.iter().find(|mode| mode.current)?.dimensions;
+    let width = u32::try_from(width).ok()?;
+    let height = u32::try_from(height).ok()?;
+    Some(
+        if matches!(
+            info.transform,
+            wl_output::Transform::_90
+                | wl_output::Transform::_270
+                | wl_output::Transform::Flipped90
+                | wl_output::Transform::Flipped270
+        ) {
+            (height, width)
+        } else {
+            (width, height)
+        },
+    )
 }
 
 #[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
@@ -146,11 +244,79 @@ impl Rect {
         self.bottom - self.top
     }
 
+    fn contains(&self, point: Point) -> bool {
+        point.x >= self.left as f32
+            && point.x < self.right as f32
+            && point.y >= self.top as f32
+            && point.y < self.bottom as f32
+    }
+
+    fn dimensions_or_default(self) -> (u32, u32) {
+        (
+            self.right.saturating_sub(self.left).unsigned_abs().max(1),
+            self.bottom.saturating_sub(self.top).unsigned_abs().max(1),
+        )
+    }
+
     pub fn dimensions(self) -> Option<RectDimension> {
         let width = NonZeroU32::new((self.width()).unsigned_abs())?;
         let height = NonZeroU32::new((self.height()).unsigned_abs())?;
         Some(RectDimension { width, height })
     }
+}
+
+fn toplevel_geometry(info: &ToplevelInfo, output: &WlOutput) -> Option<Rect> {
+    info.geometry.get(output).map(|geometry| {
+        let right = geometry.x.saturating_add(geometry.width);
+        let bottom = geometry.y.saturating_add(geometry.height);
+        Rect {
+            left: geometry.x.min(right),
+            top: geometry.y.min(bottom),
+            right: geometry.x.max(right),
+            bottom: geometry.y.max(bottom),
+        }
+    })
+}
+
+fn crop_output_image(
+    output_image: &ScreenshotImage,
+    geometry: Rect,
+    (logical_width, logical_height): (i32, i32),
+) -> Option<ScreenshotImage> {
+    if logical_width <= 0 || logical_height <= 0 {
+        return None;
+    }
+    let visible = geometry.intersect(Rect {
+        left: 0,
+        top: 0,
+        right: logical_width,
+        bottom: logical_height,
+    })?;
+    let image_width = output_image.width();
+    let image_height = output_image.height();
+    if image_width == 0 || image_height == 0 {
+        return None;
+    }
+
+    let scale_x = image_width as f64 / logical_width as f64;
+    let scale_y = image_height as f64 / logical_height as f64;
+    let left = (visible.left as f64 * scale_x).floor().max(0.0) as u32;
+    let top = (visible.top as f64 * scale_y).floor().max(0.0) as u32;
+    let right = (visible.right as f64 * scale_x)
+        .ceil()
+        .clamp(0.0, image_width as f64) as u32;
+    let bottom = (visible.bottom as f64 * scale_y)
+        .ceil()
+        .clamp(0.0, image_height as f64) as u32;
+    let width = right.saturating_sub(left);
+    let height = bottom.saturating_sub(top);
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    Some(ScreenshotImage::from_rgba(
+        image::imageops::crop_imm(&output_image.rgba, left, top, width, height).to_image(),
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -169,54 +335,244 @@ impl Screenshot {
         Self { wayland_helper, tx }
     }
 
+    fn toplevel_captures(&self, outputs: &[Output]) -> Vec<ToplevelCapture> {
+        outputs
+            .iter()
+            .flat_map(|output| {
+                self.wayland_helper
+                    .output_toplevels(&output.output)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, info)| ToplevelCapture {
+                        output: output.output.clone(),
+                        output_name: output.name.clone(),
+                        logical_size: output.logical_size,
+                        index,
+                        info,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn fallback_toplevel_images(
+        &self,
+        captures: &[ToplevelCapture],
+        output_images: &HashMap<String, ScreenshotImage>,
+    ) -> HashMap<String, Vec<ToplevelImage>> {
+        let mut images = HashMap::<String, Vec<ToplevelImage>>::new();
+        for capture in captures {
+            let geometry = toplevel_geometry(&capture.info, &capture.output);
+            let preview_dimensions = geometry.map(Rect::dimensions_or_default).unwrap_or((16, 9));
+            let image = output_images
+                .get(&capture.output_name)
+                .and_then(|output_image| {
+                    geometry.and_then(|geometry| {
+                        crop_output_image(output_image, geometry, capture.logical_size)
+                    })
+                })
+                .unwrap_or_else(|| ScreenshotImage::placeholder(preview_dimensions));
+            let output_images = images.entry(capture.output_name.clone()).or_default();
+            debug_assert_eq!(capture.index, output_images.len());
+            output_images.push(ToplevelImage {
+                image,
+                geometry,
+                preview_dimensions,
+                activated: capture
+                    .info
+                    .state
+                    .contains(&zcosmic_toplevel_handle_v1::State::Activated),
+            });
+        }
+        images
+    }
+
     async fn interactive_toplevel_images(
         &self,
-        outputs: &[Output],
-    ) -> anyhow::Result<HashMap<String, Vec<ScreenshotImage>>> {
+        captures: &[ToplevelCapture],
+        pointer: Option<&PointerSnapshot>,
+    ) -> HashMap<String, Vec<(usize, ScreenshotImage)>> {
+        let mut capture_order = (0..captures.len()).collect::<Vec<_>>();
+        capture_order.sort_by(|&a, &b| {
+            let a = &captures[a];
+            let b = &captures[b];
+            let a_hovered = pointer.is_some_and(|pointer| {
+                pointer.output == a.output_name
+                    && toplevel_geometry(&a.info, &a.output)
+                        .is_some_and(|geometry| geometry.contains(pointer.position))
+            });
+            let b_hovered = pointer.is_some_and(|pointer| {
+                pointer.output == b.output_name
+                    && toplevel_geometry(&b.info, &b.output)
+                        .is_some_and(|geometry| geometry.contains(pointer.position))
+            });
+            let a_activated = a
+                .info
+                .state
+                .contains(&zcosmic_toplevel_handle_v1::State::Activated);
+            let b_activated = b
+                .info
+                .state
+                .contains(&zcosmic_toplevel_handle_v1::State::Activated);
+
+            b_hovered
+                .cmp(&a_hovered)
+                .then_with(|| b_activated.cmp(&a_activated))
+                .then_with(|| a.index.cmp(&b.index))
+        });
+
         let wayland_helper = self.wayland_helper.clone();
-        Ok(outputs
-            .iter()
-            .map(move |Output { output, name, .. }| {
-                let wayland_helper = wayland_helper.clone();
-                async move {
-                    let frame = wayland_helper
-                        .capture_output_toplevels_shm(output, false)
-                        .filter_map(|img| async { ScreenshotImage::new(img).ok() })
-                        .collect()
-                        .await;
-                    (name.clone(), frame)
+        let mut pending = stream::iter(capture_order.into_iter().map(|capture_i| {
+            let wayland_helper = wayland_helper.clone();
+            let capture = captures[capture_i].clone();
+            async move {
+                let source = CaptureSource::Toplevel(capture.info.foreign_toplevel.clone());
+                let image = wayland_helper
+                    .capture_source_shm(source, false)
+                    .await
+                    .and_then(|image| ScreenshotImage::new(image).ok());
+                (capture.output_name, capture.index, image)
+            }
+        }))
+        .buffer_unordered(TOPLEVEL_CAPTURE_CONCURRENCY);
+        let deadline = tokio::time::Instant::now() + TOPLEVEL_CAPTURE_DEADLINE;
+        let mut images = HashMap::<String, Vec<(usize, ScreenshotImage)>>::new();
+
+        loop {
+            match tokio::time::timeout_at(deadline, pending.next()).await {
+                Ok(Some((output, index, Some(image)))) => {
+                    images.entry(output).or_default().push((index, image));
                 }
-            })
-            .collect::<FuturesUnordered<_>>()
-            .collect::<HashMap<String, _>>()
-            .await)
+                Ok(Some((output, index, None))) => {
+                    tracing::debug!("Failed to capture window {index} on output {output}");
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::warn!(
+                        "Window preview capture exceeded {:?}; keeping fast fallback previews",
+                        TOPLEVEL_CAPTURE_DEADLINE
+                    );
+                    break;
+                }
+            }
+        }
+
+        for output_images in images.values_mut() {
+            output_images.sort_by_key(|(index, _)| *index);
+        }
+        images
     }
 
     async fn interactive_output_images(
         &self,
         outputs: &[Output],
         app_id: &str,
-    ) -> anyhow::Result<HashMap<String, ScreenshotImage>> {
+    ) -> (HashMap<String, ScreenshotImage>, Option<PointerSnapshot>) {
         // collect screenshots from each output
 
         let wayland_helper = self.wayland_helper.clone();
+        // Cursor sessions report the current position relative to their capture source. Create
+        // them before requesting the output frames: by the time a frame is ready, the initial
+        // cursor metadata queued before it has also been dispatched on the Wayland event queue.
+        let cursor_sessions = outputs
+            .iter()
+            .filter_map(|Output { output, name, .. }| {
+                wayland_helper
+                    .capture_source_cursor_session(CaptureSource::Output(output.clone()))
+                    .map(|(session, _stream)| (name.clone(), session))
+            })
+            .collect::<HashMap<_, _>>();
 
         let mut map = HashMap::with_capacity(outputs.len());
-        for Output {
-            output,
-            logical_position: (output_x, output_y),
-            name,
-            ..
-        } in outputs
-        {
-            let frame = wayland_helper
-                .capture_source_shm(CaptureSource::Output(output.clone()), false)
-                .await
-                .ok_or_else(|| anyhow::anyhow!("shm screencopy failed"))?;
-            map.insert(name.clone(), ScreenshotImage::new(frame)?);
+        let output_requests = outputs
+            .iter()
+            .map(|output| output.output.clone())
+            .collect::<Vec<_>>();
+        let mut pending = stream::iter(output_requests.into_iter().map(|output| {
+            let wayland_helper = wayland_helper.clone();
+            let result_output = output.clone();
+            async move {
+                let image = wayland_helper
+                    .capture_source_shm(CaptureSource::Output(output), false)
+                    .await
+                    .and_then(|image| ScreenshotImage::new(image).ok());
+                (result_output, image)
+            }
+        }))
+        .buffer_unordered(OUTPUT_CAPTURE_CONCURRENCY);
+        let deadline = tokio::time::Instant::now() + OUTPUT_CAPTURE_DEADLINE;
+        let mut pointer = None;
+
+        loop {
+            match tokio::time::timeout_at(deadline, pending.next()).await {
+                Ok(Some((output, Some(image)))) => {
+                    let Some(output_state) = outputs.iter().find(|item| item.output == output)
+                    else {
+                        continue;
+                    };
+                    if pointer.is_none()
+                        && let Some(session) = cursor_sessions.get(&output_state.name)
+                        && session.cursor_entered()
+                        && let Some(position) = logical_pointer_position(
+                            session.cursor_position(),
+                            (image.width(), image.height()),
+                            output_state.logical_size,
+                        )
+                    {
+                        pointer = Some(PointerSnapshot {
+                            output: output_state.name.clone(),
+                            position,
+                        });
+                    }
+                    map.insert(output_state.name.clone(), image);
+                }
+                Ok(Some((output, None))) => {
+                    tracing::warn!("Failed to capture output {output:?}; using a placeholder");
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::warn!(
+                        "Output capture exceeded {:?}; showing the screenshot UI with fallbacks",
+                        OUTPUT_CAPTURE_DEADLINE
+                    );
+                    break;
+                }
+            }
         }
 
-        Ok(map)
+        if pointer.is_none() {
+            pointer = outputs.iter().find_map(|output| {
+                let session = cursor_sessions.get(&output.name)?;
+                if !session.cursor_entered() {
+                    return None;
+                }
+                let buffer_size = self
+                    .wayland_helper
+                    .output_info(&output.output)
+                    .as_ref()
+                    .and_then(transformed_output_size)?;
+                logical_pointer_position(
+                    session.cursor_position(),
+                    buffer_size,
+                    output.logical_size,
+                )
+                .map(|position| PointerSnapshot {
+                    output: output.name.clone(),
+                    position,
+                })
+            });
+        }
+
+        for output in outputs {
+            map.entry(output.name.clone()).or_insert_with(|| {
+                ScreenshotImage::placeholder((
+                    u32::try_from(output.logical_size.0).unwrap_or(1),
+                    u32::try_from(output.logical_size.1).unwrap_or(1),
+                ))
+            });
+        }
+
+        (map, pointer)
     }
 
     pub fn save_rgba(img: &RgbaImage, path: Option<&Path>) -> anyhow::Result<Vec<u8>> {
@@ -420,7 +776,8 @@ pub struct Args {
     pub parent_window: String,
     pub options: ScreenshotOptions,
     pub output_images: HashMap<String, ScreenshotImage>,
-    pub toplevel_images: HashMap<String, Vec<ScreenshotImage>>,
+    pub toplevel_images: HashMap<String, Vec<ToplevelImage>>,
+    pub initial_pointer: Option<PointerSnapshot>,
     pub tx: Sender<PortalResponse<ScreenshotResult>>,
     pub choice: Choice,
     pub location: ImageSaveLocation,
@@ -488,14 +845,10 @@ impl Screenshot {
         if options.interactive.unwrap_or_default() {
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
             let first_output = &*outputs[0].name;
-            let output_images = self
-                .interactive_output_images(&outputs, app_id)
-                .await
-                .unwrap_or_default();
-            let toplevel_images = self
-                .interactive_toplevel_images(&outputs)
-                .await
-                .unwrap_or_default();
+            let toplevel_captures = self.toplevel_captures(&outputs);
+            let (output_images, initial_pointer) =
+                self.interactive_output_images(&outputs, app_id).await;
+            let toplevel_images = self.fallback_toplevel_images(&toplevel_captures, &output_images);
             // TODO: Maybe replace config's Choice with Choice from this file
             let choice = match config.choice {
                 config::screenshot::Choice::Output(Some(output))
@@ -533,6 +886,7 @@ impl Screenshot {
                     options,
                     output_images,
                     toplevel_images,
+                    initial_pointer: initial_pointer.clone(),
                     tx,
                     location: config.save_location,
                     // TODO cover all outputs at start of rectangle?
@@ -544,6 +898,29 @@ impl Screenshot {
                 tracing::error!("Failed to send screenshot event, {}", err);
                 return PortalResponse::Other;
             }
+
+            let toplevel_images =
+                self.interactive_toplevel_images(&toplevel_captures, initial_pointer.as_ref());
+            tokio::pin!(toplevel_images);
+            tokio::select! {
+                biased;
+                response = rx.recv() => {
+                    return response.unwrap_or(PortalResponse::Cancelled);
+                }
+                images = &mut toplevel_images => {
+                    if !images.is_empty()
+                        && let Err(err) = self.tx.try_send(
+                            subscription::Event::ScreenshotToplevels(ToplevelImageUpdate {
+                                handle: handle.to_owned(),
+                                images,
+                            })
+                        )
+                    {
+                        tracing::warn!("Failed to update screenshot window previews: {err}");
+                    }
+                }
+            }
+
             if let Some(res) = rx.recv().await {
                 return res;
             } else {
@@ -730,11 +1107,12 @@ pub fn update_msg(
                         .get(&output)
                         .and_then(|imgs| imgs.get(window_i))
                     {
-                        if let Ok(buffer) = Screenshot::save_rgba(&img.rgba, image_path.as_deref())
-                            .inspect_err(|err| {
-                                tracing::error!("Failed to capture screenshot: {:?}", err);
-                                success = false;
-                            })
+                        if let Ok(buffer) =
+                            Screenshot::save_rgba(&img.image.rgba, image_path.as_deref())
+                                .inspect_err(|err| {
+                                    tracing::error!("Failed to capture screenshot: {:?}", err);
+                                    success = false;
+                                })
                         {
                             cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
                         }
@@ -791,6 +1169,31 @@ pub fn update_msg(
             cosmic::Task::batch(cmds)
         }
         Msg::Choice(c) => {
+            let was_window = portal
+                .screenshot_args
+                .as_ref()
+                .is_some_and(|args| matches!(args.choice, Choice::Window(..)));
+            match &c {
+                Choice::Window(name, _) if !was_window => {
+                    for output in &mut portal.outputs {
+                        output.window_pointer_anchor = None;
+                    }
+                    if let Some(output) = portal
+                        .outputs
+                        .iter_mut()
+                        .find(|output| output.name == *name && output.has_pointer)
+                    {
+                        output.window_pointer_anchor = output.pointer_position;
+                    }
+                }
+                Choice::Window(..) => {}
+                _ => {
+                    for output in &mut portal.outputs {
+                        output.window_pointer_anchor = None;
+                    }
+                }
+            }
+
             let choice = (&c).into();
             // Only save config when drag is finished to avoid disk writes on every mouse motion
             let should_save_config =
@@ -881,16 +1284,51 @@ pub fn update_msg(
     }
 }
 
+pub fn update_toplevel_images(
+    portal: &mut CosmicPortal,
+    update: ToplevelImageUpdate,
+) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
+    let Some(args) = portal
+        .screenshot_args
+        .as_mut()
+        .filter(|args| args.handle == update.handle)
+    else {
+        tracing::debug!("Ignoring stale screenshot window preview update");
+        return cosmic::Task::none();
+    };
+
+    for (output, images) in update.images {
+        let Some(toplevels) = args.toplevel_images.get_mut(&output) else {
+            continue;
+        };
+        for (index, image) in images {
+            if let Some(toplevel) = toplevels.get_mut(index) {
+                toplevel.image = image;
+            }
+        }
+    }
+
+    cosmic::Task::none()
+}
+
 pub fn update_args(
     portal: &mut CosmicPortal,
-    args: Args,
+    mut args: Args,
 ) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
+    for output in &portal.outputs {
+        args.output_images
+            .entry(output.name.clone())
+            .or_insert_with(|| ScreenshotImage::placeholder(output.logical_size));
+        args.toplevel_images.entry(output.name.clone()).or_default();
+    }
+
     let Args {
         handle,
         app_id,
         parent_window,
         options,
         output_images: images,
+        initial_pointer,
         tx,
         choice,
         action,
@@ -899,14 +1337,27 @@ pub fn update_args(
     } = &args;
 
     if portal.outputs.len() != images.len() {
-        tracing::error!(
+        tracing::warn!(
             "Screenshot output count mismatch: {} != {}",
             portal.outputs.len(),
             images.len()
         );
-        tracing::warn!("Screenshot outputs: {:?}", portal.outputs);
-        tracing::warn!("Screenshot images: {:?}", images.keys().collect::<Vec<_>>());
-        return cosmic::Task::none();
+    }
+
+    for output in &mut portal.outputs {
+        output.has_pointer = false;
+        output.pointer_position = None;
+        output.window_pointer_anchor = None;
+
+        if let Some(pointer) = initial_pointer
+            && pointer.output == output.name
+        {
+            output.has_pointer = true;
+            output.pointer_position = Some(pointer.position);
+            if matches!(choice, Choice::Window(..)) {
+                output.window_pointer_anchor = Some(pointer.position);
+            }
+        }
     }
 
     // update output bg sources
@@ -983,5 +1434,55 @@ pub fn update_args(
     } else {
         tracing::info!("Existing screenshot args updated");
         cosmic::Task::none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_buffer_position_is_converted_to_logical_coordinates() {
+        assert_eq!(
+            logical_pointer_position((1500, 500), (3000, 2000), (1500, 1000)),
+            Some(Point::new(750.0, 250.0))
+        );
+    }
+
+    #[test]
+    fn cursor_hotspot_outside_output_is_ignored() {
+        assert_eq!(
+            logical_pointer_position((-1, 500), (3000, 2000), (1500, 1000)),
+            None
+        );
+        assert_eq!(
+            logical_pointer_position((3000, 500), (3000, 2000), (1500, 1000)),
+            None
+        );
+    }
+
+    #[test]
+    fn fallback_window_preview_uses_logical_output_scaling() {
+        let output = ScreenshotImage::from_rgba(RgbaImage::new(200, 100));
+        let preview = crop_output_image(
+            &output,
+            Rect {
+                left: 25,
+                top: 25,
+                right: 75,
+                bottom: 75,
+            },
+            (100, 100),
+        )
+        .unwrap();
+
+        assert_eq!((preview.width(), preview.height()), (100, 50));
+    }
+
+    #[test]
+    fn placeholder_preserves_window_aspect_ratio() {
+        let placeholder = ScreenshotImage::placeholder((1600, 200));
+
+        assert_eq!((placeholder.width(), placeholder.height()), (640, 80));
     }
 }

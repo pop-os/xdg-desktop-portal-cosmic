@@ -52,7 +52,7 @@ serde.workspace = true
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.27.0"
-tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
+tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync", "time"] }
 wayland-client = { version = "0.31.14" }
 tracing = "0.1.44"
 tracing-journald = { version = "0.3.2", optional = true }

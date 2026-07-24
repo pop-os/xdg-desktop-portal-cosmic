@@ -23,6 +23,7 @@ pub enum Event {
     Access(crate::access::AccessDialogArgs),
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
+    ScreenshotToplevels(crate::screenshot::ToplevelImageUpdate),
     Screencast(crate::screencast_dialog::Args),
     CancelScreencast(zvariant::ObjectPath<'static>),
     Accent(Srgba),
@@ -130,6 +131,11 @@ pub(crate) async fn process_changes(
                     Event::Screenshot(args) => {
                         if let Err(err) = output.send(Event::Screenshot(args)).await {
                             tracing::error!("Error sending screenshot event: {:?}", err);
+                        };
+                    }
+                    Event::ScreenshotToplevels(update) => {
+                        if let Err(err) = output.send(Event::ScreenshotToplevels(update)).await {
+                            tracing::error!("Error sending screenshot preview update: {:?}", err);
                         };
                     }
                     Event::Screencast(args) => {
