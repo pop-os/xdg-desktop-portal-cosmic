@@ -388,11 +388,11 @@ impl PrintDialog {
         if self.is_discovering {
             Subscription::run_with(PrinterDiscovery, |_| {
                 cosmic::iced::stream::channel(100, |mut output: mpsc::Sender<Msg>| async move {
-                    log::debug!("Starting CPDB printer discovery subscription stream");
+                    tracing::debug!("Starting CPDB printer discovery subscription stream");
                     let client = match CpdbClient::new().await {
                         Ok(c) => c,
                         Err(e) => {
-                            log::error!("Failed to create CPDB client: {:?}", e);
+                            tracing::error!("Failed to create CPDB client: {:?}", e);
                             return;
                         }
                     };
@@ -422,7 +422,7 @@ fn fetch_printer_details(printer: &PrinterSnapshot) -> Task<Msg> {
             let client = match CpdbClient::new().await {
                 Ok(c) => c,
                 Err(e) => {
-                    log::error!("Failed to create client for details fetch: {:?}", e);
+                    tracing::error!("Failed to create client for details fetch: {:?}", e);
                     return Msg::PrinterDetailsLoaded(
                         OptionsCollection::default(),
                         MediaCollection::default(),
@@ -435,7 +435,7 @@ fn fetch_printer_details(printer: &PrinterSnapshot) -> Task<Msg> {
             match client.get_printer_details(&printer_id, &backend).await {
                 Ok((opts, media)) => Msg::PrinterDetailsLoaded(opts, media),
                 Err(e) => {
-                    log::error!("Failed to fetch printer details: {:?}", e);
+                    tracing::error!("Failed to fetch printer details: {:?}", e);
                     Msg::PrinterDetailsLoaded(
                         OptionsCollection::default(),
                         MediaCollection::default(),
@@ -1901,7 +1901,7 @@ pub(crate) async fn do_print_execution(
     let client = match cpdb_rs::CpdbClient::new().await {
         Ok(c) => c,
         Err(e) => {
-            log::error!("Failed to create CPDB client for printing: {e:?}");
+            tracing::error!("Failed to create CPDB client for printing: {e:?}");
             return PortalResponse::Other;
         }
     };
@@ -1914,23 +1914,23 @@ pub(crate) async fn do_print_execution(
     // CPDB backends (e.g. CUPS) require a printer query to populate internal tables before printing
     let _ = client.get_all_printers().await;
 
-    log::debug!("Submitting print job to printer '{printer_id}' via backend '{backend}'");
+    tracing::debug!("Submitting print job to printer '{printer_id}' via backend '{backend}'");
     let (job_id, cpdb_writable_fd) = match client
         .print_fd(&printer_id, &backend, &settings_ref, &title)
         .await
     {
         Ok(res) => res,
         Err(e) => {
-            log::error!("Failed to submit print job via CPDB client: {e:?}");
+            tracing::error!("Failed to submit print job via CPDB client: {e:?}");
             return PortalResponse::Other;
         }
     };
-    log::debug!("Print job submitted successfully. Job Id: {job_id}");
+    tracing::debug!("Print job submitted successfully. Job Id: {job_id}");
 
     let readable_fd = match fd.as_fd().try_clone_to_owned() {
         Ok(f) => f,
         Err(e) => {
-            log::error!("Failed to clone document FD: {e:?}");
+            tracing::error!("Failed to clone document FD: {e:?}");
             return PortalResponse::Other;
         }
     };
@@ -1944,17 +1944,17 @@ pub(crate) async fn do_print_execution(
 
     match copy_result {
         Ok(Ok(bytes)) => {
-            log::debug!("Copied {bytes} bytes of document data to CPDB");
+            tracing::debug!("Copied {bytes} bytes of document data to CPDB");
             PortalResponse::Success(PrintResult {
                 settings: HashMap::new(),
             })
         }
         Ok(Err(e)) => {
-            log::error!("Failed copying document data to CPDB: {e:?}");
+            tracing::error!("Failed copying document data to CPDB: {e:?}");
             PortalResponse::Other
         }
         Err(e) => {
-            log::error!("{e:?}");
+            tracing::error!("{e:?}");
             PortalResponse::Other
         }
     }

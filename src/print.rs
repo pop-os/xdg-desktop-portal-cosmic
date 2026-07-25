@@ -86,7 +86,7 @@ impl Print {
         page_setup: HashMap<String, zvariant::OwnedValue>,
         options: PreparePrintOptions,
     ) -> PortalResponse<PreparePrintResult> {
-        log::debug!(
+        tracing::debug!(
             "PreparePrint: app_id={app_id} parent_window={parent_window} title={title} \
             settings={settings:?} page_setup={page_setup:?} options={options:?}"
         );
@@ -127,7 +127,7 @@ impl Print {
                 })))
                 .await
             {
-                log::error!("Failed to send print portal request: {err}");
+                tracing::error!("Failed to send print portal request: {err}");
                 return PortalResponse::Other;
             }
 
@@ -148,7 +148,7 @@ impl Print {
         fd: zvariant::Fd<'_>,
         options: PrintOptions,
     ) -> PortalResponse<PrintResult> {
-        log::debug!(
+        tracing::debug!(
             "Print: app_id={app_id} parent_window={parent_window} \
             title={title} options={options:?} fd={fd:?}"
         );
@@ -176,7 +176,7 @@ impl Print {
                     let owned_fd = match fd.as_fd().try_clone_to_owned() {
                         Ok(f) => f,
                         Err(e) => {
-                            log::error!("Failed to clone file descriptor: {e}");
+                            tracing::error!("Failed to clone file descriptor: {e}");
                             return PortalResponse::Other;
                         }
                     };
@@ -198,7 +198,7 @@ impl Print {
             let owned_fd = match fd.as_fd().try_clone_to_owned() {
                 Ok(f) => f,
                 Err(e) => {
-                    log::error!("Failed to clone file descriptor: {e}");
+                    tracing::error!("Failed to clone file descriptor: {e}");
                     return PortalResponse::Other;
                 }
             };
@@ -221,7 +221,7 @@ impl Print {
                 })))
                 .await
             {
-                log::error!("Failed to send print portal request: {err}");
+                tracing::error!("Failed to send print portal request: {err}");
                 return PortalResponse::Other;
             }
 

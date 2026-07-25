@@ -165,12 +165,12 @@ pub(crate) async fn process_changes(
                     }
                     Event::CancelPrint(handle) => {
                         if let Err(err) = output.send(Event::CancelPrint(handle)).await {
-                            log::error!("Error sending print cancel: {:?}", err);
+                            tracing::error!("Error sending print cancel: {:?}", err);
                         };
                     }
                     Event::Print(args) => {
                         if let Err(err) = output.send(Event::Print(args)).await {
-                            log::error!("Error sending print event: {:?}", err);
+                            tracing::error!("Error sending print event: {:?}", err);
                         };
                     }
                     Event::Accent(a) => {
