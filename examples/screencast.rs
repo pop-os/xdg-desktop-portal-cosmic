@@ -23,6 +23,32 @@ struct Args {
     multiple: bool,
     #[clap(long, value_enum, value_delimiter(','))]
     source_types: Vec<Source>,
+    /// Ask the portal to remember this selection, so a later session can be
+    /// restored without prompting.
+    #[clap(long, value_enum, default_value("do-not"))]
+    persist_mode: Persist,
+    /// Restore token printed by a previous run. With a valid token the portal
+    /// should start without showing the source picker.
+    #[clap(long)]
+    restore_token: Option<String>,
+}
+
+#[derive(clap::ValueEnum, Debug, Default, Copy, Clone, PartialEq, Eq)]
+enum Persist {
+    #[default]
+    DoNot,
+    Application,
+    ExplicitlyRevoked,
+}
+
+impl From<Persist> for PersistMode {
+    fn from(persist: Persist) -> PersistMode {
+        match persist {
+            Persist::DoNot => PersistMode::DoNot,
+            Persist::Application => PersistMode::Application,
+            Persist::ExplicitlyRevoked => PersistMode::ExplicitlyRevoked,
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Debug, Copy, Clone, PartialEq, Eq)]
@@ -62,12 +88,18 @@ async fn main() -> anyhow::Result<()> {
             CursorMode::Embedded,
             source_types,
             args.multiple,
-            None,
-            PersistMode::DoNot,
+            args.restore_token.as_deref(),
+            args.persist_mode.into(),
         )
         .await?;
     let streams = screencast.start(&session, None).await?.response()?;
     println!("{} streams", streams.streams().len());
+    // A token only comes back when the portal reports a non-zero persist
+    // mode; without it every reconnect prompts again.
+    match streams.restore_token() {
+        Some(token) => println!("restore_token: {token}"),
+        None => println!("restore_token: <none returned>"),
+    }
     let stream = &streams.streams()[0];
     let fd = screencast.open_pipe_wire_remote(&session).await?;
 

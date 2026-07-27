@@ -143,6 +143,43 @@ struct StartResult {
     restore_data: Option<RestoreData>,
 }
 
+/// How long a granted capture selection survives, per the ScreenCast portal
+/// spec's `persist_mode`.
+///
+/// The value the backend returns from `Start` is what decides whether
+/// xdg-desktop-portal keeps the restore token at all. Reporting `None` makes
+/// the frontend discard it, so the client is prompted again on every
+/// connection even though the restore path here works — which is the usual
+/// complaint from remote-desktop clients.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PersistMode {
+    /// Do not persist; prompt every time.
+    #[default]
+    None,
+    /// Persist as long as the requesting application is running.
+    Application,
+    /// Persist until the user explicitly revokes it.
+    ExplicitlyRevoked,
+}
+
+impl PersistMode {
+    fn from_request(value: Option<u32>) -> Self {
+        match value {
+            Some(1) => Self::Application,
+            Some(2) => Self::ExplicitlyRevoked,
+            _ => Self::None,
+        }
+    }
+
+    fn as_u32(self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Application => 1,
+            Self::ExplicitlyRevoked => 2,
+        }
+    }
+}
+
 #[derive(Default)]
 struct SessionData {
     screencast_threads: Vec<ScreencastThread>,
@@ -150,6 +187,7 @@ struct SessionData {
     multiple: bool,
     source_types: BitFlags<SourceType>,
     persisted_capture_sources: Option<PersistedCaptureSources>,
+    persist_mode: PersistMode,
     closed: bool,
 }
 
@@ -220,6 +258,7 @@ impl ScreenCast {
                     }
                     None => None,
                 };
+                session_data.persist_mode = PersistMode::from_request(options.persist_mode);
                 session_data.multiple = options.multiple.unwrap_or(false);
                 session_data.source_types =
                     BitFlags::from_bits_truncate(options.types.unwrap_or(0));
@@ -256,17 +295,19 @@ impl ScreenCast {
                 return PortalResponse::Other;
             };
 
-            let (cursor_mode, multiple, source_types, persisted_capture_sources) = {
+            let (cursor_mode, multiple, source_types, persisted_capture_sources, persist_mode) = {
                 let session_data = interface.get_mut().await;
                 let cursor_mode = session_data.cursor_mode.unwrap_or(CursorMode::Embedded);
                 let multiple = session_data.multiple;
                 let source_types = session_data.source_types;
                 let persisted_capture_sources = session_data.persisted_capture_sources.clone();
+                let persist_mode = session_data.persist_mode;
                 (
                     cursor_mode,
                     multiple,
                     source_types,
                     persisted_capture_sources,
+                    persist_mode,
                 )
             };
 
@@ -386,10 +427,20 @@ impl ScreenCast {
                 &capture_sources,
             );
 
+            // Only claim persistence when there is actually something to
+            // restore from. Reporting a mode without restore data would have
+            // the frontend keep a token that restores nothing.
+            let restore_data = persisted_capture_sources.map(|x| x.into());
+            let granted_persist_mode = if restore_data.is_some() {
+                persist_mode
+            } else {
+                PersistMode::None
+            };
+
             PortalResponse::Success(StartResult {
                 streams,
-                persist_mode: None,
-                restore_data: persisted_capture_sources.map(|x| x.into()),
+                persist_mode: Some(granted_persist_mode.as_u32()),
+                restore_data,
             })
         })
         .await
