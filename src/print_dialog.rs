@@ -1,3 +1,4 @@
+use ashpd::desktop::file_chooser;
 use cosmic::iced::font::Weight;
 use cosmic::iced::widget::Stack;
 use cosmic::iced::{Alignment, Background, Color, Font, Length, Padding, Subscription};
@@ -291,21 +292,79 @@ impl ScalingMode {
     ];
 }
 
+pub fn is_pdf_printer(printer: &PrinterSnapshot) -> bool {
+    printer.id == "save-as-pdf" || printer.backend == "file"
+}
+
+pub fn is_pdf_printer_by_id(printer_id: &str, backend: &str) -> bool {
+    printer_id == "save-as-pdf" || backend == "file"
+}
+
+pub fn save_as_pdf_printer() -> PrinterSnapshot {
+    PrinterSnapshot {
+        id: "save-as-pdf".to_string(),
+        name: "Save as PDF".to_string(),
+        info: "Save output to PDF file".to_string(),
+        location: String::new(),
+        make_model: "PDF Converter".to_string(),
+        state: cpdb_rs::types::PrinterState::Idle,
+        accepting_jobs: true,
+        backend: "file".to_string(),
+    }
+}
+
+pub fn default_pdf_media() -> MediaCollection {
+    MediaCollection {
+        media: vec![
+            cpdb_rs::media::MediaInfo {
+                name: "iso_a4_210x297mm".to_string(),
+                width: 21000,
+                length: 29700,
+                margins: vec![],
+            },
+            cpdb_rs::media::MediaInfo {
+                name: "na_letter_8.5x11in".to_string(),
+                width: 21590,
+                length: 27940,
+                margins: vec![],
+            },
+            cpdb_rs::media::MediaInfo {
+                name: "na_legal_8.5x14in".to_string(),
+                width: 21590,
+                length: 35560,
+                margins: vec![],
+            },
+            cpdb_rs::media::MediaInfo {
+                name: "iso_a3_297x420mm".to_string(),
+                width: 29700,
+                length: 42000,
+                margins: vec![],
+            },
+            cpdb_rs::media::MediaInfo {
+                name: "iso_a5_148x210mm".to_string(),
+                width: 14800,
+                length: 21000,
+                margins: vec![],
+            },
+        ],
+    }
+}
+
 impl Default for PrintDialog {
     fn default() -> Self {
         Self {
             is_discovering: true,
-            printers: Vec::new(),
-            selected_printer_index: None,
+            printers: vec![save_as_pdf_printer()],
+            selected_printer_index: Some(0),
             printer_options: None,
-            printer_media: None,
+            printer_media: Some(default_pdf_media()),
             active_view: ActiveView::Main,
             page_selection: PageSetSelection::All,
             custom_range_input: String::new(),
             custom_range_valid: true,
             copies: 1,
             collate: false,
-            selected_paper_size_index: None,
+            selected_paper_size_index: Some(0),
             color_supported: true,
             duplex_values: Vec::new(),
             duplex_index: None,
@@ -320,9 +379,15 @@ impl Default for PrintDialog {
             pages_per_sheet_index: Some(0),
             layout_direction: LayoutDirection::LeftToRightTopToBottom,
             margins: Margins::Default,
-            margin_options: MarginOptions::default(),
-            custom_margins_vertical_index: None,
-            custom_margins_horizontal_index: None,
+            margin_options: MarginOptions {
+                top: vec![0, 500, 1000],
+                bottom: vec![0, 500, 1000],
+                left: vec![0, 500, 1000],
+                right: vec![0, 500, 1000],
+                supports_borderless: true,
+            },
+            custom_margins_vertical_index: Some(0),
+            custom_margins_horizontal_index: Some(0),
             border: Border::None,
             scaling: ScalingMode::Auto,
             custom_scaling_input: 100,
@@ -384,6 +449,13 @@ pub enum Msg {
 }
 
 impl PrintDialog {
+    pub fn is_pdf_selected(&self) -> bool {
+        self.selected_printer_index
+            .and_then(|i| self.printers.get(i))
+            .map(is_pdf_printer)
+            .unwrap_or(false)
+    }
+
     pub fn subscription(&self) -> Subscription<Msg> {
         if self.is_discovering {
             Subscription::run_with(PrinterDiscovery, |_| {
@@ -415,6 +487,12 @@ impl PrintDialog {
 }
 
 fn fetch_printer_details(printer: &PrinterSnapshot) -> Task<Msg> {
+    if is_pdf_printer(printer) {
+        return Task::perform(
+            async move { Msg::PrinterDetailsLoaded(OptionsCollection::default(), default_pdf_media()) },
+            |msg| msg,
+        );
+    }
     let printer_id = printer.id.clone();
     let backend = printer.backend.clone();
     Task::perform(
@@ -450,40 +528,46 @@ fn fetch_printer_details(printer: &PrinterSnapshot) -> Task<Msg> {
 pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
     match msg {
         Msg::PrintersLoaded(printers) => {
-            dialog.printers = printers;
-            if dialog.selected_printer_index.is_none() && !dialog.printers.is_empty() {
-                dialog.selected_printer_index = Some(0);
-                return fetch_printer_details(&dialog.printers[0]);
+            let mut all_printers = vec![save_as_pdf_printer()];
+            for p in printers {
+                if p.id != "save-as-pdf" {
+                    all_printers.push(p);
+                }
             }
+            dialog.printers = all_printers;
+            let target_idx = if dialog.printers.len() > 1 { 1 } else { 0 };
+            dialog.selected_printer_index = Some(target_idx);
+            return fetch_printer_details(&dialog.printers[target_idx]);
         }
         Msg::DiscoveryEvent(event) => match event {
             DiscoveryEvent::PrinterAdded(snap) => {
-                if let Some(pos) = dialog
-                    .printers
-                    .iter()
-                    .position(|p| p.id == snap.id && p.backend == snap.backend)
-                {
-                    dialog.printers[pos] = snap;
-                } else {
-                    dialog.printers.push(snap);
+                if snap.id != "save-as-pdf" {
+                    if let Some(pos) = dialog
+                        .printers
+                        .iter()
+                        .position(|p| p.id == snap.id && p.backend == snap.backend)
+                    {
+                        dialog.printers[pos] = snap;
+                    } else {
+                        dialog.printers.push(snap);
+                    }
                 }
-                if dialog.selected_printer_index.is_none() && !dialog.printers.is_empty() {
-                    dialog.selected_printer_index = Some(0);
-                    return fetch_printer_details(&dialog.printers[0]);
+                if (dialog.selected_printer_index.is_none()
+                    || dialog.selected_printer_index == Some(0))
+                    && dialog.printers.len() > 1
+                {
+                    dialog.selected_printer_index = Some(1);
+                    return fetch_printer_details(&dialog.printers[1]);
                 }
             }
             DiscoveryEvent::PrinterRemoved { id, backend } => {
-                dialog
-                    .printers
-                    .retain(|p| !(p.id == id && p.backend == backend));
-                if let Some(sel) = dialog.selected_printer_index
-                    && sel >= dialog.printers.len()
-                {
-                    if dialog.printers.is_empty() {
-                        dialog.selected_printer_index = None;
-                        dialog.printer_options = None;
-                        dialog.printer_media = None;
-                    } else {
+                if id != "save-as-pdf" {
+                    dialog
+                        .printers
+                        .retain(|p| p.id == "save-as-pdf" || !(p.id == id && p.backend == backend));
+                    if let Some(sel) = dialog.selected_printer_index
+                        && sel >= dialog.printers.len()
+                    {
                         dialog.selected_printer_index = Some(0);
                         return fetch_printer_details(&dialog.printers[0]);
                     }
@@ -513,126 +597,161 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
             }
         }
         Msg::PrinterDetailsLoaded(options, media) => {
-            dialog.color_supported = options
-                .get("print-color-mode")
-                .map(|o| o.supported_values.iter().any(|v| v == "color"))
-                .unwrap_or(false);
-            if !dialog.color_supported {
-                dialog.color_mode = ColorMode::Monochrome;
-            }
+            let is_pdf = dialog.is_pdf_selected();
 
-            // sides (duplex)
-            if let Some(opt) = options.get("sides") {
-                dialog.duplex_values = clean_supported_values(&opt.supported_values);
-                dialog.duplex_index = dialog
-                    .duplex_values
-                    .iter()
-                    .position(|v| *v == opt.default_value)
-                    .or({
-                        if dialog.duplex_values.is_empty() {
-                            None
-                        } else {
-                            Some(0)
-                        }
-                    });
-            } else {
+            if is_pdf {
+                dialog.color_supported = true;
                 dialog.duplex_values = Vec::new();
                 dialog.duplex_index = None;
-            }
-
-            // media-source (paper tray)
-            if let Some(opt) = options.get("media-source") {
-                dialog.media_source_values = clean_supported_values(&opt.supported_values);
-                dialog.paper_tray_index = dialog
-                    .media_source_values
-                    .iter()
-                    .position(|v| *v == opt.default_value)
-                    .or({
-                        if dialog.media_source_values.is_empty() {
-                            None
-                        } else {
-                            Some(0)
-                        }
-                    });
-            } else {
                 dialog.media_source_values = Vec::new();
                 dialog.paper_tray_index = None;
-            }
-
-            // media-type (paper type)
-            if let Some(opt) = options.get("media-type") {
-                dialog.media_type_values = clean_supported_values(&opt.supported_values);
-                dialog.paper_type_index = dialog
-                    .media_type_values
-                    .iter()
-                    .position(|v| *v == opt.default_value)
-                    .or({
-                        if dialog.media_type_values.is_empty() {
-                            None
-                        } else {
-                            Some(0)
-                        }
-                    });
-            } else {
                 dialog.media_type_values = Vec::new();
                 dialog.paper_type_index = None;
-            }
-
-            // print-quality
-            if let Some(opt) = options.get("print-quality") {
-                dialog.print_quality_values = clean_supported_values(&opt.supported_values);
-                dialog.print_quality_index = dialog
-                    .print_quality_values
-                    .iter()
-                    .position(|v| *v == opt.default_value)
-                    .or({
-                        if dialog.print_quality_values.is_empty() {
-                            None
-                        } else {
-                            Some(0)
-                        }
-                    });
-            } else {
                 dialog.print_quality_values = Vec::new();
                 dialog.print_quality_index = None;
-            }
 
-            // margins
-            dialog.margin_options = MarginOptions::from_options(&options);
-            dialog.custom_margins_vertical_index = if dialog.margin_options.top.is_empty() {
-                None
+                dialog.margin_options = MarginOptions {
+                    top: vec![0, 500, 1000],
+                    bottom: vec![0, 500, 1000],
+                    left: vec![0, 500, 1000],
+                    right: vec![0, 500, 1000],
+                    supports_borderless: true,
+                };
+                if dialog.custom_margins_vertical_index.is_none() {
+                    dialog.custom_margins_vertical_index = Some(0);
+                }
+                if dialog.custom_margins_horizontal_index.is_none() {
+                    dialog.custom_margins_horizontal_index = Some(0);
+                }
+                dialog.selected_paper_size_index = if media.is_empty() {
+                    None
+                } else {
+                    dialog.selected_paper_size_index.or(Some(0))
+                };
+                dialog.printer_options = Some(options);
+                dialog.printer_media = Some(media);
             } else {
-                Some(0)
-            };
-            dialog.custom_margins_horizontal_index = if dialog.margin_options.left.is_empty() {
-                None
-            } else {
-                Some(0)
-            };
+                dialog.color_supported = options
+                    .get("print-color-mode")
+                    .map(|o| o.supported_values.iter().any(|v| v == "color"))
+                    .unwrap_or(false);
+                if !dialog.color_supported {
+                    dialog.color_mode = ColorMode::Monochrome;
+                }
 
-            // paper size
-            dialog.selected_paper_size_index = if let Some(opt) = options.get("media") {
-                media
-                    .media
-                    .iter()
-                    .position(|m| m.name == opt.default_value)
-                    .or({
-                        if media.media.is_empty() {
-                            None
-                        } else {
-                            Some(0)
-                        }
-                    })
-            } else {
-                if media.media.is_empty() {
+                // sides (duplex)
+                if let Some(opt) = options.get("sides") {
+                    dialog.duplex_values = clean_supported_values(&opt.supported_values);
+                    dialog.duplex_index = dialog
+                        .duplex_values
+                        .iter()
+                        .position(|v| *v == opt.default_value)
+                        .or({
+                            if dialog.duplex_values.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            }
+                        });
+                } else {
+                    dialog.duplex_values = Vec::new();
+                    dialog.duplex_index = None;
+                }
+
+                // media-source (paper tray)
+                if let Some(opt) = options.get("media-source") {
+                    dialog.media_source_values = clean_supported_values(&opt.supported_values);
+                    dialog.paper_tray_index = dialog
+                        .media_source_values
+                        .iter()
+                        .position(|v| *v == opt.default_value)
+                        .or({
+                            if dialog.media_source_values.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            }
+                        });
+                } else {
+                    dialog.media_source_values = Vec::new();
+                    dialog.paper_tray_index = None;
+                }
+
+                // media-type (paper type)
+                if let Some(opt) = options.get("media-type") {
+                    dialog.media_type_values = clean_supported_values(&opt.supported_values);
+                    dialog.paper_type_index = dialog
+                        .media_type_values
+                        .iter()
+                        .position(|v| *v == opt.default_value)
+                        .or({
+                            if dialog.media_type_values.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            }
+                        });
+                } else {
+                    dialog.media_type_values = Vec::new();
+                    dialog.paper_type_index = None;
+                }
+
+                // print-quality
+                if let Some(opt) = options.get("print-quality") {
+                    dialog.print_quality_values = clean_supported_values(&opt.supported_values);
+                    dialog.print_quality_index = dialog
+                        .print_quality_values
+                        .iter()
+                        .position(|v| *v == opt.default_value)
+                        .or({
+                            if dialog.print_quality_values.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            }
+                        });
+                } else {
+                    dialog.print_quality_values = Vec::new();
+                    dialog.print_quality_index = None;
+                }
+
+                // margins
+                dialog.margin_options = MarginOptions::from_options(&options);
+                dialog.custom_margins_vertical_index = if dialog.margin_options.top.is_empty() {
                     None
                 } else {
                     Some(0)
-                }
-            };
+                };
+                dialog.custom_margins_horizontal_index = if dialog.margin_options.left.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                };
 
-            dialog.printer_options = Some(options);
-            dialog.printer_media = Some(media);
+                // paper size
+                dialog.selected_paper_size_index = if let Some(opt) = options.get("media") {
+                    media
+                        .media
+                        .iter()
+                        .position(|m| m.name == opt.default_value)
+                        .or({
+                            if media.media.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            }
+                        })
+                } else {
+                    if media.media.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    }
+                };
+
+                dialog.printer_options = Some(options);
+                dialog.printer_media = Some(media);
+            }
         }
         Msg::NavigateTo(view) => {
             dialog.active_view = view;
@@ -1084,15 +1203,15 @@ fn view_options_panel<'a>(
         ))
     };
 
-    let mut primary_items = vec![
-        color_slider.into(),
-        orientation_slider.into(),
-        pages_row,
-        option_row("Copies", copies_control),
-        option_row("Collate", collate_toggle),
-        paper_size_row,
-    ];
-    if let Some(row) = duplex_row {
+    let is_pdf = dialog.is_pdf_selected();
+
+    let mut primary_items = vec![color_slider.into(), orientation_slider.into(), pages_row];
+    if !is_pdf {
+        primary_items.push(option_row("Copies", copies_control));
+        primary_items.push(option_row("Collate", collate_toggle));
+    }
+    primary_items.push(paper_size_row);
+    if !is_pdf && let Some(row) = duplex_row {
         primary_items.push(row);
     }
     let primary_group = option_group(None, primary_items);
@@ -1133,14 +1252,16 @@ fn view_options_panel<'a>(
         |i| Msg::MarginsSelected(Margins::ALL[i]),
     );
 
-    let mut layout_items = vec![
-        option_row("Pages per sheet", pps_dropdown),
-        row![text("Layout direction"), layout_dir_row]
-            .spacing(16)
-            .align_y(Alignment::Center)
-            .into(),
-        option_row("Margins", margins_dropdown),
-    ];
+    let mut layout_items = vec![option_row("Pages per sheet", pps_dropdown)];
+    if !is_pdf {
+        layout_items.push(
+            row![text("Layout direction"), layout_dir_row]
+                .spacing(16)
+                .align_y(Alignment::Center)
+                .into(),
+        );
+    }
+    layout_items.push(option_row("Margins", margins_dropdown));
 
     if dialog.margins == Margins::Custom {
         let to_mm = |v: u32| format!("{:.1} mm", v as f32 / 100.0);
@@ -1340,22 +1461,24 @@ fn view_options_panel<'a>(
         ))
     };
 
-    let mut paper_items = vec![option_row(
-        "Print pages in reverse order",
-        toggler(dialog.reverse_order).on_toggle(|_| Msg::ToggleReverseOrder),
-    )];
-    if let Some(row) = tray_row {
-        paper_items.push(row);
-    }
-    if let Some(row) = type_row {
-        paper_items.push(row);
-    }
-    if let Some(row) = quality_row {
-        paper_items.push(row);
-    }
+    if !is_pdf {
+        let mut paper_items = vec![option_row(
+            "Print pages in reverse order",
+            toggler(dialog.reverse_order).on_toggle(|_| Msg::ToggleReverseOrder),
+        )];
+        if let Some(row) = tray_row {
+            paper_items.push(row);
+        }
+        if let Some(row) = type_row {
+            paper_items.push(row);
+        }
+        if let Some(row) = quality_row {
+            paper_items.push(row);
+        }
 
-    let paper_group = option_group(Some("Paper handling & quality"), paper_items);
-    groups = groups.push(paper_group);
+        let paper_group = option_group(Some("Paper handling & quality"), paper_items);
+        groups = groups.push(paper_group);
+    }
 
     groups.into()
 }
@@ -1363,8 +1486,12 @@ fn view_options_panel<'a>(
 fn view_status_row(dialog: &PrintDialog) -> Element<'_, Msg> {
     let status_text = if let Some(idx) = dialog.selected_printer_index {
         if let Some(printer) = dialog.printers.get(idx) {
-            let state_str = format!("{}", printer.state);
-            format!("{} - {}", printer.name, state_str)
+            if is_pdf_printer(printer) {
+                "Save output to PDF file".to_string()
+            } else {
+                let state_str = format!("{}", printer.state);
+                format!("{} - {}", printer.name, state_str)
+            }
         } else {
             "No printer selected".to_string()
         }
@@ -1891,6 +2018,101 @@ pub fn build_xdg_response(
     (settings, page_setup)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePdfResult {
+    Saved,
+    Cancelled,
+    Failed,
+}
+
+pub fn sanitize_pdf_filename(title: &str) -> String {
+    let sanitized = title.replace('/', "_");
+    if sanitized.trim().is_empty() {
+        "document.pdf".to_string()
+    } else if sanitized.to_lowercase().ends_with(".pdf") {
+        sanitized
+    } else {
+        format!("{sanitized}.pdf")
+    }
+}
+
+pub(crate) async fn save_pdf_to_file(title: &str, fd: &OwnedFd) -> SavePdfResult {
+    let default_filename = sanitize_pdf_filename(title);
+    let pdf_filter = file_chooser::FileFilter::new("PDF Document")
+        .mimetype("application/pdf")
+        .glob("*.pdf");
+
+    let save_request = file_chooser::SaveFileRequest::default()
+        .title("Save PDF Document")
+        .accept_label(Some("Save"))
+        .modal(true)
+        .current_name(Some(default_filename.as_str()))
+        .filter(pdf_filter);
+
+    let selected_files = match save_request.send().await {
+        Ok(request) => match request.response() {
+            Ok(files) => files,
+            Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => {
+                return SavePdfResult::Cancelled;
+            }
+            Err(e) => {
+                tracing::error!("File chooser response error: {e:?}");
+                return SavePdfResult::Failed;
+            }
+        },
+        Err(e) => {
+            tracing::error!("Failed to send SaveFileRequest: {e:?}");
+            return SavePdfResult::Failed;
+        }
+    };
+
+    let target_path = if let Some(url) = selected_files.uris().first() {
+        if let Ok(path) = url.to_file_path() {
+            path
+        } else {
+            tracing::error!("Failed to convert URL to file path: {url}");
+            return SavePdfResult::Failed;
+        }
+    } else {
+        tracing::error!("No URI returned from file chooser");
+        return SavePdfResult::Cancelled;
+    };
+
+    let readable_fd = match fd.as_fd().try_clone_to_owned() {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("Failed to clone document FD: {e:?}");
+            return SavePdfResult::Failed;
+        }
+    };
+
+    let path_for_closure = target_path.clone();
+    let copy_result = tokio::task::spawn_blocking(move || {
+        let mut reader = File::from(readable_fd);
+        let mut writer = File::create(&path_for_closure)?;
+        copy(&mut reader, &mut writer)
+    })
+    .await;
+
+    match copy_result {
+        Ok(Ok(bytes)) => {
+            tracing::debug!(
+                "Successfully saved {bytes} bytes to PDF file: {:?}",
+                target_path
+            );
+            SavePdfResult::Saved
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Failed saving document to file: {e:?}");
+            SavePdfResult::Failed
+        }
+        Err(e) => {
+            tracing::error!("Task join error during PDF save: {e:?}");
+            SavePdfResult::Failed
+        }
+    }
+}
+
 pub(crate) async fn do_print_execution(
     printer_id: String,
     backend: String,
@@ -1898,6 +2120,16 @@ pub(crate) async fn do_print_execution(
     title: String,
     fd: Arc<OwnedFd>,
 ) -> PortalResponse<PrintResult> {
+    if is_pdf_printer_by_id(&printer_id, &backend) {
+        return match save_pdf_to_file(&title, &fd).await {
+            SavePdfResult::Saved => PortalResponse::Success(PrintResult {
+                settings: HashMap::new(),
+            }),
+            SavePdfResult::Cancelled => PortalResponse::Cancelled,
+            SavePdfResult::Failed => PortalResponse::Other,
+        };
+    }
+
     let client = match cpdb_rs::CpdbClient::new().await {
         Ok(c) => c,
         Err(e) => {

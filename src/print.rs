@@ -16,7 +16,9 @@ use zbus::zvariant;
 
 use crate::PortalResponse;
 use crate::app::CosmicPortal;
-use crate::print_dialog::{PrintDialog, apply_xdg_hints, build_xdg_response, sync_print_models};
+use crate::print_dialog::{
+    PrintDialog, apply_xdg_hints, build_xdg_response, save_pdf_to_file, sync_print_models,
+};
 use crate::subscription;
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
 
@@ -53,6 +55,7 @@ impl Print {
 #[derive(Clone, Debug)]
 pub enum Msg {
     Dialog(crate::print_dialog::Msg),
+    SavePdfCompleted(crate::print_dialog::SavePdfResult),
 }
 
 /// Portal response type for PreparePrint
@@ -383,6 +386,50 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
         return Task::none();
     };
     match msg {
+        Msg::SavePdfCompleted(outcome) => match outcome {
+            crate::print_dialog::SavePdfResult::Cancelled => Task::none(),
+            crate::print_dialog::SavePdfResult::Saved => {
+                if let Some(args) = portal.print_args.take() {
+                    let window_id = args.window_id;
+                    let modal = args.modal;
+                    if let RequestKind::Print(req) = args.request {
+                        tokio::spawn(async move {
+                            let _ = req
+                                .tx
+                                .send(PortalResponse::Success(PrintResult {
+                                    settings: HashMap::new(),
+                                }))
+                                .await;
+                        });
+                    }
+                    if modal {
+                        window::close(window_id)
+                    } else {
+                        destroy_layer_surface(window_id)
+                    }
+                } else {
+                    Task::none()
+                }
+            }
+            crate::print_dialog::SavePdfResult::Failed => {
+                if let Some(args) = portal.print_args.take() {
+                    let window_id = args.window_id;
+                    let modal = args.modal;
+                    if let RequestKind::Print(req) = args.request {
+                        tokio::spawn(async move {
+                            let _ = req.tx.send(PortalResponse::Other).await;
+                        });
+                    }
+                    if modal {
+                        window::close(window_id)
+                    } else {
+                        destroy_layer_surface(window_id)
+                    }
+                } else {
+                    Task::none()
+                }
+            }
+        },
         Msg::Dialog(dialog_msg) => match dialog_msg {
             crate::print_dialog::Msg::EnterPressed => {
                 if args.dialog.active_view == crate::print_dialog::ActiveView::PageSelection {
@@ -433,6 +480,23 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                 Task::none()
             }
             crate::print_dialog::Msg::Confirm => {
+                let is_pdf = args.dialog.is_pdf_selected();
+                if is_pdf && matches!(args.request, RequestKind::Print(_)) {
+                    let title = args.title.clone();
+                    let fd = match &args.request {
+                        RequestKind::Print(req) => Arc::clone(&req.fd),
+                        _ => unreachable!(),
+                    };
+                    return Task::perform(
+                        async move { save_pdf_to_file(&title, &fd).await },
+                        |outcome| {
+                            cosmic::Action::App(crate::app::Msg::Print(Msg::SavePdfCompleted(
+                                outcome,
+                            )))
+                        },
+                    );
+                }
+
                 if let Some(args) = portal.print_args.take() {
                     let window_id = args.window_id;
                     let modal = args.modal;
