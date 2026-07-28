@@ -84,12 +84,6 @@ impl TryFrom<&RestoreData> for PersistedRemoteDesktop {
     }
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
-struct CreateSessionResult {
-    session_id: String,
-}
-
 #[derive(zvariant::DeserializeDict, zvariant::Type)]
 #[zvariant(signature = "a{sv}")]
 struct SelectDevicesOptions {
@@ -216,7 +210,7 @@ impl RemoteDesktop {
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
-    ) -> PortalResponse<CreateSessionResult> {
+    ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
         connection
             .object_server()
             .at(
@@ -227,9 +221,7 @@ impl RemoteDesktop {
             )
             .await
             .unwrap(); // XXX unwrap
-        PortalResponse::Success(CreateSessionResult {
-            session_id: "foo".to_string(), // XXX
-        })
+        PortalResponse::Success(HashMap::new())
     }
 
     async fn select_devices(

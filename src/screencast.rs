@@ -22,12 +22,6 @@ const SOURCE_TYPE_MONITOR: u32 = 1;
 const SOURCE_TYPE_WINDOW: u32 = 2;
 const SOURCE_TYPE_VIRTUAL: u32 = 4;
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
-struct CreateSessionResult {
-    session_id: String,
-}
-
 #[derive(Clone, Default)]
 pub(crate) struct PersistedCaptureSources {
     pub(crate) outputs: Vec<String>,
@@ -397,7 +391,7 @@ impl ScreenCast {
         session_handle: zvariant::ObjectPath<'_>,
         app_id: String,
         options: HashMap<String, zvariant::OwnedValue>,
-    ) -> PortalResponse<CreateSessionResult> {
+    ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
         // TODO: handle
         let session_data = SessionData::default();
         connection
@@ -408,9 +402,7 @@ impl ScreenCast {
             )
             .await
             .unwrap(); // XXX unwrap
-        PortalResponse::Success(CreateSessionResult {
-            session_id: "foo".to_string(), // XXX
-        })
+        PortalResponse::Success(HashMap::new())
     }
 
     async fn select_sources(
