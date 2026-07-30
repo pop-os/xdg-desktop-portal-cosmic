@@ -72,6 +72,7 @@ impl From<u8> for DragState {
 
 const EDGE_GRAB_THICKNESS: f32 = 8.0;
 const CORNER_DIAMETER: f32 = 16.0;
+const OVERLAY_ALPHA: f32 = 0.55;
 
 pub struct RectangleSelection<Msg> {
     output_rect: Rect,
@@ -486,63 +487,27 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         );
         let outer_top_left = Point::new(self.output_rect.left as f32, self.output_rect.top as f32);
         let outer_rect = Rectangle::new(outer_top_left, outer_size);
+
+        // dim everything outside the selection, in surface-local coordinates
+        let mut overlay = Color::BLACK;
+        overlay.a = OVERLAY_ALPHA;
+        let dim = |renderer: &mut cosmic::Renderer, bounds: Rectangle| {
+            renderer.fill_quad(
+                Quad {
+                    bounds,
+                    border: Border::default(),
+                    shadow: Shadow::default(),
+                    snap: true,
+                },
+                overlay,
+            );
+        };
+
         let Some(clipped_inner_rect) = inner_rect.intersection(&outer_rect) else {
+            // selection is on another output
+            dim(renderer, Rectangle::with_size(outer_size));
             return;
         };
-        #[cfg(feature = "wgpu")]
-        {
-            use cosmic::iced::advanced::graphics::Mesh;
-            use cosmic::iced::advanced::graphics::color::pack;
-            use cosmic::iced::advanced::graphics::mesh::{Indexed, Renderer, SolidVertex2D};
-            use cosmic::iced::core::Transformation;
-            let mut overlay = Color::BLACK;
-            overlay.a = 0.3;
-
-            let outer_bottom_right = (outer_size.width, outer_size.height);
-            let inner_top_left = (inner_rect.x, inner_rect.y);
-            let outer_top_left = (outer_rect.x, outer_rect.y);
-            let inner_bottom_right = (
-                inner_rect.x + inner_rect.width,
-                inner_rect.y + inner_rect.height,
-            );
-            let vertices = vec![
-                outer_top_left,
-                (outer_bottom_right.0, outer_top_left.1),
-                outer_bottom_right,
-                (outer_top_left.0, outer_bottom_right.1),
-                inner_top_left,
-                (inner_bottom_right.0, inner_top_left.1),
-                inner_bottom_right,
-                (inner_top_left.0, inner_bottom_right.1),
-            ];
-            // build 8 triangles around the selected region
-            #[rustfmt::skip]
-            let indices = vec![
-                5, 2, 1,
-                5, 6, 2,
-                6, 4, 2,
-                6, 8, 4,
-                8, 3, 4,
-                8, 7, 3,
-                7, 1, 3,
-                7, 5, 1,
-            ];
-
-            renderer.draw_mesh(Mesh::Solid {
-                buffers: Indexed {
-                    vertices: vertices
-                        .into_iter()
-                        .map(|v| SolidVertex2D {
-                            position: [v.0, v.1],
-                            color: pack(overlay),
-                        })
-                        .collect(),
-                    indices,
-                },
-                transformation: Transformation::IDENTITY,
-                clip_bounds: Rectangle::INFINITE,
-            })
-        }
 
         let translated_clipped_inner_rect = Rectangle::new(
             Point::new(
@@ -551,6 +516,26 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
             ),
             clipped_inner_rect.size(),
         );
+
+        // four bands around the selection: above, below, left and right of it
+        let inner = translated_clipped_inner_rect;
+        let inner_bottom = inner.y + inner.height;
+        let inner_right = inner.x + inner.width;
+        for bounds in [
+            Rectangle::with_size(Size::new(outer_size.width, inner.y)),
+            Rectangle::new(
+                Point::new(0.0, inner_bottom),
+                Size::new(outer_size.width, outer_size.height - inner_bottom),
+            ),
+            Rectangle::new(Point::new(0.0, inner.y), Size::new(inner.x, inner.height)),
+            Rectangle::new(
+                Point::new(inner_right, inner.y),
+                Size::new(outer_size.width - inner_right, inner.height),
+            ),
+        ] {
+            dim(renderer, bounds);
+        }
+
         let quad = Quad {
             bounds: translated_clipped_inner_rect,
             border: Border {
