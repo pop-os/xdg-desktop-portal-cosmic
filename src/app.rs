@@ -79,6 +79,7 @@ pub enum Msg {
     Portal(Box<subscription::Event>),
     Output(OutputEvent, WlOutput),
     ConfigSetScreenshot(config::screenshot::Screenshot),
+    ConfigSetPrint(config::print::Print),
     /// Update config from external changes
     ConfigSubUpdate(config::Config),
     /// A layer surface was closed by the compositor (e.g. output disconnected)
@@ -325,6 +326,18 @@ impl cosmic::Application for CosmicPortal {
                     Some(handler) => {
                         if let Err(e) = self.config.set_screenshot(handler, screenshot) {
                             tracing::error!("Failed to save screenshot config: {e}")
+                        }
+                    }
+                    None => tracing::error!("Failed to save config: No config handler"),
+                }
+
+                cosmic::iced::Task::none()
+            }
+            Msg::ConfigSetPrint(print_config) => {
+                match &mut self.config_handler {
+                    Some(handler) => {
+                        if let Err(e) = self.config.set_print(handler, print_config) {
+                            tracing::error!("Failed to save print config: {e}")
                         }
                     }
                     None => tracing::error!("Failed to save config: No config handler"),

@@ -42,6 +42,8 @@ impl Hash for PrinterDiscovery {
 pub enum ActiveView {
     Main,
     PageSelection,
+    SavePreset,
+    EditPresets,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +56,26 @@ pub enum PageSetSelection {
 }
 
 impl PageSetSelection {
+    pub fn label(&self) -> String {
+        match self {
+            PageSetSelection::All => "All".to_string(),
+            PageSetSelection::Current => "Current".to_string(),
+            PageSetSelection::Odd => "Odd".to_string(),
+            PageSetSelection::Even => "Even".to_string(),
+            PageSetSelection::Custom(_) => "Custom".to_string(),
+        }
+    }
+
+    pub fn from_label(label: &str, custom_input: &str) -> Self {
+        match label {
+            "Current" | "Current page" => PageSetSelection::Current,
+            "Odd" | "Odd pages only" => PageSetSelection::Odd,
+            "Even" | "Even pages only" => PageSetSelection::Even,
+            "Custom" | "Custom range" => PageSetSelection::Custom(custom_input.to_string()),
+            _ => PageSetSelection::All,
+        }
+    }
+
     pub fn to_string_label(&self) -> String {
         match self {
             PageSetSelection::All => "All pages".to_string(),
@@ -163,6 +185,13 @@ pub struct PrintDialog {
     // Paper handling
     pub reverse_order: bool,
     pub accept_label: Option<String>,
+
+    // Presets
+    pub presets: Vec<cosmic_portal_config::print::PrintPreset>,
+    pub selected_preset_index: Option<usize>,
+    pub save_preset_name_input: String,
+    pub editing_preset_row: Option<usize>,
+    pub editing_preset_name_input: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +201,20 @@ pub enum ColorMode {
 }
 
 impl ColorMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Color => "Color",
+            Self::Monochrome => "Monochrome",
+        }
+    }
+
+    pub fn from_label(s: &str) -> Self {
+        match s {
+            "Monochrome" | "monochrome" | "greyscale" => Self::Monochrome,
+            _ => Self::Color,
+        }
+    }
+
     pub fn as_cpdb_str(&self) -> &'static str {
         match self {
             Self::Color => "color",
@@ -186,6 +229,22 @@ pub enum Orientation {
     Landscape,
 }
 
+impl Orientation {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Portrait => "Portrait",
+            Self::Landscape => "Landscape",
+        }
+    }
+
+    pub fn from_label(s: &str) -> Self {
+        match s {
+            "Landscape" | "landscape" => Self::Landscape,
+            _ => Self::Portrait,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutDirection {
     LeftToRightTopToBottom,
@@ -195,6 +254,24 @@ pub enum LayoutDirection {
 }
 
 impl LayoutDirection {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::LeftToRightTopToBottom => "LRTB",
+            Self::RightToLeftTopToBottom => "RLTB",
+            Self::TopToBottomLeftToRight => "TBLR",
+            Self::TopToBottomRightToLeft => "TBRL",
+        }
+    }
+
+    pub fn from_label(s: &str) -> Self {
+        match s {
+            "RLTB" | "rltb" => Self::RightToLeftTopToBottom,
+            "TBLR" | "tblr" => Self::TopToBottomLeftToRight,
+            "TBRL" | "tbrl" => Self::TopToBottomRightToLeft,
+            _ => Self::LeftToRightTopToBottom,
+        }
+    }
+
     pub fn as_cpdb_str(&self) -> &'static str {
         match self {
             Self::LeftToRightTopToBottom => "lrtb",
@@ -220,6 +297,15 @@ impl Margins {
             Self::None => "None",
             Self::Minimum => "Minimum",
             Self::Custom => "Custom",
+        }
+    }
+
+    pub fn from_label(s: &str) -> Self {
+        match s {
+            "None" | "none" => Self::None,
+            "Minimum" | "minimum" => Self::Minimum,
+            "Custom" | "custom" => Self::Custom,
+            _ => Self::Default,
         }
     }
 
@@ -266,10 +352,30 @@ impl ScalingMode {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Auto => "Auto",
+            Self::AutoFit => "AutoFit",
+            Self::Fit => "Fit",
+            Self::Fill => "Fill",
+            Self::Custom => "Custom",
+        }
+    }
+
+    pub fn display_label(&self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
             Self::AutoFit => "Auto fit",
             Self::Fit => "Fit to page",
             Self::Fill => "Fill page",
             Self::Custom => "Custom",
+        }
+    }
+
+    pub fn from_label(s: &str) -> Self {
+        match s {
+            "Fit" | "fit" => Self::Fit,
+            "AutoFit" | "autofit" => Self::AutoFit,
+            "Fill" | "fill" => Self::Fill,
+            "Custom" | "custom" => Self::Custom,
+            _ => Self::Auto,
         }
     }
 
@@ -397,6 +503,11 @@ impl Default for PrintDialog {
             print_background: false,
             reverse_order: false,
             accept_label: None,
+            presets: cosmic_portal_config::print::Print::default().all_presets(),
+            selected_preset_index: Some(0),
+            save_preset_name_input: String::new(),
+            editing_preset_row: None,
+            editing_preset_name_input: String::new(),
         }
     }
 }
@@ -446,6 +557,19 @@ pub enum Msg {
     Confirm,
     EnterPressed,
     EscapePressed,
+
+    // Presets
+    PresetSelected(usize),
+    OpenSavePresetDialog,
+    SavePresetNameInputChanged(String),
+    ConfirmSavePreset,
+    OpenEditPresetsDialog,
+    ToggleEditPresetRow(usize),
+    PresetRowNameInputChanged(String),
+    SavePresetRowName(usize),
+    DeletePresetRow(usize),
+    AddNewPresetInEditor,
+    CommitEdit,
 }
 
 impl PrintDialog {
@@ -482,6 +606,94 @@ impl PrintDialog {
             })
         } else {
             Subscription::none()
+        }
+    }
+
+    pub fn sanitize_printer_options(&mut self) {
+        if !self.color_supported {
+            self.color_mode = ColorMode::Monochrome;
+        }
+
+        self.duplex_index = sanitize_index(self.duplex_index, self.duplex_values.len());
+        self.paper_tray_index =
+            sanitize_index(self.paper_tray_index, self.media_source_values.len());
+        self.paper_type_index = sanitize_index(self.paper_type_index, self.media_type_values.len());
+        self.print_quality_index =
+            sanitize_index(self.print_quality_index, self.print_quality_values.len());
+
+        let media_len = self.printer_media.as_ref().map(|m| m.len()).unwrap_or(0);
+        self.selected_paper_size_index = sanitize_index(self.selected_paper_size_index, media_len);
+    }
+
+    pub fn apply_preset(&mut self, index: usize) {
+        let Some(preset) = self.presets.get(index) else {
+            return;
+        };
+        self.selected_preset_index = Some(index);
+        self.color_mode = ColorMode::from_label(&preset.color_mode);
+        self.orientation = Orientation::from_label(&preset.orientation);
+        self.duplex_index = preset.duplex_index;
+        self.copies = preset.copies.max(1);
+        self.collate = preset.collate;
+        self.pages_per_sheet_index = preset.pages_per_sheet_index;
+        self.layout_direction = LayoutDirection::from_label(&preset.layout_direction);
+        self.margins = Margins::from_label(&preset.margins);
+        self.scaling = ScalingMode::from_label(&preset.scaling);
+        self.custom_scaling_input = preset.custom_scaling_input;
+        self.page_selection =
+            PageSetSelection::from_label(&preset.page_selection, &preset.custom_range_input);
+        self.custom_range_input = preset.custom_range_input.clone();
+        if let PageSetSelection::Custom(_) = &self.page_selection {
+            self.custom_range_valid = validate_page_range(&self.custom_range_input);
+        }
+
+        self.sanitize_printer_options();
+    }
+
+    pub fn build_current_preset(&self, name: String) -> cosmic_portal_config::print::PrintPreset {
+        let id = format!(
+            "custom-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+
+        cosmic_portal_config::print::PrintPreset {
+            id,
+            name,
+            is_builtin: false,
+            color_mode: self.color_mode.label().to_string(),
+            orientation: self.orientation.label().to_string(),
+            duplex_index: self.duplex_index,
+            copies: self.copies,
+            collate: self.collate,
+            pages_per_sheet_index: self.pages_per_sheet_index,
+            layout_direction: self.layout_direction.label().to_string(),
+            margins: self.margins.label().to_string(),
+            scaling: self.scaling.label().to_string(),
+            custom_scaling_input: self.custom_scaling_input,
+            page_selection: self.page_selection.label(),
+            custom_range_input: self.custom_range_input.clone(),
+        }
+    }
+
+    pub fn to_config_print(&self) -> cosmic_portal_config::print::Print {
+        let custom_presets = self
+            .presets
+            .iter()
+            .filter(|p| !p.is_builtin)
+            .cloned()
+            .collect();
+
+        let last_used_preset_id = self
+            .selected_preset_index
+            .and_then(|idx| self.presets.get(idx))
+            .map(|p| p.id.clone());
+
+        cosmic_portal_config::print::Print {
+            custom_presets,
+            last_used_preset_id,
         }
     }
 }
@@ -639,81 +851,14 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                     dialog.color_mode = ColorMode::Monochrome;
                 }
 
-                // sides (duplex)
-                if let Some(opt) = options.get("sides") {
-                    dialog.duplex_values = clean_supported_values(&opt.supported_values);
-                    dialog.duplex_index = dialog
-                        .duplex_values
-                        .iter()
-                        .position(|v| *v == opt.default_value)
-                        .or({
-                            if dialog.duplex_values.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            }
-                        });
-                } else {
-                    dialog.duplex_values = Vec::new();
-                    dialog.duplex_index = None;
-                }
-
-                // media-source (paper tray)
-                if let Some(opt) = options.get("media-source") {
-                    dialog.media_source_values = clean_supported_values(&opt.supported_values);
-                    dialog.paper_tray_index = dialog
-                        .media_source_values
-                        .iter()
-                        .position(|v| *v == opt.default_value)
-                        .or({
-                            if dialog.media_source_values.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            }
-                        });
-                } else {
-                    dialog.media_source_values = Vec::new();
-                    dialog.paper_tray_index = None;
-                }
-
-                // media-type (paper type)
-                if let Some(opt) = options.get("media-type") {
-                    dialog.media_type_values = clean_supported_values(&opt.supported_values);
-                    dialog.paper_type_index = dialog
-                        .media_type_values
-                        .iter()
-                        .position(|v| *v == opt.default_value)
-                        .or({
-                            if dialog.media_type_values.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            }
-                        });
-                } else {
-                    dialog.media_type_values = Vec::new();
-                    dialog.paper_type_index = None;
-                }
-
-                // print-quality
-                if let Some(opt) = options.get("print-quality") {
-                    dialog.print_quality_values = clean_supported_values(&opt.supported_values);
-                    dialog.print_quality_index = dialog
-                        .print_quality_values
-                        .iter()
-                        .position(|v| *v == opt.default_value)
-                        .or({
-                            if dialog.print_quality_values.is_empty() {
-                                None
-                            } else {
-                                Some(0)
-                            }
-                        });
-                } else {
-                    dialog.print_quality_values = Vec::new();
-                    dialog.print_quality_index = None;
-                }
+                // option parsing via helper
+                (dialog.duplex_values, dialog.duplex_index) = load_option_values(&options, "sides");
+                (dialog.media_source_values, dialog.paper_tray_index) =
+                    load_option_values(&options, "media-source");
+                (dialog.media_type_values, dialog.paper_type_index) =
+                    load_option_values(&options, "media-type");
+                (dialog.print_quality_values, dialog.print_quality_index) =
+                    load_option_values(&options, "print-quality");
 
                 // margins
                 dialog.margin_options = MarginOptions::from_options(&options);
@@ -751,9 +896,11 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
 
                 dialog.printer_options = Some(options);
                 dialog.printer_media = Some(media);
+                dialog.sanitize_printer_options();
             }
         }
         Msg::NavigateTo(view) => {
+            commit_preset_edit(dialog);
             dialog.active_view = view;
         }
         Msg::CustomRangeInputChanged(val) => {
@@ -826,16 +973,104 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
         Msg::PrintQualitySelected(index) => {
             dialog.print_quality_index = Some(index);
         }
+        Msg::PresetSelected(index) => {
+            dialog.apply_preset(index);
+        }
+        Msg::OpenSavePresetDialog => {
+            commit_preset_edit(dialog);
+            let now_str = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M").to_string();
+            dialog.save_preset_name_input = format!("Preset {now_str}");
+            dialog.active_view = ActiveView::SavePreset;
+        }
+        Msg::SavePresetNameInputChanged(val) => {
+            dialog.save_preset_name_input = val;
+        }
+        Msg::ConfirmSavePreset => {
+            let name = dialog.save_preset_name_input.trim().to_string();
+            if !name.is_empty() {
+                let preset = dialog.build_current_preset(name);
+                dialog.presets.push(preset);
+                dialog.selected_preset_index = Some(dialog.presets.len() - 1);
+                dialog.active_view = ActiveView::Main;
+            }
+        }
+        Msg::OpenEditPresetsDialog => {
+            commit_preset_edit(dialog);
+            dialog.editing_preset_name_input = String::new();
+            dialog.active_view = ActiveView::EditPresets;
+        }
+        Msg::ToggleEditPresetRow(idx) => {
+            commit_preset_edit(dialog);
+            if idx < dialog.presets.len() && !dialog.presets[idx].is_builtin {
+                dialog.editing_preset_row = Some(idx);
+                dialog.editing_preset_name_input = dialog.presets[idx].name.clone();
+                let input_id = cosmic::iced::widget::Id::new(format!("preset_edit_input_{idx}"));
+                return cosmic::Task::batch(vec![
+                    cosmic::widget::text_input::focus(input_id.clone()),
+                    cosmic::widget::text_input::select_all(input_id),
+                ]);
+            }
+        }
+        Msg::PresetRowNameInputChanged(val) => {
+            dialog.editing_preset_name_input = val;
+        }
+        Msg::SavePresetRowName(idx) => {
+            if idx < dialog.presets.len() && !dialog.presets[idx].is_builtin {
+                let name = dialog.editing_preset_name_input.trim().to_string();
+                if !name.is_empty() {
+                    dialog.presets[idx].name = name;
+                }
+                dialog.editing_preset_row = None;
+            }
+        }
+        Msg::DeletePresetRow(idx) => {
+            if idx < dialog.presets.len() && !dialog.presets[idx].is_builtin {
+                dialog.presets.remove(idx);
+                if dialog.selected_preset_index == Some(idx) {
+                    dialog.selected_preset_index = Some(0);
+                } else if dialog.selected_preset_index.is_some_and(|i| i > idx) {
+                    dialog.selected_preset_index = dialog.selected_preset_index.map(|i| i - 1);
+                }
+                dialog.editing_preset_row = None;
+            }
+        }
+        Msg::AddNewPresetInEditor => {
+            commit_preset_edit(dialog);
+            let now_str = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M").to_string();
+            dialog.save_preset_name_input = format!("Preset {now_str}");
+            dialog.active_view = ActiveView::SavePreset;
+        }
+        Msg::CommitEdit => {
+            commit_preset_edit(dialog);
+        }
+        Msg::EscapePressed => {
+            if dialog.editing_preset_row.is_some() {
+                commit_preset_edit(dialog);
+            } else if dialog.active_view != ActiveView::Main {
+                dialog.active_view = ActiveView::Main;
+            }
+        }
         Msg::Cancel
         | Msg::Confirm
         | Msg::EnterPressed
-        | Msg::EscapePressed
         | Msg::PageSelectionModelActivated(_)
         | Msg::ColorModelActivated(_)
         | Msg::OrientationModelActivated(_)
         | Msg::LayoutDirectionModelActivated(_) => {}
     }
     cosmic::Task::none()
+}
+
+fn commit_preset_edit(dialog: &mut PrintDialog) {
+    if let Some(idx) = dialog.editing_preset_row {
+        if idx < dialog.presets.len() && !dialog.presets[idx].is_builtin {
+            let name = dialog.editing_preset_name_input.trim().to_string();
+            if !name.is_empty() {
+                dialog.presets[idx].name = name;
+            }
+        }
+        dialog.editing_preset_row = None;
+    }
 }
 
 fn option_row<'a>(
@@ -847,13 +1082,33 @@ fn option_row<'a>(
         .into()
 }
 
+fn disabled_option_row<'a>(
+    label: impl Into<Cow<'a, str>> + 'a,
+    placeholder: impl Into<Cow<'a, str>> + 'a,
+) -> Element<'a, Msg> {
+    let label_text = text(label).class(Text::Custom(|theme| {
+        let mut color = theme.current_container().component.on;
+        color.alpha *= 0.38;
+        cosmic::iced::core::widget::text::Style {
+            color: Some(Color::from(color)),
+            ..Default::default()
+        }
+    }));
+
+    let control = disabled_placeholder(placeholder);
+
+    row![label_text, space::horizontal(), control]
+        .align_y(Alignment::Center)
+        .into()
+}
+
 fn disabled_placeholder<'a, Msg: 'static + Clone>(
     label: impl Into<Cow<'a, str>> + 'a,
 ) -> Element<'a, Msg> {
     let theme_spacing = theme::spacing();
     container(text(label).size(14).class(Text::Custom(|theme| {
         let mut color = theme.current_container().component.on;
-        color.alpha *= 0.75;
+        color.alpha *= 0.38;
         cosmic::iced::core::widget::text::Style {
             color: Some(Color::from(color)),
             ..Default::default()
@@ -866,7 +1121,7 @@ fn disabled_placeholder<'a, Msg: 'static + Clone>(
     .into()
 }
 
-fn option_group<'a>(title: Option<&'a str>, items: Vec<Element<'a, Msg>>) -> Element<'a, Msg> {
+fn option_group<'a>(title: Option<&'a str>, items: Vec<Vec<Element<'a, Msg>>>) -> Element<'a, Msg> {
     let mut col = column![].spacing(8);
     if let Some(t) = title {
         col = col.push(text(t).size(14).font(Font {
@@ -875,15 +1130,32 @@ fn option_group<'a>(title: Option<&'a str>, items: Vec<Element<'a, Msg>>) -> Ele
         }));
     }
 
-    let mut list = column![].spacing(12);
-    for (i, item) in items.into_iter().enumerate() {
+    let mut list = column![].spacing(0);
+    list = list.push(space::vertical().height(4.0));
+    for (i, sub_items) in items.into_iter().enumerate() {
         if i > 0 {
             list = list.push(divider::horizontal::light());
         }
-        list = list.push(item);
+        for item in sub_items {
+            let padded_item = container(item)
+                .padding(Padding {
+                    left: 24.0,
+                    right: 24.0,
+                    top: 10.0,
+                    bottom: 10.0,
+                })
+                .width(Length::Fill);
+            list = list.push(padded_item);
+        }
     }
+    list = list.push(space::vertical().height(4.0));
 
-    col = col.push(container(list).padding(16).width(Length::Fill));
+    col = col.push(
+        widget::layer_container(list)
+            .layer(cosmic::cosmic_theme::Layer::Primary)
+            .padding(0)
+            .width(Length::Fill),
+    );
     col.into()
 }
 
@@ -944,6 +1216,32 @@ fn counter_button<'a>(label: &'a str, msg: Option<Msg>) -> Element<'a, Msg> {
     .into()
 }
 
+fn modal_overlay<'a>(
+    base: Element<'a, Msg>,
+    modal: Element<'a, Msg>,
+    on_click_backdrop: Option<Msg>,
+) -> Element<'a, Msg> {
+    let overlay = container(modal)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .style(|_theme| container::Style {
+            background: Some(cosmic::iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5).into()),
+            ..Default::default()
+        });
+
+    let overlay_element: Element<'a, Msg> = if let Some(msg) = on_click_backdrop {
+        cosmic::iced::widget::mouse_area(overlay)
+            .on_press(msg)
+            .into()
+    } else {
+        overlay.into()
+    };
+
+    Stack::new().push(base).push(overlay_element).into()
+}
+
 pub fn view<'a>(
     dialog: &'a PrintDialog,
     color_model: &'a segmented_button::Model<SingleSelect>,
@@ -951,8 +1249,8 @@ pub fn view<'a>(
     layout_direction_model: &'a segmented_button::Model<SingleSelect>,
     page_selection_model: &'a segmented_button::Model<SingleSelect>,
 ) -> Element<'a, Msg> {
-    let content = match dialog.active_view {
-        ActiveView::Main => view_main(
+    let base = match dialog.active_view {
+        ActiveView::Main | ActiveView::SavePreset | ActiveView::EditPresets => view_main(
             dialog,
             color_model,
             orientation_model,
@@ -961,7 +1259,21 @@ pub fn view<'a>(
         ActiveView::PageSelection => view_pages_selection(dialog, page_selection_model),
     };
 
-    container(content)
+    let content = match dialog.active_view {
+        ActiveView::Main | ActiveView::PageSelection => base,
+        ActiveView::SavePreset => modal_overlay(base, view_save_preset(dialog), None),
+        ActiveView::EditPresets => {
+            let on_click = if dialog.editing_preset_row.is_some() {
+                Some(Msg::CommitEdit)
+            } else {
+                None
+            };
+            modal_overlay(base, view_edit_presets(dialog), on_click)
+        }
+    };
+
+    widget::layer_container(content)
+        .layer(cosmic::cosmic_theme::Layer::Background)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -971,20 +1283,29 @@ fn view_pages_selection<'a>(
     dialog: &'a PrintDialog,
     page_selection_model: &'a segmented_button::Model<SingleSelect>,
 ) -> Element<'a, Msg> {
-    let title_col = column![
-        button::standard("< Print")
-            .class(Button::Text)
-            .on_press(Msg::NavigateTo(ActiveView::Main)),
-        space::horizontal(),
-        text("Pages").size(20),
-        space::horizontal(),
-    ]
-    .align_x(Alignment::Start)
-    .spacing(5)
-    .padding(8);
+    let title_col = container(column![
+        button::custom(
+            row![icon::from_name("go-previous-symbolic"), text("Print")]
+                .spacing(4)
+                .align_y(Alignment::Center),
+        )
+        .class(Button::Text)
+        .on_press(Msg::NavigateTo(ActiveView::Main)),
+        space::vertical().height(8.0),
+        text("Pages").size(20).font(Font {
+            weight: Weight::Bold,
+            ..Default::default()
+        }),
+    ])
+    .padding(Padding {
+        top: 16.0,
+        bottom: 0.0,
+        left: 24.0,
+        right: 24.0,
+    });
 
     let segmented = segmented_button::vertical(page_selection_model)
-        .style(SegmentedButton::Control)
+        .style(SegmentedButton::FileNav)
         .button_alignment(Alignment::Start)
         .button_height(50)
         .font_size(15.0)
@@ -1043,9 +1364,220 @@ fn view_pages_selection<'a>(
         list_items.push(error_text.into());
     }
 
-    let list = option_group(None, list_items);
+    let list = option_group(None, vec![list_items]);
 
-    column![title_col, container(list).padding(16)].into()
+    column![
+        title_col,
+        container(list).padding(Padding {
+            top: 16.0,
+            bottom: 16.0,
+            left: 24.0,
+            right: 24.0,
+        })
+    ]
+    .into()
+}
+
+fn view_save_preset<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
+    let title_header = container(text("Save preset").size(20).font(Font {
+        weight: Weight::Bold,
+        ..Default::default()
+    }))
+    .padding(Padding {
+        top: 16.0,
+        bottom: 8.0,
+        left: 16.0,
+        right: 16.0,
+    });
+
+    let name_input = text_input("Preset name", &dialog.save_preset_name_input)
+        .on_input(Msg::SavePresetNameInputChanged)
+        .on_submit(|_| Msg::ConfirmSavePreset)
+        .width(Length::Fill);
+
+    let body = container(column![name_input].spacing(12)).padding(16);
+
+    let can_save = !dialog.save_preset_name_input.trim().is_empty();
+
+    let cancel_button = button::standard("Cancel")
+        .class(Button::Standard)
+        .on_press(Msg::NavigateTo(ActiveView::Main));
+
+    let save_button = button::suggested("Save").on_press_maybe(if can_save {
+        Some(Msg::ConfirmSavePreset)
+    } else {
+        None
+    });
+
+    let footer = row![widget::space::horizontal(), cancel_button, save_button]
+        .align_y(Alignment::Center)
+        .spacing(12)
+        .padding(16);
+
+    let card = column![
+        title_header,
+        widget::scrollable(body).height(Length::Fill),
+        footer
+    ];
+
+    container(card)
+        .width(Length::Fixed(400.0))
+        .height(Length::Fixed(190.0))
+        .style(|theme: &cosmic::Theme| {
+            let cosmic = theme.cosmic();
+            container::Style {
+                background: Some(cosmic.bg_color().into()),
+                border: cosmic::iced::Border {
+                    radius: 16.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+fn view_edit_presets<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
+    let is_editing_preset = dialog.editing_preset_row.is_some();
+
+    let title_header = container(text("Presets").size(20).font(Font {
+        weight: Weight::Bold,
+        ..Default::default()
+    }))
+    .padding(Padding {
+        top: 16.0,
+        bottom: 8.0,
+        left: 16.0,
+        right: 16.0,
+    });
+
+    let mut rows: Vec<Element<'_, Msg>> = Vec::new();
+
+    for (idx, preset) in dialog.presets.iter().enumerate() {
+        if preset.is_builtin {
+            continue;
+        }
+
+        let is_editing = dialog.editing_preset_row == Some(idx);
+
+        let name_widget: Element<'_, Msg> = if is_editing {
+            let input_id = cosmic::iced::widget::Id::new(format!("preset_edit_input_{idx}"));
+            text_input("Preset name", &dialog.editing_preset_name_input)
+                .id(input_id)
+                .on_input(Msg::PresetRowNameInputChanged)
+                .on_submit(move |_| Msg::SavePresetRowName(idx))
+                .width(Length::Fill)
+                .into()
+        } else {
+            text(&preset.name).size(14).into()
+        };
+
+        let clear_or_edit_button: Element<'_, Msg> = if is_editing {
+            let clear_msg = if dialog.editing_preset_name_input.is_empty() {
+                Msg::SavePresetRowName(idx)
+            } else {
+                Msg::PresetRowNameInputChanged(String::new())
+            };
+            button::icon(icon::from_name("edit-clear-symbolic"))
+                .on_press(clear_msg)
+                .into()
+        } else {
+            button::icon(icon::from_name("document-edit-symbolic"))
+                .on_press(Msg::ToggleEditPresetRow(idx))
+                .into()
+        };
+
+        let delete_button: Element<'_, Msg> = button::icon(icon::from_name("user-trash-symbolic"))
+            .on_press(Msg::DeletePresetRow(idx))
+            .into();
+
+        let preset_row = row![
+            container(name_widget)
+                .width(Length::Fill)
+                .height(36)
+                .align_y(Alignment::Center),
+            clear_or_edit_button,
+            delete_button
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        let mut row_mouse_area = cosmic::iced::widget::mouse_area(preset_row);
+        if !is_editing && is_editing_preset {
+            row_mouse_area = row_mouse_area.on_press(Msg::CommitEdit);
+        }
+
+        rows.push(row_mouse_area.into());
+    }
+
+    let add_preset_btn = button::standard("Add preset")
+        .class(Button::Standard)
+        .on_press(Msg::AddNewPresetInEditor);
+
+    let add_preset_row = row![space::horizontal(), add_preset_btn].align_y(Alignment::Center);
+
+    let mut body_col = column![].spacing(16);
+
+    if !rows.is_empty() {
+        let preset_group = option_group(None, rows.into_iter().map(|r| vec![r]).collect());
+        body_col = body_col.push(preset_group);
+    }
+
+    body_col = body_col.push(add_preset_row);
+
+    let body = container(body_col).padding(16);
+
+    let close_button = button::standard("Close")
+        .class(Button::Standard)
+        .on_press(Msg::NavigateTo(ActiveView::Main));
+
+    let footer = container(
+        row![widget::space::horizontal(), close_button]
+            .align_y(Alignment::Center)
+            .spacing(12)
+            .padding(16),
+    )
+    .width(Length::Fill)
+    .style(|theme: &cosmic::Theme| {
+        let cosmic = theme.cosmic();
+        container::Style {
+            background: Some(cosmic.primary_container_color().into()),
+            border: cosmic::iced::Border {
+                radius: cosmic::iced::border::Radius {
+                    top_left: 0.0,
+                    top_right: 0.0,
+                    bottom_right: 16.0,
+                    bottom_left: 16.0,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    });
+
+    let card = column![
+        title_header,
+        widget::scrollable(body)
+            .id(cosmic::iced::widget::Id::new("edit_presets_scroll"))
+            .height(Length::Fill),
+        footer
+    ];
+
+    container(card)
+        .width(Length::Fixed(500.0))
+        .height(Length::Fixed(460.0))
+        .style(|theme: &cosmic::Theme| {
+            let cosmic = theme.cosmic();
+            container::Style {
+                background: Some(cosmic.bg_color().into()),
+                border: cosmic::iced::Border {
+                    radius: 16.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
 }
 
 fn view_main<'a>(
@@ -1054,6 +1586,17 @@ fn view_main<'a>(
     orientation_model: &'a segmented_button::Model<SingleSelect>,
     layout_direction_model: &'a segmented_button::Model<SingleSelect>,
 ) -> Element<'a, Msg> {
+    let title_header = container(text("Print").size(20).font(Font {
+        weight: Weight::Bold,
+        ..Default::default()
+    }))
+    .padding(Padding {
+        top: 16.0,
+        bottom: 0.0,
+        left: 24.0,
+        right: 24.0,
+    });
+
     let options = view_options_panel(
         dialog,
         color_model,
@@ -1062,7 +1605,12 @@ fn view_main<'a>(
     );
     let status_bar = view_status_row(dialog);
 
-    column![widget::scrollable(options).height(Length::Fill), status_bar].into()
+    column![
+        title_header,
+        widget::scrollable(options).height(Length::Fill),
+        status_bar
+    ]
+    .into()
 }
 
 fn view_options_panel<'a>(
@@ -1072,7 +1620,12 @@ fn view_options_panel<'a>(
     layout_direction_model: &'a segmented_button::Model<SingleSelect>,
 ) -> Element<'a, Msg> {
     let spacing = 16;
-    let mut groups = column![].spacing(spacing);
+    let mut groups = column![].spacing(spacing).padding(Padding {
+        top: 16.0,
+        bottom: 16.0,
+        left: 24.0,
+        right: 24.0,
+    });
 
     // Group 1: Destination and Presets
     let printer_names: Vec<String> = dialog.printers.iter().map(|p| p.name.clone()).collect();
@@ -1090,17 +1643,29 @@ fn view_options_panel<'a>(
         .into()
     };
 
+    let mut preset_names: Vec<String> = dialog.presets.iter().map(|p| p.name.clone()).collect();
+    let save_action_index = preset_names.len();
+    preset_names.push("Save current settings as preset...".to_string());
+    let edit_action_index = preset_names.len();
+    preset_names.push("Edit preset list...".to_string());
+
     let preset_dropdown: Element<'_, Msg> =
-        dropdown(vec!["Default preset".to_string()], Some(0), |_| {
-            Msg::PrinterSelected(0)
+        dropdown(preset_names, dialog.selected_preset_index, move |idx| {
+            if idx == save_action_index {
+                Msg::OpenSavePresetDialog
+            } else if idx == edit_action_index {
+                Msg::OpenEditPresetsDialog
+            } else {
+                Msg::PresetSelected(idx)
+            }
         })
         .into();
 
     let top_group = option_group(
         None,
         vec![
-            option_row("Destination", dest_dropdown),
-            option_row("Preset", preset_dropdown),
+            vec![option_row("Destination", dest_dropdown)],
+            vec![option_row("Preset", preset_dropdown)],
         ],
     );
     groups = groups.push(top_group);
@@ -1120,9 +1685,16 @@ fn view_options_panel<'a>(
 
     let pages_row = option_row(
         "Pages",
-        button::standard(format!("{} >", dialog.page_selection.to_string_label()))
-            .class(Button::Text)
-            .on_press(Msg::NavigateTo(ActiveView::PageSelection)),
+        button::custom(
+            row![
+                text(dialog.page_selection.to_string_label()),
+                icon::from_name("go-next-symbolic")
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .class(Button::Text)
+        .on_press(Msg::NavigateTo(ActiveView::PageSelection)),
     );
 
     let decrement_msg = if dialog.copies > 1 {
@@ -1149,9 +1721,9 @@ fn view_options_panel<'a>(
 
     let paper_size_row = if let Some(media) = &dialog.printer_media {
         if media.is_empty() {
-            option_row("Paper size", disabled_placeholder("Not supported"))
+            disabled_option_row("Paper size", "Not supported")
         } else if media.len() == 1 {
-            option_row("Paper size", disabled_placeholder(&media.media[0].name))
+            disabled_option_row("Paper size", &media.media[0].name)
         } else {
             let paper_sizes: Vec<String> = media.iter().map(|m| m.name.clone()).collect();
             let paper_size_dropdown = dropdown(
@@ -1162,14 +1734,11 @@ fn view_options_panel<'a>(
             option_row("Paper size", paper_size_dropdown)
         }
     } else {
-        option_row("Paper size", disabled_placeholder("Not supported"))
+        disabled_option_row("Paper size", "Not supported")
     };
 
     let duplex_row: Option<Element<'_, Msg>> = if dialog.duplex_values.is_empty() {
-        Some(option_row(
-            "Print on sides",
-            disabled_placeholder("Not supported"),
-        ))
+        Some(disabled_option_row("Print on sides", "Not supported"))
     } else if dialog.duplex_values.len() == 1 {
         fn duplex_label(raw: &str) -> &str {
             match raw {
@@ -1179,9 +1748,9 @@ fn view_options_panel<'a>(
                 other => other,
             }
         }
-        Some(option_row(
+        Some(disabled_option_row(
             "Print on sides",
-            disabled_placeholder(duplex_label(&dialog.duplex_values[0])),
+            duplex_label(&dialog.duplex_values[0]),
         ))
     } else {
         fn sides_label(raw: &str) -> &str {
@@ -1205,14 +1774,17 @@ fn view_options_panel<'a>(
 
     let is_pdf = dialog.is_pdf_selected();
 
-    let mut primary_items = vec![color_slider.into(), orientation_slider.into(), pages_row];
+    let mut primary_items = vec![
+        vec![color_slider.into(), orientation_slider.into()],
+        vec![pages_row],
+    ];
     if !is_pdf {
-        primary_items.push(option_row("Copies", copies_control));
-        primary_items.push(option_row("Collate", collate_toggle));
+        primary_items.push(vec![option_row("Copies", copies_control)]);
+        primary_items.push(vec![option_row("Collate", collate_toggle)]);
     }
-    primary_items.push(paper_size_row);
+    primary_items.push(vec![paper_size_row]);
     if !is_pdf && let Some(row) = duplex_row {
-        primary_items.push(row);
+        primary_items.push(vec![row]);
     }
     let primary_group = option_group(None, primary_items);
     groups = groups.push(primary_group);
@@ -1252,16 +1824,16 @@ fn view_options_panel<'a>(
         |i| Msg::MarginsSelected(Margins::ALL[i]),
     );
 
-    let mut layout_items = vec![option_row("Pages per sheet", pps_dropdown)];
+    let mut layout_items: Vec<Vec<Element<'a, Msg>>> =
+        vec![vec![option_row("Pages per sheet", pps_dropdown)]];
     if !is_pdf {
-        layout_items.push(
+        layout_items.push(vec![
             row![text("Layout direction"), layout_dir_row]
                 .spacing(16)
                 .align_y(Alignment::Center)
                 .into(),
-        );
+        ]);
     }
-    layout_items.push(option_row("Margins", margins_dropdown));
 
     if dialog.margins == Margins::Custom {
         let to_mm = |v: u32| format!("{:.1} mm", v as f32 / 100.0);
@@ -1279,22 +1851,30 @@ fn view_options_panel<'a>(
             .map(|&v| to_mm(v))
             .collect();
 
-        layout_items.push(option_row(
+        let top_bottom_row = option_row(
             "Top & bottom margin",
             dropdown(
                 vt_labels,
                 dialog.custom_margins_vertical_index,
                 Msg::CustomMarginVtSelected,
             ),
-        ));
-        layout_items.push(option_row(
+        );
+        let left_right_row = option_row(
             "Left & right margin",
             dropdown(
                 hz_labels,
                 dialog.custom_margins_horizontal_index,
                 Msg::CustomMarginHzSelected,
             ),
-        ));
+        );
+
+        layout_items.push(vec![
+            option_row("Margins", margins_dropdown),
+            top_bottom_row,
+            left_right_row,
+        ]);
+    } else {
+        layout_items.push(vec![option_row("Margins", margins_dropdown)]);
     }
 
     let border_dropdown = dropdown(
@@ -1310,12 +1890,12 @@ fn view_options_panel<'a>(
         ),
         |i| Msg::BorderSelected(Border::ALL[i]),
     );
-    layout_items.push(option_row("Border", border_dropdown));
+    layout_items.push(vec![option_row("Border", border_dropdown)]);
 
     let scaling_dropdown = dropdown(
         ScalingMode::ALL
             .iter()
-            .map(|s| s.label().to_string())
+            .map(|s| s.display_label().to_string())
             .collect::<Vec<_>>(),
         Some(
             ScalingMode::ALL
@@ -1325,7 +1905,6 @@ fn view_options_panel<'a>(
         ),
         |i| Msg::ScalingSelected(ScalingMode::ALL[i]),
     );
-    layout_items.push(option_row("Scaling", scaling_dropdown));
 
     if dialog.scaling == ScalingMode::Custom {
         let decrement_scaling_msg = if dialog.custom_scaling_input > 1 {
@@ -1335,26 +1914,37 @@ fn view_options_panel<'a>(
         };
         let custom_scaling_control = row![
             counter_button("-", decrement_scaling_msg),
-            text(format!("{}%", dialog.custom_scaling_input)).size(16),
+            text(format!("{}", dialog.custom_scaling_input)).size(16),
             counter_button("+", Some(Msg::IncrementScaling)),
         ]
         .align_y(Alignment::Center)
         .spacing(12);
-        layout_items.push(option_row("Scaling percentage", custom_scaling_control));
+
+        let custom_scaling_row: Element<'_, Msg> =
+            row![space::horizontal(), custom_scaling_control]
+                .align_y(Alignment::Center)
+                .into();
+
+        layout_items.push(vec![
+            option_row("Scaling", scaling_dropdown),
+            custom_scaling_row,
+        ]);
+    } else {
+        layout_items.push(vec![option_row("Scaling", scaling_dropdown)]);
     }
 
     if dialog.show_print_header_footer_toggle {
-        layout_items.push(option_row(
+        layout_items.push(vec![option_row(
             "Print header and footer",
             toggler(dialog.print_header_footer).on_toggle(|_| Msg::TogglePrintHeaderFooter),
-        ));
+        )]);
     }
 
     if dialog.show_print_background_toggle {
-        layout_items.push(option_row(
+        layout_items.push(vec![option_row(
             "Print background",
             toggler(dialog.print_background).on_toggle(|_| Msg::TogglePrintBackground),
-        ));
+        )]);
     }
 
     let layout_group = option_group(Some("Layout"), layout_items);
@@ -1362,10 +1952,7 @@ fn view_options_panel<'a>(
 
     // Group 4: Paper handling
     let tray_row: Option<Element<'_, Msg>> = if dialog.media_source_values.is_empty() {
-        Some(option_row(
-            "Paper tray",
-            disabled_placeholder("Not supported"),
-        ))
+        Some(disabled_option_row("Paper tray", "Not supported"))
     } else if dialog.media_source_values.len() == 1 {
         fn tray_label(raw: &str) -> &str {
             match raw {
@@ -1376,9 +1963,9 @@ fn view_options_panel<'a>(
                 other => other,
             }
         }
-        Some(option_row(
+        Some(disabled_option_row(
             "Paper tray",
-            disabled_placeholder(tray_label(&dialog.media_source_values[0])),
+            tray_label(&dialog.media_source_values[0]),
         ))
     } else {
         fn tray_label(raw: &str) -> &str {
@@ -1402,14 +1989,11 @@ fn view_options_panel<'a>(
     };
 
     let type_row: Option<Element<'_, Msg>> = if dialog.media_type_values.is_empty() {
-        Some(option_row(
-            "Paper type",
-            disabled_placeholder("Not supported"),
-        ))
+        Some(disabled_option_row("Paper type", "Not supported"))
     } else if dialog.media_type_values.len() == 1 {
-        Some(option_row(
+        Some(disabled_option_row(
             "Paper type",
-            disabled_placeholder(&dialog.media_type_values[0]),
+            &dialog.media_type_values[0],
         ))
     } else {
         let labels: Vec<String> = dialog.media_type_values.clone();
@@ -1420,32 +2004,13 @@ fn view_options_panel<'a>(
     };
 
     let quality_row: Option<Element<'_, Msg>> = if dialog.print_quality_values.is_empty() {
-        Some(option_row(
-            "Print quality",
-            disabled_placeholder("Not supported"),
-        ))
+        Some(disabled_option_row("Print quality", "Not supported"))
     } else if dialog.print_quality_values.len() == 1 {
-        fn quality_label(raw: &str) -> &str {
-            match raw {
-                "3" => "Draft",
-                "4" => "Normal",
-                "5" => "High",
-                other => other,
-            }
-        }
-        Some(option_row(
+        Some(disabled_option_row(
             "Print quality",
-            disabled_placeholder(quality_label(&dialog.print_quality_values[0])),
+            quality_label(&dialog.print_quality_values[0]),
         ))
     } else {
-        fn quality_label(raw: &str) -> &str {
-            match raw {
-                "3" => "Draft",
-                "4" => "Normal",
-                "5" => "High",
-                other => other,
-            }
-        }
         let labels: Vec<String> = dialog
             .print_quality_values
             .iter()
@@ -1462,18 +2027,18 @@ fn view_options_panel<'a>(
     };
 
     if !is_pdf {
-        let mut paper_items = vec![option_row(
+        let mut paper_items = vec![vec![option_row(
             "Print pages in reverse order",
             toggler(dialog.reverse_order).on_toggle(|_| Msg::ToggleReverseOrder),
-        )];
+        )]];
         if let Some(row) = tray_row {
-            paper_items.push(row);
+            paper_items.push(vec![row]);
         }
         if let Some(row) = type_row {
-            paper_items.push(row);
+            paper_items.push(vec![row]);
         }
         if let Some(row) = quality_row {
-            paper_items.push(row);
+            paper_items.push(vec![row]);
         }
 
         let paper_group = option_group(Some("Paper handling & quality"), paper_items);
@@ -1503,7 +2068,7 @@ fn view_status_row(dialog: &PrintDialog) -> Element<'_, Msg> {
     let confirm_label = dialog.accept_label.as_deref().unwrap_or("Print");
     let print_btn = button::suggested(confirm_label).on_press(Msg::Confirm);
 
-    row![
+    let content = row![
         text(status_text).size(14),
         widget::space::horizontal(),
         cancel_btn,
@@ -1511,8 +2076,11 @@ fn view_status_row(dialog: &PrintDialog) -> Element<'_, Msg> {
     ]
     .align_y(Alignment::Center)
     .spacing(12)
-    .padding(16)
-    .into()
+    .padding(16);
+
+    widget::layer_container(content)
+        .layer(cosmic::cosmic_theme::Layer::Primary)
+        .into()
 }
 
 fn validate_page_range(input: &str) -> bool {
@@ -1570,6 +2138,28 @@ fn clean_supported_values(values: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn load_option_values(options: &OptionsCollection, key: &str) -> (Vec<String>, Option<usize>) {
+    if let Some(opt) = options.get(key) {
+        let values = clean_supported_values(&opt.supported_values);
+        let index = values
+            .iter()
+            .position(|v| *v == opt.default_value)
+            .or(if values.is_empty() { None } else { Some(0) });
+        (values, index)
+    } else {
+        (Vec::new(), None)
+    }
+}
+
+fn quality_label(raw: &str) -> &str {
+    match raw {
+        "3" => "Draft",
+        "4" => "Normal",
+        "5" => "High",
+        other => other,
+    }
+}
+
 fn page_range_to_zero_based(input: &str) -> String {
     input
         .split(',')
@@ -1617,6 +2207,14 @@ fn get_str(map: &HashMap<String, zvariant::OwnedValue>, key: &str) -> Option<Str
 
 fn get_f64(map: &HashMap<String, zvariant::OwnedValue>, key: &str) -> Option<f64> {
     map.get(key).and_then(|v| f64::try_from(v.clone()).ok())
+}
+
+fn sanitize_index(index: Option<usize>, len: usize) -> Option<usize> {
+    match index {
+        Some(i) if i < len => Some(i),
+        _ if len > 0 => Some(0),
+        _ => None,
+    }
 }
 
 // The application calling `PreparePrint` passes hints for the initial state of the dialog.

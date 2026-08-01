@@ -302,6 +302,8 @@ pub struct PrintArgs {
 fn create_dialog(modal: bool) -> (window::Id, cosmic::Task<cosmic::Action<crate::app::Msg>>) {
     if modal {
         let (id, task) = window::open(window::Settings {
+            decorations: false,
+            transparent: true,
             resizable: false,
             ..Default::default()
         });
@@ -350,6 +352,13 @@ pub fn update_args(
             &req.page_setup,
             req.options.accept_label.clone(),
         );
+    }
+
+    args.dialog.presets = portal.config.print.all_presets();
+    if let Some(ref last_id) = portal.config.print.last_used_preset_id
+        && let Some(pos) = args.dialog.presets.iter().position(|p| p.id == *last_id)
+    {
+        args.dialog.apply_preset(pos);
     }
 
     args.window_id = window_id;
@@ -431,8 +440,8 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
             }
         },
         Msg::Dialog(dialog_msg) => match dialog_msg {
-            crate::print_dialog::Msg::EnterPressed => {
-                if args.dialog.active_view == crate::print_dialog::ActiveView::PageSelection {
+            crate::print_dialog::Msg::EnterPressed => match args.dialog.active_view {
+                crate::print_dialog::ActiveView::PageSelection => {
                     if matches!(
                         args.dialog.page_selection,
                         crate::print_dialog::PageSetSelection::Custom(_)
@@ -443,12 +452,21 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                         args.dialog.active_view = crate::print_dialog::ActiveView::Main;
                         Task::none()
                     }
-                } else {
+                }
+                crate::print_dialog::ActiveView::SavePreset => update_msg(
+                    portal,
+                    Msg::Dialog(crate::print_dialog::Msg::ConfirmSavePreset),
+                ),
+                crate::print_dialog::ActiveView::EditPresets => {
+                    args.dialog.active_view = crate::print_dialog::ActiveView::Main;
+                    Task::none()
+                }
+                crate::print_dialog::ActiveView::Main => {
                     update_msg(portal, Msg::Dialog(crate::print_dialog::Msg::Confirm))
                 }
-            }
-            crate::print_dialog::Msg::EscapePressed => {
-                if args.dialog.active_view == crate::print_dialog::ActiveView::PageSelection {
+            },
+            crate::print_dialog::Msg::EscapePressed => match args.dialog.active_view {
+                crate::print_dialog::ActiveView::PageSelection => {
                     if matches!(
                         args.dialog.page_selection,
                         crate::print_dialog::PageSetSelection::Custom(_)
@@ -459,10 +477,16 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                         args.dialog.active_view = crate::print_dialog::ActiveView::Main;
                         Task::none()
                     }
-                } else {
+                }
+                crate::print_dialog::ActiveView::SavePreset
+                | crate::print_dialog::ActiveView::EditPresets => {
+                    args.dialog.active_view = crate::print_dialog::ActiveView::Main;
+                    Task::none()
+                }
+                crate::print_dialog::ActiveView::Main => {
                     update_msg(portal, Msg::Dialog(crate::print_dialog::Msg::Cancel))
                 }
-            }
+            },
             crate::print_dialog::Msg::Cancel => {
                 if let Some(args) = portal.print_args.take() {
                     let window_id = args.window_id;
@@ -480,6 +504,10 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                 Task::none()
             }
             crate::print_dialog::Msg::Confirm => {
+                let save_config = cosmic::task::message(crate::app::Msg::ConfigSetPrint(
+                    args.dialog.to_config_print(),
+                ));
+
                 let is_pdf = args.dialog.is_pdf_selected();
                 if is_pdf && matches!(args.request, RequestKind::Print(_)) {
                     let title = args.title.clone();
@@ -487,14 +515,17 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                         RequestKind::Print(req) => Arc::clone(&req.fd),
                         _ => unreachable!(),
                     };
-                    return Task::perform(
-                        async move { save_pdf_to_file(&title, &fd).await },
-                        |outcome| {
-                            cosmic::Action::App(crate::app::Msg::Print(Msg::SavePdfCompleted(
-                                outcome,
-                            )))
-                        },
-                    );
+                    return Task::batch(vec![
+                        save_config,
+                        Task::perform(
+                            async move { save_pdf_to_file(&title, &fd).await },
+                            |outcome| {
+                                cosmic::Action::App(crate::app::Msg::Print(Msg::SavePdfCompleted(
+                                    outcome,
+                                )))
+                            },
+                        ),
+                    ]);
                 }
 
                 if let Some(args) = portal.print_args.take() {
@@ -571,9 +602,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                     } else {
                         destroy_layer_surface(window_id)
                     };
-                    return task;
+                    return Task::batch(vec![save_config, task]);
                 }
-                Task::none()
+                save_config
             }
             crate::print_dialog::Msg::PageSelectionModelActivated(entity) => {
                 portal.print_page_selection_model.activate(entity);
@@ -592,10 +623,15 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                     .print_color_model
                     .active_data::<crate::print_dialog::ColorMode>()
                 {
-                    if mode == crate::print_dialog::ColorMode::Color && !args.dialog.color_supported
-                    {
+                    let is_unsupported = {
+                        let args = portal.print_args.as_ref().unwrap();
+                        mode == crate::print_dialog::ColorMode::Color
+                            && !args.dialog.color_supported
+                    };
+                    if is_unsupported {
                         sync_print_models(portal);
                     } else {
+                        let args = portal.print_args.as_mut().unwrap();
                         args.dialog.color_mode = mode;
                     }
                 }
@@ -607,6 +643,7 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                     .print_orientation_model
                     .active_data::<crate::print_dialog::Orientation>()
                 {
+                    let args = portal.print_args.as_mut().unwrap();
                     args.dialog.orientation = orientation;
                 }
                 Task::none()
@@ -617,14 +654,36 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
                     .print_layout_direction_model
                     .active_data::<crate::print_dialog::LayoutDirection>(
                 ) {
+                    let args = portal.print_args.as_mut().unwrap();
                     args.dialog.layout_direction = layout_direction;
                 }
                 Task::none()
             }
             other_msg => {
+                let is_preset_modifying = matches!(
+                    other_msg,
+                    crate::print_dialog::Msg::ConfirmSavePreset
+                        | crate::print_dialog::Msg::SavePresetRowName(_)
+                        | crate::print_dialog::Msg::DeletePresetRow(_)
+                        | crate::print_dialog::Msg::PresetSelected(_)
+                );
                 let cmd = crate::print_dialog::update(&mut args.dialog, other_msg);
+                let config_print = if is_preset_modifying {
+                    Some(args.dialog.to_config_print())
+                } else {
+                    None
+                };
                 sync_print_models(portal);
-                cmd.map(|m| cosmic::Action::App(crate::app::Msg::Print(Msg::Dialog(m))))
+                if let Some(config_print) = config_print {
+                    let save_cmd =
+                        cosmic::task::message(crate::app::Msg::ConfigSetPrint(config_print));
+                    Task::batch(vec![
+                        cmd.map(|m| cosmic::Action::App(crate::app::Msg::Print(Msg::Dialog(m)))),
+                        save_cmd,
+                    ])
+                } else {
+                    cmd.map(|m| cosmic::Action::App(crate::app::Msg::Print(Msg::Dialog(m))))
+                }
             }
         },
     }
@@ -645,18 +704,11 @@ pub fn view(portal: &CosmicPortal) -> Element<'_, Msg> {
     .map(Msg::Dialog);
 
     autosize::autosize(
-        KeyboardWrapper::new(
-            widget::dialog().title(&args.title).control(content),
-            |key, _| match key {
-                Key::Named(Named::Enter) => {
-                    Some(Msg::Dialog(crate::print_dialog::Msg::EnterPressed))
-                }
-                Key::Named(Named::Escape) => {
-                    Some(Msg::Dialog(crate::print_dialog::Msg::EscapePressed))
-                }
-                _ => None,
-            },
-        ),
+        KeyboardWrapper::new(content, |key, _| match key {
+            Key::Named(Named::Enter) => Some(Msg::Dialog(crate::print_dialog::Msg::EnterPressed)),
+            Key::Named(Named::Escape) => Some(Msg::Dialog(crate::print_dialog::Msg::EscapePressed)),
+            _ => None,
+        }),
         PRINT_WIDGET_ID.clone(),
     )
     .max_width(600.)
