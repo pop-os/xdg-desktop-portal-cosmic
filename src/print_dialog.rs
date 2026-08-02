@@ -3,10 +3,11 @@ use cosmic::iced::font::Weight;
 use cosmic::iced::widget::Stack;
 use cosmic::iced::{Alignment, Background, Color, Font, Length, Padding, Subscription};
 use cosmic::theme::{Button, SegmentedButton, Text};
+use cosmic::widget::dropdown::popup_dropdown;
 use cosmic::widget::segmented_button::SingleSelect;
 use cosmic::widget::{
-    self, button, column, container, divider, dropdown, icon, row, segmented_button, space, text,
-    text_input, toggler,
+    self, button, column, container, divider, icon, row, segmented_button, space, text, text_input,
+    toggler,
 };
 use cosmic::{Element, Task, font, theme};
 use cpdb_rs::client::CpdbClient;
@@ -138,6 +139,7 @@ impl MarginOptions {
 
 #[derive(Debug, Clone)]
 pub struct PrintDialog {
+    pub window_id: cosmic::iced::window::Id,
     pub is_discovering: bool,
     pub printers: Vec<PrinterSnapshot>,
     pub selected_printer_index: Option<usize>,
@@ -459,6 +461,7 @@ pub fn default_pdf_media() -> MediaCollection {
 impl Default for PrintDialog {
     fn default() -> Self {
         Self {
+            window_id: cosmic::iced::window::Id::unique(),
             is_discovering: true,
             printers: vec![save_as_pdf_printer()],
             selected_printer_index: Some(0),
@@ -514,6 +517,7 @@ impl Default for PrintDialog {
 
 #[derive(Clone, Debug)]
 pub enum Msg {
+    SurfaceAction(cosmic::surface::Action),
     PrintersLoaded(Vec<PrinterSnapshot>),
     DiscoveryEvent(DiscoveryEvent),
     PrinterSelected(usize),
@@ -1056,7 +1060,8 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
         | Msg::PageSelectionModelActivated(_)
         | Msg::ColorModelActivated(_)
         | Msg::OrientationModelActivated(_)
-        | Msg::LayoutDirectionModelActivated(_) => {}
+        | Msg::LayoutDirectionModelActivated(_)
+        | Msg::SurfaceAction(_) => {}
     }
     cosmic::Task::none()
 }
@@ -1071,6 +1076,23 @@ fn commit_preset_edit(dialog: &mut PrintDialog) {
         }
         dialog.editing_preset_row = None;
     }
+}
+
+fn custom_dropdown<'a, S: AsRef<str> + Clone + Send + Sync + 'static>(
+    window_id: cosmic::iced::window::Id,
+    selections: impl Into<Cow<'a, [S]>>,
+    selected: Option<usize>,
+    on_selected: impl Fn(usize) -> Msg + Send + Sync + 'static,
+) -> Element<'a, Msg> {
+    popup_dropdown(
+        selections,
+        selected,
+        on_selected,
+        window_id,
+        Msg::SurfaceAction,
+        |msg| crate::app::Msg::Print(crate::print::Msg::Dialog(msg)),
+    )
+    .into()
 }
 
 fn option_row<'a>(
@@ -1630,17 +1652,19 @@ fn view_options_panel<'a>(
     // Group 1: Destination and Presets
     let printer_names: Vec<String> = dialog.printers.iter().map(|p| p.name.clone()).collect();
     let dest_dropdown: Element<'_, Msg> = if printer_names.is_empty() {
-        dropdown(vec!["No printers found".to_string()], Some(0), |_| {
-            Msg::PrinterSelected(0)
-        })
-        .into()
+        custom_dropdown(
+            dialog.window_id,
+            vec!["No printers found".to_string()],
+            Some(0),
+            |_| Msg::PrinterSelected(0),
+        )
     } else {
-        dropdown(
+        custom_dropdown(
+            dialog.window_id,
             printer_names,
             dialog.selected_printer_index,
             Msg::PrinterSelected,
         )
-        .into()
     };
 
     let mut preset_names: Vec<String> = dialog.presets.iter().map(|p| p.name.clone()).collect();
@@ -1649,8 +1673,11 @@ fn view_options_panel<'a>(
     let edit_action_index = preset_names.len();
     preset_names.push("Edit preset list...".to_string());
 
-    let preset_dropdown: Element<'_, Msg> =
-        dropdown(preset_names, dialog.selected_preset_index, move |idx| {
+    let preset_dropdown: Element<'_, Msg> = custom_dropdown(
+        dialog.window_id,
+        preset_names,
+        dialog.selected_preset_index,
+        move |idx| {
             if idx == save_action_index {
                 Msg::OpenSavePresetDialog
             } else if idx == edit_action_index {
@@ -1658,8 +1685,8 @@ fn view_options_panel<'a>(
             } else {
                 Msg::PresetSelected(idx)
             }
-        })
-        .into();
+        },
+    );
 
     let top_group = option_group(
         None,
@@ -1726,7 +1753,8 @@ fn view_options_panel<'a>(
             disabled_option_row("Paper size", &media.media[0].name)
         } else {
             let paper_sizes: Vec<String> = media.iter().map(|m| m.name.clone()).collect();
-            let paper_size_dropdown = dropdown(
+            let paper_size_dropdown = custom_dropdown(
+                dialog.window_id,
                 paper_sizes,
                 dialog.selected_paper_size_index,
                 Msg::PaperSizeSelected,
@@ -1768,7 +1796,12 @@ fn view_options_panel<'a>(
             .collect();
         Some(option_row(
             "Print on sides",
-            dropdown(labels, dialog.duplex_index, Msg::DuplexSelected),
+            custom_dropdown(
+                dialog.window_id,
+                labels,
+                dialog.duplex_index,
+                Msg::DuplexSelected,
+            ),
         ))
     };
 
@@ -1790,7 +1823,8 @@ fn view_options_panel<'a>(
     groups = groups.push(primary_group);
 
     // Group 3: Layout
-    let pps_dropdown = dropdown(
+    let pps_dropdown = custom_dropdown(
+        dialog.window_id,
         vec![
             "1".to_string(),
             "2".to_string(),
@@ -1810,7 +1844,8 @@ fn view_options_panel<'a>(
         .font_active(font::default())
         .on_activate(Msg::LayoutDirectionModelActivated);
 
-    let margins_dropdown = dropdown(
+    let margins_dropdown = custom_dropdown(
+        dialog.window_id,
         Margins::ALL
             .iter()
             .map(|m| m.label().to_string())
@@ -1853,7 +1888,8 @@ fn view_options_panel<'a>(
 
         let top_bottom_row = option_row(
             "Top & bottom margin",
-            dropdown(
+            custom_dropdown(
+                dialog.window_id,
                 vt_labels,
                 dialog.custom_margins_vertical_index,
                 Msg::CustomMarginVtSelected,
@@ -1861,7 +1897,8 @@ fn view_options_panel<'a>(
         );
         let left_right_row = option_row(
             "Left & right margin",
-            dropdown(
+            custom_dropdown(
+                dialog.window_id,
                 hz_labels,
                 dialog.custom_margins_horizontal_index,
                 Msg::CustomMarginHzSelected,
@@ -1877,7 +1914,8 @@ fn view_options_panel<'a>(
         layout_items.push(vec![option_row("Margins", margins_dropdown)]);
     }
 
-    let border_dropdown = dropdown(
+    let border_dropdown = custom_dropdown(
+        dialog.window_id,
         Border::ALL
             .iter()
             .map(|b| b.label().to_string())
@@ -1892,7 +1930,8 @@ fn view_options_panel<'a>(
     );
     layout_items.push(vec![option_row("Border", border_dropdown)]);
 
-    let scaling_dropdown = dropdown(
+    let scaling_dropdown = custom_dropdown(
+        dialog.window_id,
         ScalingMode::ALL
             .iter()
             .map(|s| s.display_label().to_string())
@@ -1984,7 +2023,12 @@ fn view_options_panel<'a>(
             .collect();
         Some(option_row(
             "Paper tray",
-            dropdown(labels, dialog.paper_tray_index, Msg::PaperTraySelected),
+            custom_dropdown(
+                dialog.window_id,
+                labels,
+                dialog.paper_tray_index,
+                Msg::PaperTraySelected,
+            ),
         ))
     };
 
@@ -1999,7 +2043,12 @@ fn view_options_panel<'a>(
         let labels: Vec<String> = dialog.media_type_values.clone();
         Some(option_row(
             "Paper type",
-            dropdown(labels, dialog.paper_type_index, Msg::PaperTypeSelected),
+            custom_dropdown(
+                dialog.window_id,
+                labels,
+                dialog.paper_type_index,
+                Msg::PaperTypeSelected,
+            ),
         ))
     };
 
@@ -2018,7 +2067,8 @@ fn view_options_panel<'a>(
             .collect();
         Some(option_row(
             "Print quality",
-            dropdown(
+            custom_dropdown(
+                dialog.window_id,
                 labels,
                 dialog.print_quality_index,
                 Msg::PrintQualitySelected,

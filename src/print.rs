@@ -139,7 +139,6 @@ impl Print {
         .await
     }
 
-    // TODO: need to add save-to-file flow for print call
     #[allow(clippy::too_many_arguments)]
     async fn print(
         &self,
@@ -362,6 +361,7 @@ pub fn update_args(
     }
 
     args.window_id = window_id;
+    args.dialog.window_id = window_id;
     portal.print_args = Some(args);
     sync_print_models(portal);
 
@@ -440,6 +440,9 @@ pub fn update_msg(portal: &mut CosmicPortal, msg: Msg) -> Task<cosmic::Action<cr
             }
         },
         Msg::Dialog(dialog_msg) => match dialog_msg {
+            crate::print_dialog::Msg::SurfaceAction(a) => {
+                cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(a)))
+            }
             crate::print_dialog::Msg::EnterPressed => match args.dialog.active_view {
                 crate::print_dialog::ActiveView::PageSelection => {
                     if matches!(
