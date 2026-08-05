@@ -1,0 +1,14 @@
+allow = ᱟᱲᱟᱜ
+cancel = ᱵᱟᱹᱛᱤᱞ
+capture = ᱜᱷᱮᱨᱟᱣ
+share = ᱦᱟᱹᱴᱤᱧ
+save-to = ᱛᱮ ᱥᱟᱧᱪᱟᱣ ᱢᱮ
+    .clipboard = ᱠᱞᱤᱯᱵᱚᱨᱰ { save-to }
+    .pictures = ᱪᱤᱛᱟᱹᱨ { save-to }
+    .documents = ᱫᱚᱞᱤᱞ { save-to }
+choose-folder = ᱯᱚᱴᱚᱢ ᱵᱟᱪᱷᱟᱣ ᱢᱮ
+share-screen = ᱟᱢᱟᱜ ᱧᱮᱱᱚᱞᱚᱢ ᱦᱟᱹᱴᱤᱧ ᱢᱮ
+    .description = ᱥᱤᱥᱴᱚᱢ ᱟᱢᱟᱜ ᱧᱮᱱᱚᱞᱚᱢ ᱨᱮᱭᱟᱜ ᱡᱤᱱᱤᱥ ᱠᱚ "{ $app_name }" ᱥᱟᱶ ᱦᱟᱹᱴᱤᱧ ᱥᱟᱱᱟᱭᱮ ᱠᱟᱱᱟ ᱾ ᱦᱟᱹᱴᱤᱧ ᱞᱟᱹᱜᱤᱫ ᱢᱤᱫ ᱧᱮᱱᱚᱞᱚᱢ ᱵᱟᱝᱠᱷᱟᱱ ᱡᱟᱨᱞᱟ ᱵᱟᱪᱷᱟᱣ ᱢᱮ᱾
+unknown-application = ᱵᱟᱝ ᱵᱟᱰᱟᱭ ᱮᱯᱞᱤᱠᱮᱥᱚᱱ
+output = ᱟᱨᱡᱟᱣ
+window = ᱡᱟᱨᱞᱟ
