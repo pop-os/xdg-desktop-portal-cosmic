@@ -9227,6 +9227,7 @@ dependencies = [
  "dirs 6.0.0",
  "futures",
  "gbm",
+ "getrandom 0.3.4",
  "gstreamer",
  "i18n-embed",
  "i18n-embed-fl",
