@@ -957,7 +957,14 @@ pub fn update_args(
                     let name = name.clone();
                     cosmic::surface::surface_task::<crate::app::Msg>(
                 cosmic::surface::action::simple_layer_shell::<crate::app::Msg>(
-                    Default::default,
+                    || cosmic::surface::action::LiveSettings {
+                        // Screenshot overlays cover the entire output, so surface-level rounded
+                        // corners are unnecessary. Explicit zero radii also remain valid before
+                        // the layer receives its configured size; a nonzero radius that exceeds
+                        // half the temporary dimensions is a fatal corner-radius protocol error.
+                        corners: Some(Default::default()),
+                        ..Default::default()
+                    },
                         move || {
                             SctkLayerSurfaceSettings {
                                     id,
