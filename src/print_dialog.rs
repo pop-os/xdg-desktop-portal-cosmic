@@ -13,7 +13,8 @@ use cosmic::{Element, Task, font, theme};
 use cpdb_rs::client::CpdbClient;
 use cpdb_rs::media::MediaCollection;
 use cpdb_rs::options::{OptionInfo, OptionsCollection};
-use cpdb_rs::{DiscoveryEvent, PrinterSnapshot};
+use cpdb_rs::types::PrinterState;
+use cpdb_rs::{DiscoveryEvent, MediaInfo, PrinterSnapshot};
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
@@ -28,6 +29,7 @@ use zbus::zvariant;
 
 use crate::PortalResponse;
 use crate::app::CosmicPortal;
+use crate::fl;
 use crate::print::PrintResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,39 +59,42 @@ pub enum PageSetSelection {
 }
 
 impl PageSetSelection {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Current => "current",
+            Self::Odd => "odd",
+            Self::Even => "even",
+            Self::Custom(_) => "custom",
+        }
+    }
+
+    pub fn from_id(id: &str, custom_input: &str) -> Self {
+        match id {
+            "current" => Self::Current,
+            "odd" => Self::Odd,
+            "even" => Self::Even,
+            "custom" => Self::Custom(custom_input.to_string()),
+            _ => Self::All,
+        }
+    }
+
     pub fn label(&self) -> String {
         match self {
-            PageSetSelection::All => "All".to_string(),
-            PageSetSelection::Current => "Current".to_string(),
-            PageSetSelection::Odd => "Odd".to_string(),
-            PageSetSelection::Even => "Even".to_string(),
-            PageSetSelection::Custom(_) => "Custom".to_string(),
+            Self::All => fl!("page-set-all"),
+            Self::Current => fl!("page-set-current"),
+            Self::Odd => fl!("page-set-odd"),
+            Self::Even => fl!("page-set-even"),
+            Self::Custom(_) => fl!("page-set-custom"),
         }
     }
 
-    pub fn from_label(label: &str, custom_input: &str) -> Self {
-        match label {
-            "Current" | "Current page" => PageSetSelection::Current,
-            "Odd" | "Odd pages only" => PageSetSelection::Odd,
-            "Even" | "Even pages only" => PageSetSelection::Even,
-            "Custom" | "Custom range" => PageSetSelection::Custom(custom_input.to_string()),
-            _ => PageSetSelection::All,
-        }
-    }
-
-    pub fn to_string_label(&self) -> String {
+    pub fn summary(&self) -> String {
         match self {
-            PageSetSelection::All => "All pages".to_string(),
-            PageSetSelection::Current => "Current page".to_string(),
-            PageSetSelection::Odd => "Odd pages only".to_string(),
-            PageSetSelection::Even => "Even pages only".to_string(),
-            PageSetSelection::Custom(val) => {
-                if val.trim().is_empty() {
-                    "Custom range".to_string()
-                } else {
-                    format!("Custom, {}", val)
-                }
+            Self::Custom(val) if !val.trim().is_empty() => {
+                fl!("page-set-custom-value", range = val.as_str())
             }
+            other => other.label(),
         }
     }
 }
@@ -145,6 +150,7 @@ pub struct PrintDialog {
     pub selected_printer_index: Option<usize>,
     pub printer_options: Option<OptionsCollection>,
     pub printer_media: Option<MediaCollection>,
+    pub translations: HashMap<String, String>,
 
     pub active_view: ActiveView,
     pub page_selection: PageSetSelection,
@@ -203,24 +209,24 @@ pub enum ColorMode {
 }
 
 impl ColorMode {
-    pub fn label(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
-            Self::Color => "Color",
-            Self::Monochrome => "Monochrome",
+            Self::Color => "color",
+            Self::Monochrome => "monochrome",
         }
     }
 
-    pub fn from_label(s: &str) -> Self {
+    pub fn from_id(s: &str) -> Self {
         match s {
-            "Monochrome" | "monochrome" | "greyscale" => Self::Monochrome,
+            "monochrome" => Self::Monochrome,
             _ => Self::Color,
         }
     }
 
-    pub fn as_cpdb_str(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            Self::Color => "color",
-            Self::Monochrome => "monochrome",
+            Self::Color => fl!("color-mode-color"),
+            Self::Monochrome => fl!("color-mode-monochrome"),
         }
     }
 }
@@ -232,17 +238,24 @@ pub enum Orientation {
 }
 
 impl Orientation {
-    pub fn label(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
-            Self::Portrait => "Portrait",
-            Self::Landscape => "Landscape",
+            Self::Portrait => "portrait",
+            Self::Landscape => "landscape",
         }
     }
 
-    pub fn from_label(s: &str) -> Self {
+    pub fn from_id(s: &str) -> Self {
         match s {
-            "Landscape" | "landscape" => Self::Landscape,
+            "landscape" => Self::Landscape,
             _ => Self::Portrait,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Portrait => fl!("orientation-portrait"),
+            Self::Landscape => fl!("orientation-landscape"),
         }
     }
 }
@@ -256,30 +269,31 @@ pub enum LayoutDirection {
 }
 
 impl LayoutDirection {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::LeftToRightTopToBottom => "lrtb",
+            Self::RightToLeftTopToBottom => "rltb",
+            Self::TopToBottomLeftToRight => "tblr",
+            Self::TopToBottomRightToLeft => "tbrl",
+        }
+    }
+
+    pub fn from_id(s: &str) -> Self {
+        match s {
+            "rltb" => Self::RightToLeftTopToBottom,
+            "tblr" => Self::TopToBottomLeftToRight,
+            "tbrl" => Self::TopToBottomRightToLeft,
+            _ => Self::LeftToRightTopToBottom,
+        }
+    }
+
+    // TODO: need to replace these with icons
     pub fn label(&self) -> &'static str {
         match self {
             Self::LeftToRightTopToBottom => "LRTB",
             Self::RightToLeftTopToBottom => "RLTB",
             Self::TopToBottomLeftToRight => "TBLR",
             Self::TopToBottomRightToLeft => "TBRL",
-        }
-    }
-
-    pub fn from_label(s: &str) -> Self {
-        match s {
-            "RLTB" | "rltb" => Self::RightToLeftTopToBottom,
-            "TBLR" | "tblr" => Self::TopToBottomLeftToRight,
-            "TBRL" | "tbrl" => Self::TopToBottomRightToLeft,
-            _ => Self::LeftToRightTopToBottom,
-        }
-    }
-
-    pub fn as_cpdb_str(&self) -> &'static str {
-        match self {
-            Self::LeftToRightTopToBottom => "lrtb",
-            Self::RightToLeftTopToBottom => "rltb",
-            Self::TopToBottomLeftToRight => "tblr",
-            Self::TopToBottomRightToLeft => "tbrl",
         }
     }
 }
@@ -293,21 +307,30 @@ pub enum Margins {
 }
 
 impl Margins {
-    pub fn label(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
-            Self::Default => "Default",
-            Self::None => "None",
-            Self::Minimum => "Minimum",
-            Self::Custom => "Custom",
+            Self::Default => "default",
+            Self::None => "none",
+            Self::Minimum => "minimum",
+            Self::Custom => "custom",
         }
     }
 
-    pub fn from_label(s: &str) -> Self {
+    pub fn from_id(s: &str) -> Self {
         match s {
-            "None" | "none" => Self::None,
-            "Minimum" | "minimum" => Self::Minimum,
-            "Custom" | "custom" => Self::Custom,
+            "none" => Self::None,
+            "minimum" => Self::Minimum,
+            "custom" => Self::Custom,
             _ => Self::Default,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Default => fl!("margins-default"),
+            Self::None => fl!("margins-none"),
+            Self::Minimum => fl!("margins-minimum"),
+            Self::Custom => fl!("margins-custom"),
         }
     }
 
@@ -322,19 +345,19 @@ pub enum Border {
 }
 
 impl Border {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::None => "None",
-            Self::Single => "Single",
-            Self::Double => "Double",
-        }
-    }
-
-    pub fn as_cpdb_str(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Single => "single",
             Self::Double => "double",
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::None => fl!("border-none"),
+            Self::Single => fl!("border-single"),
+            Self::Double => fl!("border-double"),
         }
     }
 
@@ -351,33 +374,33 @@ pub enum ScalingMode {
 }
 
 impl ScalingMode {
-    pub fn label(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
-            Self::Auto => "Auto",
-            Self::AutoFit => "AutoFit",
-            Self::Fit => "Fit",
-            Self::Fill => "Fill",
-            Self::Custom => "Custom",
+            Self::Auto => "auto",
+            Self::AutoFit => "auto-fit",
+            Self::Fit => "fit",
+            Self::Fill => "fill",
+            Self::Custom => "custom",
         }
     }
 
-    pub fn display_label(&self) -> &'static str {
-        match self {
-            Self::Auto => "Auto",
-            Self::AutoFit => "Auto fit",
-            Self::Fit => "Fit to page",
-            Self::Fill => "Fill page",
-            Self::Custom => "Custom",
-        }
-    }
-
-    pub fn from_label(s: &str) -> Self {
+    pub fn from_id(s: &str) -> Self {
         match s {
-            "Fit" | "fit" => Self::Fit,
-            "AutoFit" | "autofit" => Self::AutoFit,
-            "Fill" | "fill" => Self::Fill,
-            "Custom" | "custom" => Self::Custom,
+            "fit" => Self::Fit,
+            "auto-fit" => Self::AutoFit,
+            "fill" => Self::Fill,
+            "custom" => Self::Custom,
             _ => Self::Auto,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Auto => fl!("scaling-auto"),
+            Self::AutoFit => fl!("scaling-auto-fit"),
+            Self::Fit => fl!("scaling-fit"),
+            Self::Fill => fl!("scaling-fill"),
+            Self::Custom => fl!("scaling-custom"),
         }
     }
 
@@ -411,11 +434,11 @@ pub fn is_pdf_printer_by_id(printer_id: &str, backend: &str) -> bool {
 pub fn save_as_pdf_printer() -> PrinterSnapshot {
     PrinterSnapshot {
         id: "save-as-pdf".to_string(),
-        name: "Save as PDF".to_string(),
-        info: "Save output to PDF file".to_string(),
+        name: fl!("save-as-pdf"),
+        info: fl!("save-output-to-pdf"),
         location: String::new(),
         make_model: "PDF Converter".to_string(),
-        state: cpdb_rs::types::PrinterState::Idle,
+        state: PrinterState::Idle,
         accepting_jobs: true,
         backend: "file".to_string(),
     }
@@ -424,31 +447,31 @@ pub fn save_as_pdf_printer() -> PrinterSnapshot {
 pub fn default_pdf_media() -> MediaCollection {
     MediaCollection {
         media: vec![
-            cpdb_rs::media::MediaInfo {
+            MediaInfo {
                 name: "iso_a4_210x297mm".to_string(),
                 width: 21000,
                 length: 29700,
                 margins: vec![],
             },
-            cpdb_rs::media::MediaInfo {
+            MediaInfo {
                 name: "na_letter_8.5x11in".to_string(),
                 width: 21590,
                 length: 27940,
                 margins: vec![],
             },
-            cpdb_rs::media::MediaInfo {
+            MediaInfo {
                 name: "na_legal_8.5x14in".to_string(),
                 width: 21590,
                 length: 35560,
                 margins: vec![],
             },
-            cpdb_rs::media::MediaInfo {
+            MediaInfo {
                 name: "iso_a3_297x420mm".to_string(),
                 width: 29700,
                 length: 42000,
                 margins: vec![],
             },
-            cpdb_rs::media::MediaInfo {
+            MediaInfo {
                 name: "iso_a5_148x210mm".to_string(),
                 width: 14800,
                 length: 21000,
@@ -467,6 +490,7 @@ impl Default for PrintDialog {
             selected_printer_index: Some(0),
             printer_options: None,
             printer_media: Some(default_pdf_media()),
+            translations: HashMap::new(),
             active_view: ActiveView::Main,
             page_selection: PageSetSelection::All,
             custom_range_input: String::new(),
@@ -521,7 +545,7 @@ pub enum Msg {
     PrintersLoaded(Vec<PrinterSnapshot>),
     DiscoveryEvent(DiscoveryEvent),
     PrinterSelected(usize),
-    PrinterDetailsLoaded(OptionsCollection, MediaCollection),
+    PrinterDetailsLoaded(OptionsCollection, MediaCollection, HashMap<String, String>),
 
     // PageSelection view navigation
     NavigateTo(ActiveView),
@@ -634,18 +658,18 @@ impl PrintDialog {
             return;
         };
         self.selected_preset_index = Some(index);
-        self.color_mode = ColorMode::from_label(&preset.color_mode);
-        self.orientation = Orientation::from_label(&preset.orientation);
+        self.color_mode = ColorMode::from_id(&preset.color_mode);
+        self.orientation = Orientation::from_id(&preset.orientation);
         self.duplex_index = preset.duplex_index;
         self.copies = preset.copies.max(1);
         self.collate = preset.collate;
         self.pages_per_sheet_index = preset.pages_per_sheet_index;
-        self.layout_direction = LayoutDirection::from_label(&preset.layout_direction);
-        self.margins = Margins::from_label(&preset.margins);
-        self.scaling = ScalingMode::from_label(&preset.scaling);
+        self.layout_direction = LayoutDirection::from_id(&preset.layout_direction);
+        self.margins = Margins::from_id(&preset.margins);
+        self.scaling = ScalingMode::from_id(&preset.scaling);
         self.custom_scaling_input = preset.custom_scaling_input;
         self.page_selection =
-            PageSetSelection::from_label(&preset.page_selection, &preset.custom_range_input);
+            PageSetSelection::from_id(&preset.page_selection, &preset.custom_range_input);
         self.custom_range_input = preset.custom_range_input.clone();
         if let PageSetSelection::Custom(_) = &self.page_selection {
             self.custom_range_valid = validate_page_range(&self.custom_range_input);
@@ -667,17 +691,17 @@ impl PrintDialog {
             id,
             name,
             is_builtin: false,
-            color_mode: self.color_mode.label().to_string(),
-            orientation: self.orientation.label().to_string(),
+            color_mode: self.color_mode.id().to_string(),
+            orientation: self.orientation.id().to_string(),
             duplex_index: self.duplex_index,
             copies: self.copies,
             collate: self.collate,
             pages_per_sheet_index: self.pages_per_sheet_index,
-            layout_direction: self.layout_direction.label().to_string(),
-            margins: self.margins.label().to_string(),
-            scaling: self.scaling.label().to_string(),
+            layout_direction: self.layout_direction.id().to_string(),
+            margins: self.margins.id().to_string(),
+            scaling: self.scaling.id().to_string(),
             custom_scaling_input: self.custom_scaling_input,
-            page_selection: self.page_selection.label(),
+            page_selection: self.page_selection.id().to_string(),
             custom_range_input: self.custom_range_input.clone(),
         }
     }
@@ -702,10 +726,28 @@ impl PrintDialog {
     }
 }
 
+fn preset_display_name(preset: &cosmic_portal_config::print::PrintPreset) -> String {
+    if preset.is_builtin {
+        match preset.id.as_str() {
+            "builtin-color" => fl!("preset-builtin-color"),
+            "builtin-bw" => fl!("preset-builtin-bw"),
+            _ => fl!("preset-builtin-default"),
+        }
+    } else {
+        preset.name.clone()
+    }
+}
+
 fn fetch_printer_details(printer: &PrinterSnapshot) -> Task<Msg> {
     if is_pdf_printer(printer) {
         return Task::perform(
-            async move { Msg::PrinterDetailsLoaded(OptionsCollection::default(), default_pdf_media()) },
+            async move {
+                Msg::PrinterDetailsLoaded(
+                    OptionsCollection::default(),
+                    default_pdf_media(),
+                    HashMap::new(),
+                )
+            },
             |msg| msg,
         );
     }
@@ -720,19 +762,31 @@ fn fetch_printer_details(printer: &PrinterSnapshot) -> Task<Msg> {
                     return Msg::PrinterDetailsLoaded(
                         OptionsCollection::default(),
                         MediaCollection::default(),
+                        HashMap::new(),
                     );
                 }
             };
 
             // Call get_all_printers first so the CPDB backend populates the printer list
             let _ = client.get_all_printers().await;
+
+            let locale = crate::localize::posix_locale();
+            let translations = client
+                .get_translations(&printer_id, &backend, &locale)
+                .await
+                .unwrap_or_else(|err| {
+                    tracing::warn!("Failed to fetch CPDB translations for {locale}: {err}");
+                    HashMap::new()
+                });
+
             match client.get_printer_details(&printer_id, &backend).await {
-                Ok((opts, media)) => Msg::PrinterDetailsLoaded(opts, media),
+                Ok((opts, media)) => Msg::PrinterDetailsLoaded(opts, media, translations),
                 Err(e) => {
                     tracing::error!("Failed to fetch printer details: {:?}", e);
                     Msg::PrinterDetailsLoaded(
                         OptionsCollection::default(),
                         MediaCollection::default(),
+                        translations,
                     )
                 }
             }
@@ -812,8 +866,9 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                 return fetch_printer_details(&dialog.printers[index]);
             }
         }
-        Msg::PrinterDetailsLoaded(options, media) => {
+        Msg::PrinterDetailsLoaded(options, media, translations) => {
             let is_pdf = dialog.is_pdf_selected();
+            dialog.translations = translations;
 
             if is_pdf {
                 dialog.color_supported = true;
@@ -983,7 +1038,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
         Msg::OpenSavePresetDialog => {
             commit_preset_edit(dialog);
             let now_str = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M").to_string();
-            dialog.save_preset_name_input = format!("Preset {now_str}");
+            dialog.save_preset_name_input = fl!("preset-default-name", timestamp = now_str);
             dialog.active_view = ActiveView::SavePreset;
         }
         Msg::SavePresetNameInputChanged(val) => {
@@ -1009,9 +1064,9 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
                 dialog.editing_preset_row = Some(idx);
                 dialog.editing_preset_name_input = dialog.presets[idx].name.clone();
                 let input_id = cosmic::iced::widget::Id::new(format!("preset_edit_input_{idx}"));
-                return cosmic::Task::batch(vec![
-                    cosmic::widget::text_input::focus(input_id.clone()),
-                    cosmic::widget::text_input::select_all(input_id),
+                return Task::batch(vec![
+                    text_input::focus(input_id.clone()),
+                    text_input::select_all(input_id),
                 ]);
             }
         }
@@ -1041,7 +1096,7 @@ pub fn update(dialog: &mut PrintDialog, msg: Msg) -> Task<Msg> {
         Msg::AddNewPresetInEditor => {
             commit_preset_edit(dialog);
             let now_str = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M").to_string();
-            dialog.save_preset_name_input = format!("Preset {now_str}");
+            dialog.save_preset_name_input = fl!("preset-default-name", timestamp = now_str);
             dialog.active_view = ActiveView::SavePreset;
         }
         Msg::CommitEdit => {
@@ -1096,7 +1151,7 @@ fn custom_dropdown<'a, S: AsRef<str> + Clone + Send + Sync + 'static>(
 }
 
 fn option_row<'a>(
-    label: &'a str,
+    label: impl Into<Cow<'a, str>> + 'a,
     control: impl Into<cosmic::Element<'a, Msg>>,
 ) -> Element<'a, Msg> {
     row![text(label), space::horizontal(), control.into()]
@@ -1143,7 +1198,10 @@ fn disabled_placeholder<'a, Msg: 'static + Clone>(
     .into()
 }
 
-fn option_group<'a>(title: Option<&'a str>, items: Vec<Vec<Element<'a, Msg>>>) -> Element<'a, Msg> {
+fn option_group<'a>(
+    title: Option<Cow<'a, str>>,
+    items: Vec<Vec<Element<'a, Msg>>>,
+) -> Element<'a, Msg> {
     let mut col = column![].spacing(8);
     if let Some(t) = title {
         col = col.push(text(t).size(14).font(Font {
@@ -1307,14 +1365,14 @@ fn view_pages_selection<'a>(
 ) -> Element<'a, Msg> {
     let title_col = container(column![
         button::custom(
-            row![icon::from_name("go-previous-symbolic"), text("Print")]
+            row![icon::from_name("go-previous-symbolic"), text(fl!("print"))]
                 .spacing(4)
                 .align_y(Alignment::Center),
         )
         .class(Button::Text)
         .on_press(Msg::NavigateTo(ActiveView::Main)),
         space::vertical().height(8.0),
-        text("Pages").size(20).font(Font {
+        text(fl!("pages")).size(20).font(Font {
             weight: Weight::Bold,
             ..Default::default()
         }),
@@ -1340,7 +1398,7 @@ fn view_pages_selection<'a>(
 
     if is_custom {
         let overlay_row = row![
-            text_input("e.g. 1-5, 8, 11-13", &dialog.custom_range_input)
+            text_input(fl!("page-range-placeholder"), &dialog.custom_range_input)
                 .on_input(Msg::CustomRangeInputChanged)
                 .width(Length::Fixed(200.0)),
             button::icon(icon::from_name("edit-clear-symbolic"))
@@ -1374,7 +1432,7 @@ fn view_pages_selection<'a>(
     let show_error =
         is_custom && !dialog.custom_range_valid && !dialog.custom_range_input.trim().is_empty();
     if show_error {
-        let error_text = text("Invalid format: use numbers and ranges (e.g. 1-5, 8)")
+        let error_text = text(fl!("page-range-invalid"))
             .size(11)
             .class(Text::Custom(|theme| {
                 let theme = theme.cosmic();
@@ -1401,7 +1459,7 @@ fn view_pages_selection<'a>(
 }
 
 fn view_save_preset<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
-    let title_header = container(text("Save preset").size(20).font(Font {
+    let title_header = container(text(fl!("save-preset")).size(20).font(Font {
         weight: Weight::Bold,
         ..Default::default()
     }))
@@ -1412,7 +1470,7 @@ fn view_save_preset<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
         right: 16.0,
     });
 
-    let name_input = text_input("Preset name", &dialog.save_preset_name_input)
+    let name_input = text_input(fl!("preset-name"), &dialog.save_preset_name_input)
         .on_input(Msg::SavePresetNameInputChanged)
         .on_submit(|_| Msg::ConfirmSavePreset)
         .width(Length::Fill);
@@ -1421,11 +1479,11 @@ fn view_save_preset<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
 
     let can_save = !dialog.save_preset_name_input.trim().is_empty();
 
-    let cancel_button = button::standard("Cancel")
+    let cancel_button = button::standard(fl!("cancel"))
         .class(Button::Standard)
         .on_press(Msg::NavigateTo(ActiveView::Main));
 
-    let save_button = button::suggested("Save").on_press_maybe(if can_save {
+    let save_button = button::suggested(fl!("save")).on_press_maybe(if can_save {
         Some(Msg::ConfirmSavePreset)
     } else {
         None
@@ -1462,7 +1520,7 @@ fn view_save_preset<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
 fn view_edit_presets<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
     let is_editing_preset = dialog.editing_preset_row.is_some();
 
-    let title_header = container(text("Presets").size(20).font(Font {
+    let title_header = container(text(fl!("presets")).size(20).font(Font {
         weight: Weight::Bold,
         ..Default::default()
     }))
@@ -1484,7 +1542,7 @@ fn view_edit_presets<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
 
         let name_widget: Element<'_, Msg> = if is_editing {
             let input_id = cosmic::iced::widget::Id::new(format!("preset_edit_input_{idx}"));
-            text_input("Preset name", &dialog.editing_preset_name_input)
+            text_input(fl!("preset-name"), &dialog.editing_preset_name_input)
                 .id(input_id)
                 .on_input(Msg::PresetRowNameInputChanged)
                 .on_submit(move |_| Msg::SavePresetRowName(idx))
@@ -1532,7 +1590,7 @@ fn view_edit_presets<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
         rows.push(row_mouse_area.into());
     }
 
-    let add_preset_btn = button::standard("Add preset")
+    let add_preset_btn = button::standard(fl!("add-preset"))
         .class(Button::Standard)
         .on_press(Msg::AddNewPresetInEditor);
 
@@ -1549,7 +1607,7 @@ fn view_edit_presets<'a>(dialog: &'a PrintDialog) -> Element<'a, Msg> {
 
     let body = container(body_col).padding(16);
 
-    let close_button = button::standard("Close")
+    let close_button = button::standard(fl!("close"))
         .class(Button::Standard)
         .on_press(Msg::NavigateTo(ActiveView::Main));
 
@@ -1608,7 +1666,7 @@ fn view_main<'a>(
     orientation_model: &'a segmented_button::Model<SingleSelect>,
     layout_direction_model: &'a segmented_button::Model<SingleSelect>,
 ) -> Element<'a, Msg> {
-    let title_header = container(text("Print").size(20).font(Font {
+    let title_header = container(text(fl!("print")).size(20).font(Font {
         weight: Weight::Bold,
         ..Default::default()
     }))
@@ -1654,7 +1712,7 @@ fn view_options_panel<'a>(
     let dest_dropdown: Element<'_, Msg> = if printer_names.is_empty() {
         custom_dropdown(
             dialog.window_id,
-            vec!["No printers found".to_string()],
+            vec![fl!("no-printers-found")],
             Some(0),
             |_| Msg::PrinterSelected(0),
         )
@@ -1667,11 +1725,11 @@ fn view_options_panel<'a>(
         )
     };
 
-    let mut preset_names: Vec<String> = dialog.presets.iter().map(|p| p.name.clone()).collect();
+    let mut preset_names: Vec<String> = dialog.presets.iter().map(preset_display_name).collect();
     let save_action_index = preset_names.len();
-    preset_names.push("Save current settings as preset...".to_string());
+    preset_names.push(fl!("save-preset-action"));
     let edit_action_index = preset_names.len();
-    preset_names.push("Edit preset list...".to_string());
+    preset_names.push(fl!("edit-presets-action"));
 
     let preset_dropdown: Element<'_, Msg> = custom_dropdown(
         dialog.window_id,
@@ -1691,8 +1749,8 @@ fn view_options_panel<'a>(
     let top_group = option_group(
         None,
         vec![
-            vec![option_row("Destination", dest_dropdown)],
-            vec![option_row("Preset", preset_dropdown)],
+            vec![option_row(fl!("destination"), dest_dropdown)],
+            vec![option_row(fl!("preset"), preset_dropdown)],
         ],
     );
     groups = groups.push(top_group);
@@ -1711,10 +1769,10 @@ fn view_options_panel<'a>(
         .on_activate(Msg::OrientationModelActivated);
 
     let pages_row = option_row(
-        "Pages",
+        fl!("pages"),
         button::custom(
             row![
-                text(dialog.page_selection.to_string_label()),
+                text(dialog.page_selection.summary()),
                 icon::from_name("go-next-symbolic")
             ]
             .spacing(6)
@@ -1748,9 +1806,9 @@ fn view_options_panel<'a>(
 
     let paper_size_row = if let Some(media) = &dialog.printer_media {
         if media.is_empty() {
-            disabled_option_row("Paper size", "Not supported")
+            disabled_option_row(fl!("paper-size"), fl!("not-supported"))
         } else if media.len() == 1 {
-            disabled_option_row("Paper size", &media.media[0].name)
+            disabled_option_row(fl!("paper-size"), media.media[0].name.clone())
         } else {
             let paper_sizes: Vec<String> = media.iter().map(|m| m.name.clone()).collect();
             let paper_size_dropdown = custom_dropdown(
@@ -1759,43 +1817,30 @@ fn view_options_panel<'a>(
                 dialog.selected_paper_size_index,
                 Msg::PaperSizeSelected,
             );
-            option_row("Paper size", paper_size_dropdown)
+            option_row(fl!("paper-size"), paper_size_dropdown)
         }
     } else {
-        disabled_option_row("Paper size", "Not supported")
+        disabled_option_row(fl!("paper-size"), fl!("not-supported"))
     };
 
     let duplex_row: Option<Element<'_, Msg>> = if dialog.duplex_values.is_empty() {
-        Some(disabled_option_row("Print on sides", "Not supported"))
-    } else if dialog.duplex_values.len() == 1 {
-        fn duplex_label(raw: &str) -> &str {
-            match raw {
-                "one-sided" => "One side",
-                "two-sided-long-edge" => "Both sides (book - bind on long edges)",
-                "two-sided-short-edge" => "Both sides (notepad - bind on short edges)",
-                other => other,
-            }
-        }
         Some(disabled_option_row(
-            "Print on sides",
-            duplex_label(&dialog.duplex_values[0]),
+            fl!("print-on-sides"),
+            fl!("not-supported"),
+        ))
+    } else if dialog.duplex_values.len() == 1 {
+        Some(disabled_option_row(
+            fl!("print-on-sides"),
+            sides_label(dialog, &dialog.duplex_values[0]),
         ))
     } else {
-        fn sides_label(raw: &str) -> &str {
-            match raw {
-                "one-sided" => "One-sided",
-                "two-sided-long-edge" => "Two-sided (long edge)",
-                "two-sided-short-edge" => "Two-sided (short edge)",
-                other => other,
-            }
-        }
         let labels: Vec<String> = dialog
             .duplex_values
             .iter()
-            .map(|v| sides_label(v).to_string())
+            .map(|v| sides_label(dialog, v))
             .collect();
         Some(option_row(
-            "Print on sides",
+            fl!("print-on-sides"),
             custom_dropdown(
                 dialog.window_id,
                 labels,
@@ -1812,8 +1857,8 @@ fn view_options_panel<'a>(
         vec![pages_row],
     ];
     if !is_pdf {
-        primary_items.push(vec![option_row("Copies", copies_control)]);
-        primary_items.push(vec![option_row("Collate", collate_toggle)]);
+        primary_items.push(vec![option_row(fl!("copies"), copies_control)]);
+        primary_items.push(vec![option_row(fl!("collate"), collate_toggle)]);
     }
     primary_items.push(vec![paper_size_row]);
     if !is_pdf && let Some(row) = duplex_row {
@@ -1846,10 +1891,7 @@ fn view_options_panel<'a>(
 
     let margins_dropdown = custom_dropdown(
         dialog.window_id,
-        Margins::ALL
-            .iter()
-            .map(|m| m.label().to_string())
-            .collect::<Vec<_>>(),
+        Margins::ALL.iter().map(Margins::label).collect::<Vec<_>>(),
         Some(
             Margins::ALL
                 .iter()
@@ -1860,10 +1902,10 @@ fn view_options_panel<'a>(
     );
 
     let mut layout_items: Vec<Vec<Element<'a, Msg>>> =
-        vec![vec![option_row("Pages per sheet", pps_dropdown)]];
+        vec![vec![option_row(fl!("pages-per-sheet"), pps_dropdown)]];
     if !is_pdf {
         layout_items.push(vec![
-            row![text("Layout direction"), layout_dir_row]
+            row![text(fl!("layout-direction")), layout_dir_row]
                 .spacing(16)
                 .align_y(Alignment::Center)
                 .into(),
@@ -1871,7 +1913,7 @@ fn view_options_panel<'a>(
     }
 
     if dialog.margins == Margins::Custom {
-        let to_mm = |v: u32| format!("{:.1} mm", v as f32 / 100.0);
+        let to_mm = |v: u32| fl!("margin-value", mm = format!("{:.1}", v as f32 / 100.0));
 
         let vt_labels: Vec<String> = dialog
             .margin_options
@@ -1887,7 +1929,7 @@ fn view_options_panel<'a>(
             .collect();
 
         let top_bottom_row = option_row(
-            "Top & bottom margin",
+            fl!("margin-vertical"),
             custom_dropdown(
                 dialog.window_id,
                 vt_labels,
@@ -1896,7 +1938,7 @@ fn view_options_panel<'a>(
             ),
         );
         let left_right_row = option_row(
-            "Left & right margin",
+            fl!("margin-horizontal"),
             custom_dropdown(
                 dialog.window_id,
                 hz_labels,
@@ -1906,20 +1948,17 @@ fn view_options_panel<'a>(
         );
 
         layout_items.push(vec![
-            option_row("Margins", margins_dropdown),
+            option_row(fl!("margins"), margins_dropdown),
             top_bottom_row,
             left_right_row,
         ]);
     } else {
-        layout_items.push(vec![option_row("Margins", margins_dropdown)]);
+        layout_items.push(vec![option_row(fl!("margins"), margins_dropdown)]);
     }
 
     let border_dropdown = custom_dropdown(
         dialog.window_id,
-        Border::ALL
-            .iter()
-            .map(|b| b.label().to_string())
-            .collect::<Vec<_>>(),
+        Border::ALL.iter().map(Border::label).collect::<Vec<_>>(),
         Some(
             Border::ALL
                 .iter()
@@ -1928,13 +1967,13 @@ fn view_options_panel<'a>(
         ),
         |i| Msg::BorderSelected(Border::ALL[i]),
     );
-    layout_items.push(vec![option_row("Border", border_dropdown)]);
+    layout_items.push(vec![option_row(fl!("border"), border_dropdown)]);
 
     let scaling_dropdown = custom_dropdown(
         dialog.window_id,
         ScalingMode::ALL
             .iter()
-            .map(|s| s.display_label().to_string())
+            .map(ScalingMode::label)
             .collect::<Vec<_>>(),
         Some(
             ScalingMode::ALL
@@ -1965,64 +2004,46 @@ fn view_options_panel<'a>(
                 .into();
 
         layout_items.push(vec![
-            option_row("Scaling", scaling_dropdown),
+            option_row(fl!("scaling"), scaling_dropdown),
             custom_scaling_row,
         ]);
     } else {
-        layout_items.push(vec![option_row("Scaling", scaling_dropdown)]);
+        layout_items.push(vec![option_row(fl!("scaling"), scaling_dropdown)]);
     }
 
     if dialog.show_print_header_footer_toggle {
         layout_items.push(vec![option_row(
-            "Print header and footer",
+            fl!("print-header-footer"),
             toggler(dialog.print_header_footer).on_toggle(|_| Msg::TogglePrintHeaderFooter),
         )]);
     }
 
     if dialog.show_print_background_toggle {
         layout_items.push(vec![option_row(
-            "Print background",
+            fl!("print-background"),
             toggler(dialog.print_background).on_toggle(|_| Msg::TogglePrintBackground),
         )]);
     }
 
-    let layout_group = option_group(Some("Layout"), layout_items);
+    let layout_group = option_group(Some(fl!("layout").into()), layout_items);
     groups = groups.push(layout_group);
 
     // Group 4: Paper handling
     let tray_row: Option<Element<'_, Msg>> = if dialog.media_source_values.is_empty() {
-        Some(disabled_option_row("Paper tray", "Not supported"))
+        Some(disabled_option_row(fl!("paper-tray"), fl!("not-supported")))
     } else if dialog.media_source_values.len() == 1 {
-        fn tray_label(raw: &str) -> &str {
-            match raw {
-                "auto" => "Auto Select",
-                "main" => "Main Tray",
-                "manual" => "Manual Feed",
-                "by-pass-tray" => "Bypass Tray",
-                other => other,
-            }
-        }
         Some(disabled_option_row(
-            "Paper tray",
-            tray_label(&dialog.media_source_values[0]),
+            fl!("paper-tray"),
+            tray_label(dialog, &dialog.media_source_values[0]),
         ))
     } else {
-        fn tray_label(raw: &str) -> &str {
-            match raw {
-                "auto" => "Auto Select",
-                "main" => "Main Tray",
-                "manual" => "Manual Feed",
-                "by-pass-tray" => "Bypass Tray",
-                other => other,
-            }
-        }
         let labels: Vec<String> = dialog
             .media_source_values
             .iter()
-            .map(|v| tray_label(v).to_string())
+            .map(|v| tray_label(dialog, v))
             .collect();
         Some(option_row(
-            "Paper tray",
+            fl!("paper-tray"),
             custom_dropdown(
                 dialog.window_id,
                 labels,
@@ -2033,16 +2054,20 @@ fn view_options_panel<'a>(
     };
 
     let type_row: Option<Element<'_, Msg>> = if dialog.media_type_values.is_empty() {
-        Some(disabled_option_row("Paper type", "Not supported"))
+        Some(disabled_option_row(fl!("paper-type"), fl!("not-supported")))
     } else if dialog.media_type_values.len() == 1 {
         Some(disabled_option_row(
-            "Paper type",
-            &dialog.media_type_values[0],
+            fl!("paper-type"),
+            media_type_label(dialog, &dialog.media_type_values[0]),
         ))
     } else {
-        let labels: Vec<String> = dialog.media_type_values.clone();
+        let labels: Vec<String> = dialog
+            .media_type_values
+            .iter()
+            .map(|v| media_type_label(dialog, v))
+            .collect();
         Some(option_row(
-            "Paper type",
+            fl!("paper-type"),
             custom_dropdown(
                 dialog.window_id,
                 labels,
@@ -2053,20 +2078,23 @@ fn view_options_panel<'a>(
     };
 
     let quality_row: Option<Element<'_, Msg>> = if dialog.print_quality_values.is_empty() {
-        Some(disabled_option_row("Print quality", "Not supported"))
+        Some(disabled_option_row(
+            fl!("print-quality"),
+            fl!("not-supported"),
+        ))
     } else if dialog.print_quality_values.len() == 1 {
         Some(disabled_option_row(
-            "Print quality",
-            quality_label(&dialog.print_quality_values[0]),
+            fl!("print-quality"),
+            quality_label(dialog, &dialog.print_quality_values[0]),
         ))
     } else {
         let labels: Vec<String> = dialog
             .print_quality_values
             .iter()
-            .map(|v| quality_label(v).to_string())
+            .map(|v| quality_label(dialog, v))
             .collect();
         Some(option_row(
-            "Print quality",
+            fl!("print-quality"),
             custom_dropdown(
                 dialog.window_id,
                 labels,
@@ -2078,7 +2106,7 @@ fn view_options_panel<'a>(
 
     if !is_pdf {
         let mut paper_items = vec![vec![option_row(
-            "Print pages in reverse order",
+            fl!("reverse-order"),
             toggler(dialog.reverse_order).on_toggle(|_| Msg::ToggleReverseOrder),
         )]];
         if let Some(row) = tray_row {
@@ -2091,31 +2119,43 @@ fn view_options_panel<'a>(
             paper_items.push(vec![row]);
         }
 
-        let paper_group = option_group(Some("Paper handling & quality"), paper_items);
+        let paper_group = option_group(Some(fl!("paper-handling").into()), paper_items);
         groups = groups.push(paper_group);
     }
 
     groups.into()
 }
 
+fn printer_state_label(state: &PrinterState) -> String {
+    match state {
+        PrinterState::Idle => fl!("printer-state-idle"),
+        PrinterState::Processing => fl!("printer-state-processing"),
+        PrinterState::Stopped => fl!("printer-state-stopped"),
+        PrinterState::Unknown(raw) => raw.clone(),
+    }
+}
+
 fn view_status_row(dialog: &PrintDialog) -> Element<'_, Msg> {
     let status_text = if let Some(idx) = dialog.selected_printer_index {
         if let Some(printer) = dialog.printers.get(idx) {
             if is_pdf_printer(printer) {
-                "Save output to PDF file".to_string()
+                fl!("save-output-to-pdf")
             } else {
-                let state_str = format!("{}", printer.state);
-                format!("{} - {}", printer.name, state_str)
+                fl!(
+                    "printer-status",
+                    name = printer.name.as_str(),
+                    state = printer_state_label(&printer.state)
+                )
             }
         } else {
-            "No printer selected".to_string()
+            fl!("no-printer-selected")
         }
     } else {
-        "No printers found".to_string()
+        fl!("no-printers-found")
     };
 
-    let cancel_btn = button::standard("Cancel").on_press(Msg::Cancel);
-    let confirm_label = dialog.accept_label.as_deref().unwrap_or("Print");
+    let cancel_btn = button::standard(fl!("cancel")).on_press(Msg::Cancel);
+    let confirm_label = dialog.accept_label.clone().unwrap_or_else(|| fl!("print"));
     let print_btn = button::suggested(confirm_label).on_press(Msg::Confirm);
 
     let content = row![
@@ -2201,12 +2241,68 @@ fn load_option_values(options: &OptionsCollection, key: &str) -> (Vec<String>, O
     }
 }
 
-fn quality_label(raw: &str) -> &str {
+/// Backend supplied (from printer) label for a CPDB option choice, falling back to the raw keyword
+fn backend_label(dialog: &PrintDialog, option: &str, value: &str) -> String {
+    dialog
+        .translations
+        .get(&format!("OPT#{option}#{value}"))
+        .cloned()
+        .unwrap_or_else(|| value.to_owned())
+}
+
+/// Label for a `sides` (duplex) value
+fn sides_label(dialog: &PrintDialog, raw: &str) -> String {
     match raw {
-        "3" => "Draft",
-        "4" => "Normal",
-        "5" => "High",
-        other => other,
+        "one-sided" => fl!("sides-one-sided"),
+        "two-sided-long-edge" => fl!("sides-two-sided-long-edge"),
+        "two-sided-short-edge" => fl!("sides-two-sided-short-edge"),
+        other => backend_label(dialog, "sides", other),
+    }
+}
+
+/// Label for a `media-source` (paper tray) value
+fn tray_label(dialog: &PrintDialog, raw: &str) -> String {
+    match raw {
+        "auto" => fl!("media-source-auto"),
+        "main" => fl!("media-source-main"),
+        "manual" => fl!("media-source-manual"),
+        "by-pass-tray" => fl!("media-source-by-pass-tray"),
+        "top" => fl!("media-source-top"),
+        "middle" => fl!("media-source-middle"),
+        "bottom" => fl!("media-source-bottom"),
+        "envelope" => fl!("media-source-envelope"),
+        "large-capacity" => fl!("media-source-large-capacity"),
+        other => backend_label(dialog, "media-source", other),
+    }
+}
+
+/// Label for a `media-type` (paper type) value
+fn media_type_label(dialog: &PrintDialog, raw: &str) -> String {
+    match raw {
+        "auto" => fl!("media-type-auto"),
+        "stationery" => fl!("media-type-stationery"),
+        "stationery-letterhead" => fl!("media-type-stationery-letterhead"),
+        "stationery-lightweight" => fl!("media-type-stationery-lightweight"),
+        "stationery-heavyweight" => fl!("media-type-stationery-heavyweight"),
+        "cardstock" => fl!("media-type-cardstock"),
+        "labels" => fl!("media-type-labels"),
+        "envelope" => fl!("media-type-envelope"),
+        "transparency" => fl!("media-type-transparency"),
+        "recycled" => fl!("media-type-recycled"),
+        "photographic" => fl!("media-type-photographic"),
+        "photographic-glossy" => fl!("media-type-photographic-glossy"),
+        "photographic-matte" => fl!("media-type-photographic-matte"),
+        other => backend_label(dialog, "media-type", other),
+    }
+}
+
+/// Label for a `print-quality` value
+fn quality_label(dialog: &PrintDialog, raw: &str) -> String {
+    match raw {
+        "3" => fl!("print-quality-draft"),
+        "4" => fl!("print-quality-normal"),
+        "5" => fl!("print-quality-high"),
+        other => backend_label(dialog, "print-quality", other),
     }
 }
 
@@ -2539,7 +2635,7 @@ pub fn build_xdg_response(
     // number-up-layout
     settings.insert(
         "number-up-layout".into(),
-        to_owned_value(dialog.layout_direction.as_cpdb_str().to_string()),
+        to_owned_value(dialog.layout_direction.id().to_string()),
     );
 
     // print-pages / page-ranges / page-set
@@ -2686,13 +2782,16 @@ pub fn sanitize_pdf_filename(title: &str) -> String {
 
 pub(crate) async fn save_pdf_to_file(title: &str, fd: &OwnedFd) -> SavePdfResult {
     let default_filename = sanitize_pdf_filename(title);
-    let pdf_filter = file_chooser::FileFilter::new("PDF Document")
+    let pdf_document_label = fl!("pdf-document");
+    let save_title = fl!("save-pdf-document");
+    let save_label = fl!("save");
+    let pdf_filter = file_chooser::FileFilter::new(pdf_document_label.as_str())
         .mimetype("application/pdf")
         .glob("*.pdf");
 
     let save_request = file_chooser::SaveFileRequest::default()
-        .title("Save PDF Document")
-        .accept_label(Some("Save"))
+        .title(save_title.as_str())
+        .accept_label(Some(save_label.as_str()))
         .modal(true)
         .current_name(Some(default_filename.as_str()))
         .filter(pdf_filter);
@@ -2778,7 +2877,7 @@ pub(crate) async fn do_print_execution(
         };
     }
 
-    let client = match cpdb_rs::CpdbClient::new().await {
+    let client = match CpdbClient::new().await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to create CPDB client for printing: {e:?}");
@@ -2849,10 +2948,7 @@ pub fn build_cpdb_settings(dialog: &PrintDialog) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
 
     // print-color-mode
-    out.push((
-        "print-color-mode".into(),
-        dialog.color_mode.as_cpdb_str().into(),
-    ));
+    out.push(("print-color-mode".into(), dialog.color_mode.id().into()));
 
     // sides
     if let Some(idx) = dialog.duplex_index
@@ -2904,11 +3000,11 @@ pub fn build_cpdb_settings(dialog: &PrintDialog) -> Vec<(String, String)> {
     // number-up-layout
     out.push((
         "number-up-layout".into(),
-        dialog.layout_direction.as_cpdb_str().into(),
+        dialog.layout_direction.id().into(),
     ));
 
     // page-border
-    out.push(("page-border".into(), dialog.border.as_cpdb_str().into()));
+    out.push(("page-border".into(), dialog.border.id().into()));
 
     // media
     if let Some(idx) = dialog.selected_paper_size_index
@@ -2988,8 +3084,11 @@ pub fn sync_print_models(portal: &mut CosmicPortal) {
         let dialog = &args.dialog;
 
         let mut color_model = segmented_button::Model::builder()
-            .insert(|b| b.text("Color").data(ColorMode::Color))
-            .insert(|b| b.text("Greyscale").data(ColorMode::Monochrome))
+            .insert(|b| b.text(ColorMode::Color.label()).data(ColorMode::Color))
+            .insert(|b| {
+                b.text(ColorMode::Monochrome.label())
+                    .data(ColorMode::Monochrome)
+            })
             .build();
         let color_active = color_model
             .iter()
@@ -3006,8 +3105,14 @@ pub fn sync_print_models(portal: &mut CosmicPortal) {
         portal.print_color_model = color_model;
 
         let mut orientation_model = segmented_button::Model::builder()
-            .insert(|b| b.text("Portrait").data(Orientation::Portrait))
-            .insert(|b| b.text("Landscape").data(Orientation::Landscape))
+            .insert(|b| {
+                b.text(Orientation::Portrait.label())
+                    .data(Orientation::Portrait)
+            })
+            .insert(|b| {
+                b.text(Orientation::Landscape.label())
+                    .data(Orientation::Landscape)
+            })
             .build();
         let orientation_active = orientation_model
             .iter()
@@ -3018,10 +3123,22 @@ pub fn sync_print_models(portal: &mut CosmicPortal) {
         portal.print_orientation_model = orientation_model;
 
         let mut layout_direction_model = segmented_button::Model::builder()
-            .insert(|b| b.text("LRTB").data(LayoutDirection::LeftToRightTopToBottom))
-            .insert(|b| b.text("RLTB").data(LayoutDirection::RightToLeftTopToBottom))
-            .insert(|b| b.text("TBLR").data(LayoutDirection::TopToBottomLeftToRight))
-            .insert(|b| b.text("TBRL").data(LayoutDirection::TopToBottomRightToLeft))
+            .insert(|b| {
+                b.text(LayoutDirection::LeftToRightTopToBottom.label())
+                    .data(LayoutDirection::LeftToRightTopToBottom)
+            })
+            .insert(|b| {
+                b.text(LayoutDirection::RightToLeftTopToBottom.label())
+                    .data(LayoutDirection::RightToLeftTopToBottom)
+            })
+            .insert(|b| {
+                b.text(LayoutDirection::TopToBottomLeftToRight.label())
+                    .data(LayoutDirection::TopToBottomLeftToRight)
+            })
+            .insert(|b| {
+                b.text(LayoutDirection::TopToBottomRightToLeft.label())
+                    .data(LayoutDirection::TopToBottomRightToLeft)
+            })
             .build();
         let layout_active = layout_direction_model.iter().find(|&id| {
             layout_direction_model.data::<LayoutDirection>(id) == Some(&dialog.layout_direction)
@@ -3032,12 +3149,24 @@ pub fn sync_print_models(portal: &mut CosmicPortal) {
         portal.print_layout_direction_model = layout_direction_model;
 
         let mut page_selection_model = segmented_button::Model::builder()
-            .insert(|b| b.text("All Pages").data(PageSetSelection::All))
-            .insert(|b| b.text("Current Page").data(PageSetSelection::Current))
-            .insert(|b| b.text("Odd Pages Only").data(PageSetSelection::Odd))
-            .insert(|b| b.text("Even Pages Only").data(PageSetSelection::Even))
             .insert(|b| {
-                b.text("Custom Range")
+                b.text(PageSetSelection::All.label())
+                    .data(PageSetSelection::All)
+            })
+            .insert(|b| {
+                b.text(PageSetSelection::Current.label())
+                    .data(PageSetSelection::Current)
+            })
+            .insert(|b| {
+                b.text(PageSetSelection::Odd.label())
+                    .data(PageSetSelection::Odd)
+            })
+            .insert(|b| {
+                b.text(PageSetSelection::Even.label())
+                    .data(PageSetSelection::Even)
+            })
+            .insert(|b| {
+                b.text(PageSetSelection::Custom(String::new()).label())
                     .data(PageSetSelection::Custom(dialog.custom_range_input.clone()))
             })
             .build();

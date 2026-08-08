@@ -29,14 +29,14 @@ impl PrintPreset {
             name: name.to_string(),
             is_builtin: true,
             color_mode: color_mode.to_string(),
-            orientation: "Portrait".to_string(),
+            orientation: "portrait".to_string(),
             duplex_index: Some(0),
             copies: 1,
             collate: false,
             pages_per_sheet_index: Some(0),
-            layout_direction: "LRTB".to_string(),
-            margins: "Default".to_string(),
-            scaling: "Auto".to_string(),
+            layout_direction: "lrtb".to_string(),
+            margins: "default".to_string(),
+            scaling: "auto".to_string(),
             custom_scaling_input: 100,
             page_selection: default_page_selection(),
             custom_range_input: String::new(),
@@ -44,15 +44,15 @@ impl PrintPreset {
     }
 
     pub fn default_preset() -> Self {
-        Self::builtin("builtin-default", "Default", "Color")
+        Self::builtin("builtin-default", "Default", "color")
     }
 
     pub fn color_preset() -> Self {
-        Self::builtin("builtin-color", "Color", "Color")
+        Self::builtin("builtin-color", "Color", "color")
     }
 
     pub fn bw_preset() -> Self {
-        Self::builtin("builtin-bw", "Black and White", "Monochrome")
+        Self::builtin("builtin-bw", "Black and White", "monochrome")
     }
 
     pub const BUILTIN_PRESETS: [fn() -> Self; 3] =
@@ -75,5 +75,5 @@ impl Print {
 }
 
 fn default_page_selection() -> String {
-    "All".to_string()
+    "all".to_string()
 }
