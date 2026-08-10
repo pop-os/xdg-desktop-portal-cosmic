@@ -58,6 +58,7 @@ pub struct ScreenshotSelection<'a, Msg> {
 // Keep window previews clear of the controls, which are positioned 32 logical pixels above the
 // bottom edge. This includes the controls' height and some breathing room above them.
 const WINDOW_PICKER_BOTTOM_INSET: f32 = 128.0;
+const WINDOW_PREVIEW_HOVER_SCALE: f32 = 1.08;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WindowGridLayout {
@@ -231,6 +232,32 @@ fn window_preview_bounds(
     bounds
 }
 
+fn hovered_window_preview(
+    dimensions: &[(u32, u32)],
+    order: &[usize],
+    available: Size,
+    grid: WindowGridLayout,
+    pointer: Point,
+) -> Option<usize> {
+    let bounds = window_preview_bounds(dimensions, order, available, grid);
+    let slot = bounds
+        .iter()
+        .position(|bounds| bounds.contains(pointer))
+        .or_else(|| {
+            bounds
+                .iter()
+                .enumerate()
+                .filter(|(_, bounds)| bounds.zoom(WINDOW_PREVIEW_HOVER_SCALE).contains(pointer))
+                .min_by(|(_, a), (_, b)| {
+                    squared_distance_to_center(pointer, **a)
+                        .total_cmp(&squared_distance_to_center(pointer, **b))
+                })
+                .map(|(slot, _)| slot)
+        })?;
+
+    order.get(slot).copied()
+}
+
 fn squared_distance_to_rectangle(point: Point, bounds: Rectangle) -> f32 {
     let dx = if point.x < bounds.x {
         bounds.x - point.x
@@ -346,7 +373,6 @@ where
         spacing: Spacing,
         dnd_id: u128,
     ) -> Self {
-        let space_l = spacing.space_l;
         let space_s = spacing.space_s;
         let space_xs = spacing.space_xs;
         let space_xxs = spacing.space_xxs;
@@ -378,10 +404,12 @@ where
                     .get(&output.name)
                     .map(|x| x.as_slice())
                     .unwrap_or_default();
-                let space_l = f32::from(space_l);
+                let picker_margin = f32::from(space_s);
+                let preview_spacing = f32::from(space_xs);
                 let available = Size::new(
-                    (output.logical_size.0 as f32 - 2.0 * space_l).max(1.0),
-                    (output.logical_size.1 as f32 - space_l - WINDOW_PICKER_BOTTOM_INSET).max(1.0),
+                    (output.logical_size.0 as f32 - 2.0 * picker_margin).max(1.0),
+                    (output.logical_size.1 as f32 - picker_margin - WINDOW_PICKER_BOTTOM_INSET)
+                        .max(1.0),
                 );
                 let dimensions = imgs
                     .iter()
@@ -394,18 +422,31 @@ where
                             anchored_window_grid_plan(
                                 &dimensions,
                                 available,
-                                space_l,
-                                Point::new(pointer.x - space_l, pointer.y - space_l),
+                                preview_spacing,
+                                Point::new(pointer.x - picker_margin, pointer.y - picker_margin),
                                 hovered_index,
                             )
                         })
                     })
                     .unwrap_or_else(|| WindowGridPlan {
-                        layout: window_grid_layout(&dimensions, available, space_l),
+                        layout: window_grid_layout(&dimensions, available, preview_spacing),
                         order: (0..imgs.len()).collect(),
                     });
                 let grid = plan.layout;
                 let order = plan.order;
+                let hovered_index = output
+                    .has_pointer
+                    .then_some(output.pointer_position)
+                    .flatten()
+                    .and_then(|pointer| {
+                        hovered_window_preview(
+                            &dimensions,
+                            &order,
+                            available,
+                            grid,
+                            Point::new(pointer.x - picker_margin, pointer.y - picker_margin),
+                        )
+                    });
 
                 let img_rows = order.chunks(grid.columns).map(|row| {
                     let img_buttons = row.iter().map(|&i| {
@@ -432,17 +473,63 @@ where
                         .into()
                 });
 
-                layer_container(
+                let grid_element: Element<'_, Msg> = layer_container(
                     column::with_children(img_rows)
                         .spacing(grid.spacing)
                         .align_x(Alignment::Center),
                 )
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
-                .padding([space_l, space_l, WINDOW_PICKER_BOTTOM_INSET, space_l])
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .into()
+                .into();
+                let mut picker = cosmic::iced::widget::Stack::with_children([grid_element])
+                    .width(Length::Fill)
+                    .height(Length::Fill);
+
+                if let Some(hovered_index) = hovered_index
+                    && let Some(slot) = order.iter().position(|&i| i == hovered_index)
+                {
+                    let bounds = window_preview_bounds(&dimensions, &order, available, grid)[slot]
+                        .zoom(WINDOW_PREVIEW_HOVER_SCALE);
+                    let picker_bounds = Rectangle::new(Point::new(0.0, 0.0), available);
+                    let bounds = bounds + bounds.offset(&picker_bounds);
+                    let hovered = &imgs[hovered_index].image;
+                    let hovered_button = button::custom(
+                        image::Image::new(hovered.handle.clone())
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .content_fit(ContentFit::Contain),
+                    )
+                    .width(Length::Fixed(bounds.width))
+                    .height(Length::Fixed(bounds.height))
+                    .padding(0)
+                    .on_press(toplevel_chosen(output.name.clone(), hovered_index))
+                    .class(cosmic::theme::Button::Image);
+                    let hovered_layer: Element<'_, Msg> = column![
+                        space::vertical().height(Length::Fixed(bounds.y.max(0.0))),
+                        row![
+                            space::horizontal().width(Length::Fixed(bounds.x.max(0.0))),
+                            hovered_button
+                        ]
+                    ]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into();
+
+                    picker = picker.push(hovered_layer);
+                }
+
+                layer_container(picker)
+                    .padding([
+                        picker_margin,
+                        picker_margin,
+                        WINDOW_PICKER_BOTTOM_INSET,
+                        picker_margin,
+                    ])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
             }
         };
 
@@ -915,6 +1002,44 @@ mod tests {
             bounds[target_slot].width * bounds[target_slot].height
                 > window_preview_size(dimensions[0], default).width
                     * window_preview_size(dimensions[0], default).height
+        );
+    }
+
+    #[test]
+    fn hovered_preview_tracks_pointer_inside_preview() {
+        let dimensions = vec![(100, 100), (100, 100)];
+        let available = Size::new(206.0, 100.0);
+        let grid = window_grid_for_columns(dimensions.len(), available, 6.0, 2);
+        let order = vec![1, 0];
+
+        assert_eq!(
+            hovered_window_preview(
+                &dimensions,
+                &order,
+                available,
+                grid,
+                Point::new(156.0, 50.0),
+            ),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn hovered_preview_keeps_an_expanded_target_across_small_gaps() {
+        let dimensions = vec![(100, 100), (100, 100)];
+        let available = Size::new(206.0, 100.0);
+        let grid = window_grid_for_columns(dimensions.len(), available, 6.0, 2);
+        let order = vec![0, 1];
+
+        assert_eq!(
+            hovered_window_preview(
+                &dimensions,
+                &order,
+                available,
+                grid,
+                Point::new(102.0, 50.0),
+            ),
+            Some(0)
         );
     }
 
