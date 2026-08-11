@@ -2134,21 +2134,36 @@ fn printer_state_label(state: &PrinterState) -> String {
     }
 }
 
+fn printer_state_icon(state: &PrinterState) -> Option<&'static str> {
+    match state {
+        PrinterState::Idle => Some("process-completed-symbolic"),
+        PrinterState::Stopped => Some("media-playback-pause-symbolic"),
+        PrinterState::Unknown(_) => Some("dialog-error-symbolic"),
+        PrinterState::Processing => None,
+    }
+}
+
 fn view_status_row(dialog: &PrintDialog) -> Element<'_, Msg> {
-    let status_text = if let Some(idx) = dialog.selected_printer_index {
-        if let Some(printer) = dialog.printers.get(idx) {
-            if is_pdf_printer(printer) {
-                fl!("save-output-to-pdf")
-            } else {
-                fl!(
-                    "printer-status",
-                    name = printer.name.as_str(),
-                    state = printer_state_label(&printer.state)
-                )
-            }
+    let selected_printer = dialog
+        .selected_printer_index
+        .and_then(|idx| dialog.printers.get(idx));
+
+    let status_icon = selected_printer
+        .filter(|printer| !is_pdf_printer(printer))
+        .and_then(|printer| printer_state_icon(&printer.state));
+
+    let status_text = if let Some(printer) = selected_printer {
+        if is_pdf_printer(printer) {
+            fl!("save-output-to-pdf")
         } else {
-            fl!("no-printer-selected")
+            fl!(
+                "printer-status",
+                name = printer.name.as_str(),
+                state = printer_state_label(&printer.state)
+            )
         }
+    } else if dialog.selected_printer_index.is_some() {
+        fl!("no-printer-selected")
     } else {
         fl!("no-printers-found")
     };
@@ -2157,15 +2172,19 @@ fn view_status_row(dialog: &PrintDialog) -> Element<'_, Msg> {
     let confirm_label = dialog.accept_label.clone().unwrap_or_else(|| fl!("print"));
     let print_btn = button::suggested(confirm_label).on_press(Msg::Confirm);
 
-    let content = row![
-        text(status_text).size(14),
-        widget::space::horizontal(),
-        cancel_btn,
-        print_btn
-    ]
-    .align_y(Alignment::Center)
-    .spacing(12)
-    .padding(16);
+    let status: Element<'_, Msg> = if let Some(icon_name) = status_icon {
+        row![icon::from_name(icon_name), text(status_text).size(14)]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
+    } else {
+        text(status_text).size(14).into()
+    };
+
+    let content = row![status, widget::space::horizontal(), cancel_btn, print_btn]
+        .align_y(Alignment::Center)
+        .spacing(12)
+        .padding(16);
 
     widget::layer_container(content)
         .layer(cosmic::cosmic_theme::Layer::Primary)
