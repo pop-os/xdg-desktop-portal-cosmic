@@ -287,13 +287,12 @@ impl LayoutDirection {
         }
     }
 
-    // TODO: need to replace these with icons
-    pub fn label(&self) -> &'static str {
+    pub fn icon_name(&self) -> &'static str {
         match self {
-            Self::LeftToRightTopToBottom => "LRTB",
-            Self::RightToLeftTopToBottom => "RLTB",
-            Self::TopToBottomLeftToRight => "TBLR",
-            Self::TopToBottomRightToLeft => "TBRL",
+            Self::LeftToRightTopToBottom => "left-to-right-symbolic",
+            Self::RightToLeftTopToBottom => "right-to-left-symbolic",
+            Self::TopToBottomLeftToRight => "top-bottom-right-symbolic",
+            Self::TopToBottomRightToLeft => "top-bottom-left-symbolic",
         }
     }
 }
@@ -3124,20 +3123,28 @@ pub fn sync_print_models(portal: &mut CosmicPortal) {
 
         let mut layout_direction_model = segmented_button::Model::builder()
             .insert(|b| {
-                b.text(LayoutDirection::LeftToRightTopToBottom.label())
-                    .data(LayoutDirection::LeftToRightTopToBottom)
+                b.icon(icon::from_name(
+                    LayoutDirection::LeftToRightTopToBottom.icon_name(),
+                ))
+                .data(LayoutDirection::LeftToRightTopToBottom)
             })
             .insert(|b| {
-                b.text(LayoutDirection::RightToLeftTopToBottom.label())
-                    .data(LayoutDirection::RightToLeftTopToBottom)
+                b.icon(icon::from_name(
+                    LayoutDirection::RightToLeftTopToBottom.icon_name(),
+                ))
+                .data(LayoutDirection::RightToLeftTopToBottom)
             })
             .insert(|b| {
-                b.text(LayoutDirection::TopToBottomLeftToRight.label())
-                    .data(LayoutDirection::TopToBottomLeftToRight)
+                b.icon(icon::from_name(
+                    LayoutDirection::TopToBottomLeftToRight.icon_name(),
+                ))
+                .data(LayoutDirection::TopToBottomLeftToRight)
             })
             .insert(|b| {
-                b.text(LayoutDirection::TopToBottomRightToLeft.label())
-                    .data(LayoutDirection::TopToBottomRightToLeft)
+                b.icon(icon::from_name(
+                    LayoutDirection::TopToBottomRightToLeft.icon_name(),
+                ))
+                .data(LayoutDirection::TopToBottomRightToLeft)
             })
             .build();
         let layout_active = layout_direction_model.iter().find(|&id| {
