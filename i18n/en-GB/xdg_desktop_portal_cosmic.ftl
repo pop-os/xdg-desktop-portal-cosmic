@@ -1,0 +1,2 @@
+output = Output
+cancel = Cancel
