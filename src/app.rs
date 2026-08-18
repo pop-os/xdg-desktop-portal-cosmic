@@ -11,7 +11,8 @@ use cosmic::iced::{Event, Length, Limits, Subscription, event, window};
 use cosmic::{Task, app, cosmic_config, widget};
 use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
-use wayland_client::{Connection, Proxy, protocol::wl_output::WlOutput};
+use wayland_client::protocol::wl_output::WlOutput;
+use wayland_client::{Connection, Proxy};
 
 pub(crate) fn run() -> cosmic::iced::Result {
     let settings = cosmic::app::Settings::default()
