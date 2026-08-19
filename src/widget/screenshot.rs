@@ -7,19 +7,19 @@ use cosmic::cosmic_theme::Spacing;
 use cosmic::iced::core::gradient::Linear;
 use cosmic::iced::core::widget::Tree;
 use cosmic::iced::core::{
-    Alignment, Background, Border, ContentFit, Degrees, Layout, Length, Point, Size, layout,
-    overlay,
+    Alignment, Background, Border, ContentFit, Degrees, Layout, Length, Point, Rectangle, Size,
+    layout, overlay,
 };
 use cosmic::iced::{self, window};
 use cosmic::widget::{
-    self, button, divider, dropdown, icon, image, layer_container, row, space, svg, text,
+    self, button, column, divider, dropdown, icon, image, layer_container, row, space, svg, text,
 };
 use cosmic_bg_config::Source;
 use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::app::OutputState;
 use crate::fl;
-use crate::screenshot::{Choice, Rect, ScreenshotImage};
+use crate::screenshot::{Choice, Rect, ScreenshotImage, ToplevelImage};
 
 use super::output_selection::OutputSelection;
 use super::rectangle_selection::{DragState, RectangleSelection};
@@ -55,6 +55,302 @@ pub struct ScreenshotSelection<'a, Msg> {
 
 // for now lets just support selecting the output
 
+// Keep window previews clear of the controls, which are positioned 32 logical pixels above the
+// bottom edge. This includes the controls' height and some breathing room above them.
+const WINDOW_PICKER_BOTTOM_INSET: f32 = 128.0;
+const WINDOW_PREVIEW_HOVER_SCALE: f32 = 1.08;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WindowGridLayout {
+    columns: usize,
+    cell_width: f32,
+    cell_height: f32,
+    spacing: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct WindowGridPlan {
+    layout: WindowGridLayout,
+    order: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AnchoredGridScore {
+    pointer_distance: f32,
+    target_area: f32,
+    center_distance: f32,
+    total_area: f32,
+    column_delta: usize,
+    index_delta: usize,
+    columns: usize,
+}
+
+impl AnchoredGridScore {
+    fn is_better_than(self, other: Self) -> bool {
+        self.pointer_distance
+            .total_cmp(&other.pointer_distance)
+            // Once the target can cover the pointer, make that window as prominent as possible
+            // before optimizing the rest of the grid.
+            .then_with(|| other.target_area.total_cmp(&self.target_area))
+            .then_with(|| self.center_distance.total_cmp(&other.center_distance))
+            .then_with(|| other.total_area.total_cmp(&self.total_area))
+            .then_with(|| self.column_delta.cmp(&other.column_delta))
+            .then_with(|| self.index_delta.cmp(&other.index_delta))
+            .then_with(|| self.columns.cmp(&other.columns))
+            .is_lt()
+    }
+}
+
+fn window_grid_for_columns(
+    window_count: usize,
+    available: Size,
+    spacing: f32,
+    columns: usize,
+) -> WindowGridLayout {
+    let columns = columns.clamp(1, window_count.max(1));
+    let rows = window_count.max(1).div_ceil(columns);
+    let horizontal_spacing = if columns > 1 {
+        ((available.width - columns as f32) / (columns - 1) as f32).max(0.0)
+    } else {
+        spacing
+    };
+    let vertical_spacing = if rows > 1 {
+        ((available.height - rows as f32) / (rows - 1) as f32).max(0.0)
+    } else {
+        spacing
+    };
+    let candidate_spacing = spacing.min(horizontal_spacing).min(vertical_spacing);
+    let cell_width = ((available.width - candidate_spacing * columns.saturating_sub(1) as f32)
+        / columns as f32)
+        .max(1.0);
+    let cell_height = ((available.height - candidate_spacing * rows.saturating_sub(1) as f32)
+        / rows as f32)
+        .max(1.0);
+
+    WindowGridLayout {
+        columns,
+        cell_width,
+        cell_height,
+        spacing: candidate_spacing,
+    }
+}
+
+fn window_grid_visible_area(dimensions: &[(u32, u32)], grid: WindowGridLayout) -> f32 {
+    dimensions
+        .iter()
+        .map(|&(width, height)| {
+            let size = window_preview_size((width, height), grid);
+            size.width * size.height
+        })
+        .sum()
+}
+
+fn window_grid_layout(
+    dimensions: &[(u32, u32)],
+    available: Size,
+    spacing: f32,
+) -> WindowGridLayout {
+    if dimensions.is_empty() {
+        return WindowGridLayout {
+            columns: 1,
+            cell_width: available.width.max(1.0),
+            cell_height: available.height.max(1.0),
+            spacing: 0.0,
+        };
+    }
+
+    let mut best = WindowGridLayout {
+        columns: 1,
+        cell_width: available.width.max(1.0),
+        cell_height: available.height.max(1.0),
+        spacing: 0.0,
+    };
+    let mut best_visible_area = -1.0_f32;
+
+    for columns in 1..=dimensions.len() {
+        let candidate = window_grid_for_columns(dimensions.len(), available, spacing, columns);
+        // Prefer the arrangement that makes the previews collectively largest. ScaleDown does
+        // not enlarge a preview beyond its captured size, so account for that here as well.
+        let visible_area = window_grid_visible_area(dimensions, candidate);
+
+        if visible_area > best_visible_area {
+            best_visible_area = visible_area;
+            best = candidate;
+        }
+    }
+
+    best
+}
+
+fn window_preview_size((width, height): (u32, u32), grid: WindowGridLayout) -> Size {
+    let width = width.max(1) as f32;
+    let height = height.max(1) as f32;
+    let scale = (grid.cell_width / width)
+        .min(grid.cell_height / height)
+        .min(1.0);
+    Size::new(width * scale, height * scale)
+}
+
+fn window_preview_bounds(
+    dimensions: &[(u32, u32)],
+    order: &[usize],
+    available: Size,
+    grid: WindowGridLayout,
+) -> Vec<Rectangle> {
+    let sizes = dimensions
+        .iter()
+        .copied()
+        .map(|dimensions| window_preview_size(dimensions, grid))
+        .collect::<Vec<_>>();
+    let row_sizes = order
+        .chunks(grid.columns)
+        .map(|row| {
+            let width = row.iter().map(|&i| sizes[i].width).sum::<f32>()
+                + grid.spacing * row.len().saturating_sub(1) as f32;
+            let height = row.iter().map(|&i| sizes[i].height).fold(0.0_f32, f32::max);
+            Size::new(width, height)
+        })
+        .collect::<Vec<_>>();
+    let content_height = row_sizes.iter().map(|size| size.height).sum::<f32>()
+        + grid.spacing * row_sizes.len().saturating_sub(1) as f32;
+    let mut y = ((available.height - content_height) / 2.0).max(0.0);
+    let mut bounds = Vec::with_capacity(order.len());
+
+    for (row, row_size) in order.chunks(grid.columns).zip(row_sizes) {
+        let mut x = ((available.width - row_size.width) / 2.0).max(0.0);
+        for &i in row {
+            let size = sizes[i];
+            bounds.push(Rectangle::new(
+                Point::new(x, y + (row_size.height - size.height) / 2.0),
+                size,
+            ));
+            x += size.width + grid.spacing;
+        }
+        y += row_size.height + grid.spacing;
+    }
+
+    bounds
+}
+
+fn hovered_window_preview(
+    dimensions: &[(u32, u32)],
+    order: &[usize],
+    available: Size,
+    grid: WindowGridLayout,
+    pointer: Point,
+) -> Option<usize> {
+    let bounds = window_preview_bounds(dimensions, order, available, grid);
+    let slot = bounds
+        .iter()
+        .position(|bounds| bounds.contains(pointer))
+        .or_else(|| {
+            bounds
+                .iter()
+                .enumerate()
+                .filter(|(_, bounds)| bounds.zoom(WINDOW_PREVIEW_HOVER_SCALE).contains(pointer))
+                .min_by(|(_, a), (_, b)| {
+                    squared_distance_to_center(pointer, **a)
+                        .total_cmp(&squared_distance_to_center(pointer, **b))
+                })
+                .map(|(slot, _)| slot)
+        })?;
+
+    order.get(slot).copied()
+}
+
+fn squared_distance_to_rectangle(point: Point, bounds: Rectangle) -> f32 {
+    let dx = if point.x < bounds.x {
+        bounds.x - point.x
+    } else if point.x > bounds.x + bounds.width {
+        point.x - bounds.x - bounds.width
+    } else {
+        0.0
+    };
+    let dy = if point.y < bounds.y {
+        bounds.y - point.y
+    } else if point.y > bounds.y + bounds.height {
+        point.y - bounds.y - bounds.height
+    } else {
+        0.0
+    };
+    dx * dx + dy * dy
+}
+
+fn squared_distance_to_center(point: Point, bounds: Rectangle) -> f32 {
+    let dx = point.x - bounds.center_x();
+    let dy = point.y - bounds.center_y();
+    dx * dx + dy * dy
+}
+
+fn anchored_window_grid_plan(
+    dimensions: &[(u32, u32)],
+    available: Size,
+    spacing: f32,
+    pointer: Point,
+    hovered_index: usize,
+) -> WindowGridPlan {
+    let original = (0..dimensions.len()).collect::<Vec<_>>();
+    if hovered_index >= original.len() {
+        return WindowGridPlan {
+            layout: window_grid_layout(dimensions, available, spacing),
+            order: original,
+        };
+    }
+
+    let default_columns = window_grid_layout(dimensions, available, spacing).columns;
+    let mut best: Option<(WindowGridPlan, AnchoredGridScore)> = None;
+
+    for columns in 1..=dimensions.len() {
+        let layout = window_grid_for_columns(dimensions.len(), available, spacing, columns);
+        let total_area = window_grid_visible_area(dimensions, layout);
+
+        for slot in 0..original.len() {
+            let mut order = original.clone();
+            order.swap(hovered_index, slot);
+            let bounds = window_preview_bounds(dimensions, &order, available, layout)[slot];
+            let score = AnchoredGridScore {
+                pointer_distance: squared_distance_to_rectangle(pointer, bounds),
+                target_area: bounds.width * bounds.height,
+                center_distance: squared_distance_to_center(pointer, bounds),
+                total_area,
+                column_delta: columns.abs_diff(default_columns),
+                index_delta: hovered_index.abs_diff(slot),
+                columns,
+            };
+            let is_better = best
+                .as_ref()
+                .is_none_or(|(_, best_score)| score.is_better_than(*best_score));
+            if is_better {
+                best = Some((WindowGridPlan { layout, order }, score));
+            }
+        }
+    }
+
+    best.unwrap().0
+}
+
+fn window_at_position(images: &[ToplevelImage], pointer: Point) -> Option<usize> {
+    images
+        .iter()
+        .enumerate()
+        .filter(|(_, image)| {
+            image.geometry.is_some_and(|geometry| {
+                pointer.x >= geometry.left as f32
+                    && pointer.x < geometry.right as f32
+                    && pointer.y >= geometry.top as f32
+                    && pointer.y < geometry.bottom as f32
+            })
+        })
+        // The active window is normally topmost. The protocol has no explicit stacking order,
+        // so prefer newer entries when multiple inactive windows overlap.
+        .max_by_key(|(i, image)| (image.activated, *i))
+        .map(|(i, _)| i)
+}
+
+fn toplevel_preview_dimensions(image: &ToplevelImage) -> (u32, u32) {
+    image.preview_dimensions
+}
+
 impl<'a, Msg> ScreenshotSelection<'a, Msg>
 where
     Msg: 'static + Clone,
@@ -69,7 +365,7 @@ where
         window_id: window::Id,
         on_output_change: impl Fn(WlOutput) -> Msg,
         on_choice_change: impl Fn(Choice) -> Msg + 'static + Clone,
-        toplevel_images: &HashMap<String, Vec<ScreenshotImage>>,
+        toplevel_images: &HashMap<String, Vec<ToplevelImage>>,
         toplevel_chosen: impl Fn(String, usize) -> Msg,
         save_locations: &'a Vec<String>,
         selected_save_location: usize,
@@ -77,7 +373,6 @@ where
         spacing: Spacing,
         dnd_id: u128,
     ) -> Self {
-        let space_l = spacing.space_l;
         let space_s = spacing.space_s;
         let space_xs = spacing.space_xs;
         let space_xxs = spacing.space_xxs;
@@ -109,36 +404,132 @@ where
                     .get(&output.name)
                     .map(|x| x.as_slice())
                     .unwrap_or_default();
-                let total_img_width = imgs.iter().map(|img| img.width()).sum::<u32>();
+                let picker_margin = f32::from(space_s);
+                let preview_spacing = f32::from(space_xs);
+                let available = Size::new(
+                    (output.logical_size.0 as f32 - 2.0 * picker_margin).max(1.0),
+                    (output.logical_size.1 as f32 - picker_margin - WINDOW_PICKER_BOTTOM_INSET)
+                        .max(1.0),
+                );
+                let dimensions = imgs
+                    .iter()
+                    .map(toplevel_preview_dimensions)
+                    .collect::<Vec<_>>();
+                let plan = output
+                    .window_pointer_anchor
+                    .and_then(|pointer| {
+                        window_at_position(imgs, pointer).map(|hovered_index| {
+                            anchored_window_grid_plan(
+                                &dimensions,
+                                available,
+                                preview_spacing,
+                                Point::new(pointer.x - picker_margin, pointer.y - picker_margin),
+                                hovered_index,
+                            )
+                        })
+                    })
+                    .unwrap_or_else(|| WindowGridPlan {
+                        layout: window_grid_layout(&dimensions, available, preview_spacing),
+                        order: (0..imgs.len()).collect(),
+                    });
+                let grid = plan.layout;
+                let order = plan.order;
+                let hovered_index = output
+                    .has_pointer
+                    .then_some(output.pointer_position)
+                    .flatten()
+                    .and_then(|pointer| {
+                        hovered_window_preview(
+                            &dimensions,
+                            &order,
+                            available,
+                            grid,
+                            Point::new(pointer.x - picker_margin, pointer.y - picker_margin),
+                        )
+                    });
 
-                let img_buttons = imgs.iter().enumerate().map(|(i, img)| {
-                    let portion =
-                        (img.width() as u64 * u16::MAX as u64 / total_img_width as u64).max(1);
-                    layer_container(
+                let img_rows = order.chunks(grid.columns).map(|row| {
+                    let img_buttons = row.iter().map(|&i| {
+                        let img = &imgs[i].image;
+                        let size = window_preview_size(dimensions[i], grid);
+
                         button::custom(
                             image::Image::new(img.handle.clone())
+                                .width(Length::Fill)
+                                .height(Length::Fill)
                                 .content_fit(ContentFit::ScaleDown),
                         )
+                        .width(Length::Fixed(size.width))
+                        .height(Length::Fixed(size.height))
+                        .padding(0)
                         .on_press(toplevel_chosen(output.name.clone(), i))
-                        .class(cosmic::theme::Button::Image),
-                    )
-                    .align_x(Alignment::Center)
-                    .width(Length::FillPortion(portion as u16))
-                    .height(Length::Shrink)
-                    .into()
-                });
-                layer_container(
+                        .class(cosmic::theme::Button::Image)
+                        .into()
+                    });
+
                     row::with_children(img_buttons)
-                        .spacing(space_l)
-                        .width(Length::Fill)
+                        .spacing(grid.spacing)
                         .align_y(Alignment::Center)
-                        .padding(space_l),
+                        .into()
+                });
+
+                let grid_element: Element<'_, Msg> = layer_container(
+                    column::with_children(img_rows)
+                        .spacing(grid.spacing)
+                        .align_x(Alignment::Center),
                 )
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Center)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .into()
+                .into();
+                let mut picker = cosmic::iced::widget::Stack::with_children([grid_element])
+                    .width(Length::Fill)
+                    .height(Length::Fill);
+
+                if let Some(hovered_index) = hovered_index
+                    && let Some(slot) = order.iter().position(|&i| i == hovered_index)
+                {
+                    let bounds = window_preview_bounds(&dimensions, &order, available, grid)[slot]
+                        .zoom(WINDOW_PREVIEW_HOVER_SCALE);
+                    let picker_bounds = Rectangle::new(Point::new(0.0, 0.0), available);
+                    let bounds = bounds + bounds.offset(&picker_bounds);
+                    let hovered = &imgs[hovered_index].image;
+                    let hovered_button = button::custom(
+                        image::Image::new(hovered.handle.clone())
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .content_fit(ContentFit::Contain),
+                    )
+                    .width(Length::Fixed(bounds.width))
+                    .height(Length::Fixed(bounds.height))
+                    .padding(0)
+                    .on_press(toplevel_chosen(output.name.clone(), hovered_index))
+                    .class(cosmic::theme::Button::Image);
+                    let hovered_layer: Element<'_, Msg> = column![
+                        space::vertical().height(Length::Fixed(bounds.y.max(0.0))),
+                        row![
+                            space::horizontal().width(Length::Fixed(bounds.x.max(0.0))),
+                            hovered_button
+                        ]
+                    ]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into();
+
+                    picker = picker.push(hovered_layer);
+                }
+
+                layer_container(picker)
+                    .padding([
+                        picker_margin,
+                        picker_margin,
+                        WINDOW_PICKER_BOTTOM_INSET,
+                        picker_margin,
+                    ])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
             }
         };
 
@@ -538,5 +929,142 @@ where
 {
     fn from(w: ScreenshotSelection<'a, Message>) -> cosmic::Element<'a, Message> {
         Element::new(w)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_grid_uses_multiple_rows_for_many_landscape_windows() {
+        let dimensions = vec![(1600, 900); 8];
+        let layout = window_grid_layout(&dimensions, Size::new(1872.0, 876.0), 24.0);
+
+        assert_eq!(layout.columns, 3);
+        assert_eq!(dimensions.len().div_ceil(layout.columns), 3);
+        assert_eq!(layout.cell_width, 608.0);
+        assert_eq!(layout.cell_height, 276.0);
+    }
+
+    #[test]
+    fn window_grid_keeps_every_cell_inside_the_available_area() {
+        let dimensions = [
+            (1920, 1080),
+            (800, 1200),
+            (1000, 700),
+            (600, 900),
+            (1600, 900),
+            (500, 500),
+        ];
+        let available = Size::new(1872.0, 876.0);
+        let spacing = 24.0;
+        let layout = window_grid_layout(&dimensions, available, spacing);
+        let rows = dimensions.len().div_ceil(layout.columns);
+
+        let used_width = layout.cell_width * layout.columns as f32
+            + layout.spacing * layout.columns.saturating_sub(1) as f32;
+        let used_height =
+            layout.cell_height * rows as f32 + layout.spacing * rows.saturating_sub(1) as f32;
+
+        assert!(used_width <= available.width);
+        assert!(used_height <= available.height);
+        assert!(layout.columns < dimensions.len());
+    }
+
+    #[test]
+    fn window_grid_places_hovered_window_under_pointer() {
+        let dimensions = vec![(1600, 900); 4];
+        let available = Size::new(1000.0, 800.0);
+        let pointer = Point::new(800.0, 600.0);
+        let plan = anchored_window_grid_plan(&dimensions, available, 20.0, pointer, 0);
+        let target_slot = plan.order.iter().position(|&i| i == 0).unwrap();
+        let bounds = window_preview_bounds(&dimensions, &plan.order, available, plan.layout);
+
+        assert_ne!(target_slot, 0);
+        assert!(bounds[target_slot].contains(pointer));
+    }
+
+    #[test]
+    fn hovered_window_influences_grid_shape() {
+        let dimensions = vec![(1600, 200), (400, 1000), (400, 1000), (400, 1000)];
+        let available = Size::new(1000.0, 800.0);
+        let pointer = Point::new(500.0, 100.0);
+        let default = window_grid_layout(&dimensions, available, 20.0);
+        let plan = anchored_window_grid_plan(&dimensions, available, 20.0, pointer, 0);
+        let target_slot = plan.order.iter().position(|&i| i == 0).unwrap();
+        let bounds = window_preview_bounds(&dimensions, &plan.order, available, plan.layout);
+
+        assert_eq!(default.columns, 4);
+        assert_eq!(plan.layout.columns, 1);
+        assert!(bounds[target_slot].contains(pointer));
+        assert!(
+            bounds[target_slot].width * bounds[target_slot].height
+                > window_preview_size(dimensions[0], default).width
+                    * window_preview_size(dimensions[0], default).height
+        );
+    }
+
+    #[test]
+    fn hovered_preview_tracks_pointer_inside_preview() {
+        let dimensions = vec![(100, 100), (100, 100)];
+        let available = Size::new(206.0, 100.0);
+        let grid = window_grid_for_columns(dimensions.len(), available, 6.0, 2);
+        let order = vec![1, 0];
+
+        assert_eq!(
+            hovered_window_preview(
+                &dimensions,
+                &order,
+                available,
+                grid,
+                Point::new(156.0, 50.0),
+            ),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn hovered_preview_keeps_an_expanded_target_across_small_gaps() {
+        let dimensions = vec![(100, 100), (100, 100)];
+        let available = Size::new(206.0, 100.0);
+        let grid = window_grid_for_columns(dimensions.len(), available, 6.0, 2);
+        let order = vec![0, 1];
+
+        assert_eq!(
+            hovered_window_preview(
+                &dimensions,
+                &order,
+                available,
+                grid,
+                Point::new(102.0, 50.0),
+            ),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn active_window_wins_when_geometries_overlap() {
+        let image = || ToplevelImage {
+            image: ScreenshotImage {
+                rgba: ::image::RgbaImage::new(1, 1),
+                handle: cosmic::widget::image::Handle::from_rgba(1, 1, vec![0; 4]),
+            },
+            geometry: Some(Rect {
+                left: 0,
+                top: 0,
+                right: 500,
+                bottom: 500,
+            }),
+            preview_dimensions: (500, 500),
+            activated: false,
+        };
+        let mut images = vec![image(), image()];
+        images[1].activated = true;
+
+        assert_eq!(
+            window_at_position(&images, Point::new(250.0, 250.0)),
+            Some(1)
+        );
     }
 }

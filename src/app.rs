@@ -7,7 +7,7 @@ use cosmic::iced::platform_specific::shell::commands::layer_surface::get_layer_s
 use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
     IcedMargin, SctkLayerSurfaceSettings,
 };
-use cosmic::iced::{Event, Length, Limits, Subscription, event, window};
+use cosmic::iced::{Event, Length, Limits, Point, Subscription, event, mouse, window};
 use cosmic::{Task, app, cosmic_config, widget};
 use cosmic_client_toolkit::sctk::shell::wlr_layer;
 use std::collections::HashMap;
@@ -60,6 +60,8 @@ pub struct OutputState {
     pub logical_size: (u32, u32),
     pub logical_pos: (i32, i32),
     pub has_pointer: bool,
+    pub pointer_position: Option<Point>,
+    pub window_pointer_anchor: Option<Point>,
     pub bg_source: Option<cosmic_bg_config::Source>,
 }
 
@@ -72,6 +74,8 @@ pub enum Msg {
     RemoteDesktop(remote_desktop_dialog::Msg),
     Portal(subscription::Event),
     Output(OutputEvent, WlOutput),
+    PointerMoved(window::Id, Point),
+    PointerLeft(window::Id),
     ConfigSetScreenshot(config::screenshot::Screenshot),
     /// Update config from external changes
     ConfigSubUpdate(config::Config),
@@ -177,6 +181,9 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::Access(args) => access::update_args(self, args),
                 subscription::Event::FileChooser(args) => file_chooser::update_args(self, args),
                 subscription::Event::Screenshot(args) => screenshot::update_args(self, args),
+                subscription::Event::ScreenshotToplevels(update) => {
+                    screenshot::update_toplevel_images(self, update)
+                }
                 subscription::Event::Screencast(args) => screencast_dialog::update_args(self, args),
                 subscription::Event::CancelScreencast(handle) => {
                     screencast_dialog::cancel(self, handle)
@@ -229,6 +236,8 @@ impl cosmic::Application for CosmicPortal {
                                 .unwrap(),
                             logical_pos: info.logical_position.unwrap(),
                             has_pointer: false,
+                            pointer_position: None,
+                            window_pointer_anchor: None,
                             bg_source: None,
                         })
                     }
@@ -258,6 +267,8 @@ impl cosmic::Application for CosmicPortal {
                                     .unwrap(),
                                 logical_pos: info.logical_position.unwrap(),
                                 has_pointer: false,
+                                pointer_position: None,
+                                window_pointer_anchor: None,
                                 bg_source: None,
                             });
                         }
@@ -282,6 +293,34 @@ impl cosmic::Application for CosmicPortal {
                     self.prev_rectangle = Some(rect);
                 }
 
+                cosmic::iced::Task::none()
+            }
+            Msg::PointerMoved(id, position) => {
+                if !self.outputs.iter().any(|output| output.id == id) {
+                    return cosmic::iced::Task::none();
+                }
+
+                let window_picker_active = self
+                    .screenshot_args
+                    .as_ref()
+                    .is_some_and(|args| matches!(args.choice, screenshot::Choice::Window(..)));
+
+                for output in &mut self.outputs {
+                    output.has_pointer = output.id == id;
+                    if output.has_pointer {
+                        output.pointer_position = Some(position);
+                        if window_picker_active && output.window_pointer_anchor.is_none() {
+                            output.window_pointer_anchor = Some(position);
+                        }
+                    }
+                }
+
+                cosmic::iced::Task::none()
+            }
+            Msg::PointerLeft(id) => {
+                if let Some(output) = self.outputs.iter_mut().find(|output| output.id == id) {
+                    output.has_pointer = false;
+                }
                 cosmic::iced::Task::none()
             }
             Msg::ConfigSetScreenshot(screenshot) => {
@@ -326,7 +365,7 @@ impl cosmic::Application for CosmicPortal {
 
     #[allow(clippy::collapsible_match)]
     fn subscription(&self) -> Subscription<Self::Message> {
-        let mut subscriptions = vec![event::listen_with(|e, _, _| match e {
+        let mut subscriptions = vec![event::listen_with(|e, _, id| match e {
             Event::PlatformSpecific(event::PlatformSpecific::Wayland(w_e)) => match w_e {
                 event::wayland::Event::Output(o_event, wl_output) => {
                     Some(Msg::Output(o_event, wl_output))
@@ -336,6 +375,10 @@ impl cosmic::Application for CosmicPortal {
                 }
                 _ => None,
             },
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                Some(Msg::PointerMoved(id, position))
+            }
+            Event::Mouse(mouse::Event::CursorLeft) => Some(Msg::PointerLeft(id)),
             _ => None,
         })];
         if let Some(wayland_helper) = self.wayland_helper.clone() {

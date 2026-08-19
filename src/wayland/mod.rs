@@ -16,7 +16,6 @@ use cosmic_client_toolkit::sctk::{self};
 use cosmic_client_toolkit::toplevel_info::{ToplevelInfo, ToplevelInfoState};
 use cosmic_client_toolkit::workspace::WorkspaceState;
 use futures::channel::oneshot;
-use futures::stream::{FuturesOrdered, Stream, StreamExt};
 use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,7 +24,6 @@ use std::thread;
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_buffer, wl_output, wl_pointer, wl_seat, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
-use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{
     self, ZwpLinuxBufferParamsV1,
@@ -97,7 +95,7 @@ struct WaylandHelperInner {
     conn: wayland_client::Connection,
     outputs: Mutex<Vec<wl_output::WlOutput>>,
     output_infos: Mutex<HashMap<wl_output::WlOutput, OutputInfo>>,
-    output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ExtForeignToplevelHandleV1>>>,
+    output_toplevels: Mutex<HashMap<wl_output::WlOutput, Vec<ToplevelInfo>>>,
     toplevels: Mutex<Vec<ToplevelInfo>>,
     qh: QueueHandle<AppData>,
     capturer: Capturer,
@@ -159,7 +157,7 @@ impl AppData {
                         })
                 })?;
 
-                Some((o, info.foreign_toplevel.clone()))
+                Some((o, info.clone()))
             })
             .fold(
                 std::collections::HashMap::new(),
@@ -380,32 +378,14 @@ impl WaylandHelper {
         }
     }
 
-    pub fn capture_output_toplevels_shm<'a>(
-        &'a self,
-        output: &wl_output::WlOutput,
-        overlay_cursor: bool,
-    ) -> impl Stream<Item = ShmImage<OwnedFd>> + 'a {
-        // get the active workspace for this output
-        // get the toplevels for that workspace
-        // capture each toplevel
-
-        let toplevels = self
-            .inner
+    pub fn output_toplevels(&self, output: &wl_output::WlOutput) -> Vec<ToplevelInfo> {
+        self.inner
             .output_toplevels
             .lock()
             .unwrap()
             .get(output)
             .cloned()
-            .unwrap_or_default();
-
-        toplevels
-            .into_iter()
-            .map(|foreign_toplevel| {
-                let source = CaptureSource::Toplevel(foreign_toplevel.clone());
-                self.capture_source_shm(source, overlay_cursor)
-            })
-            .collect::<FuturesOrdered<_>>()
-            .filter_map(|x| async { x })
+            .unwrap_or_default()
     }
 
     pub fn capture_source_session(&self, source: CaptureSource, overlay_cursor: bool) -> Session {
@@ -456,8 +436,13 @@ impl WaylandHelper {
             .await?;
 
         let fd = buffer::create_memfd(width, height);
-        let buffer =
-            self.create_shm_buffer(&fd, width, height, width * 4, wl_shm::Format::Abgr8888);
+        let buffer = WlBufferGuard(self.create_shm_buffer(
+            &fd,
+            width,
+            height,
+            width * 4,
+            wl_shm::Format::Abgr8888,
+        ));
 
         let damage = &[Rect {
             x: 0,
@@ -465,8 +450,7 @@ impl WaylandHelper {
             width: width as i32,
             height: height as i32,
         }];
-        let res = session.capture_wl_buffer(&buffer, damage).await;
-        buffer.destroy();
+        let res = session.capture_wl_buffer(&buffer.0, damage).await;
 
         if let Ok(frame) = res {
             let transform = match frame.transform {
@@ -596,6 +580,14 @@ impl WaylandHelper {
             &self.inner.qh,
             (),
         )
+    }
+}
+
+struct WlBufferGuard(wl_buffer::WlBuffer);
+
+impl Drop for WlBufferGuard {
+    fn drop(&mut self) {
+        self.0.destroy();
     }
 }
 
