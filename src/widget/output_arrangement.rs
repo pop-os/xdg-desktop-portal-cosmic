@@ -4,11 +4,12 @@
 //! widget handles their placement and draws a name label over each one.
 
 use cosmic::iced::core::renderer::Quad;
+use cosmic::iced::core::widget::operation::Focusable;
 use cosmic::iced::core::widget::{Operation, Tree, tree};
 use cosmic::iced::core::{
     self as core, Background, Border, Clipboard, Color, Event, Layout, Length, Pixels, Point,
-    Rectangle, Renderer as _, Shell, Size, Vector, Widget, alignment, layout, mouse, overlay,
-    renderer, text,
+    Rectangle, Renderer as _, Shell, Size, Vector, Widget, alignment, keyboard, layout, mouse,
+    overlay, renderer, text,
 };
 use cosmic::{Element, Renderer};
 
@@ -17,6 +18,7 @@ const LABEL_BAR_MAX: f32 = 24.0;
 
 pub struct OutputArrangement<'a, Msg> {
     children: Vec<Element<'a, Msg>>,
+    messages: Vec<Msg>,
     regions: Vec<Rectangle>,
     labels: Vec<String>,
     selected: Vec<bool>,
@@ -24,10 +26,12 @@ pub struct OutputArrangement<'a, Msg> {
 }
 
 impl<'a, Msg> OutputArrangement<'a, Msg> {
-    /// `regions`, `labels` and `selected` must be parallel to `children`. `size` is
-    /// the total bounding box of all regions.
+    /// `messages`, `regions`, `labels` and `selected` must be parallel to
+    /// `children`. `messages[i]` is published when output `i` is activated by
+    /// keyboard. `size` is the total bounding box of all regions.
     pub fn new(
         children: Vec<Element<'a, Msg>>,
+        messages: Vec<Msg>,
         regions: Vec<Rectangle>,
         labels: Vec<String>,
         selected: Vec<bool>,
@@ -35,6 +39,7 @@ impl<'a, Msg> OutputArrangement<'a, Msg> {
     ) -> Self {
         Self {
             children,
+            messages,
             regions,
             labels,
             selected,
@@ -46,9 +51,32 @@ impl<'a, Msg> OutputArrangement<'a, Msg> {
 #[derive(Default)]
 struct State {
     hovered: Option<usize>,
+    focused: Option<usize>,
 }
 
-impl<Msg> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, Msg> {
+/// Makes output `index` a tab stop, backed by [`State::focused`].
+struct OutputFocus<'a> {
+    focused: &'a mut Option<usize>,
+    index: usize,
+}
+
+impl Focusable for OutputFocus<'_> {
+    fn is_focused(&self) -> bool {
+        *self.focused == Some(self.index)
+    }
+
+    fn focus(&mut self) {
+        *self.focused = Some(self.index);
+    }
+
+    fn unfocus(&mut self) {
+        if *self.focused == Some(self.index) {
+            *self.focused = None;
+        }
+    }
+}
+
+impl<Msg: Clone> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, Msg> {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<State>()
     }
@@ -129,6 +157,7 @@ impl<Msg> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, Msg> {
         // images, so without it they hide behind the screenshot.
         let accent = theme.cosmic().accent_color();
         let radius = theme.cosmic().radius_s();
+        let focused = tree.state.downcast_ref::<State>().focused;
         renderer.with_layer(layout.bounds(), |renderer| {
             // Highlight the selected output, and the one under the cursor, so it is
             // clear the thumbnails are clickable.
@@ -151,6 +180,32 @@ impl<Msg> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, Msg> {
                         border: Border {
                             color,
                             width: border_width,
+                            radius: radius.into(),
+                        },
+                        shadow: Default::default(),
+                        snap: true,
+                    },
+                    Background::Color(Color::TRANSPARENT),
+                );
+            }
+
+            // Focus ring for the keyboard-focused output, inset so it reads as
+            // distinct from the selection border.
+            if let Some(c_layout) = focused.and_then(|index| layout.children().nth(index)) {
+                let bounds = c_layout.bounds();
+                let inset = 3.0;
+                let ring = Rectangle {
+                    x: bounds.x + inset,
+                    y: bounds.y + inset,
+                    width: (bounds.width - inset * 2.0).max(1.0),
+                    height: (bounds.height - inset * 2.0).max(1.0),
+                };
+                renderer.fill_quad(
+                    Quad {
+                        bounds: ring,
+                        border: Border {
+                            color: Color::from(accent),
+                            width: 2.0,
                             radius: radius.into(),
                         },
                         shadow: Default::default(),
@@ -256,6 +311,22 @@ impl<Msg> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, Msg> {
             );
         }
 
+        // Activate the focused output with Enter/Space, like clicking it. The
+        // child buttons are never focused (see `operate`) so they stay quiet.
+        if let Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) = event
+            && matches!(
+                key.as_ref(),
+                keyboard::Key::Named(keyboard::key::Named::Enter) | keyboard::Key::Character(" ")
+            )
+        {
+            let focused = tree.state.downcast_ref::<State>().focused;
+            if let Some(msg) = focused.and_then(|index| self.messages.get(index)) {
+                shell.publish(msg.clone());
+                shell.capture_event();
+                return;
+            }
+        }
+
         // Track which thumbnail is hovered and request a redraw when it changes, so
         // the hover highlight follows the cursor.
         let hovered = match event {
@@ -301,24 +372,21 @@ impl<Msg> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, Msg> {
         &mut self,
         tree: &mut Tree,
         layout: Layout<'_>,
-        renderer: &Renderer,
+        _renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
+        // Register each output as its own tab stop instead of forwarding focus to
+        // the child buttons, whose focus ring would be hidden behind the
+        // screenshot. Tracking focus here lets `draw` paint the ring on top.
+        let state = tree.state.downcast_mut::<State>();
         operation.container(None, layout.bounds());
-        operation.traverse(&mut |operation| {
-            self.children
-                .iter_mut()
-                .zip(&mut tree.children)
-                .zip(layout.children())
-                .for_each(|((child, state), c_layout)| {
-                    child.as_widget_mut().operate(
-                        state,
-                        c_layout.with_virtual_offset(layout.virtual_offset()),
-                        renderer,
-                        operation,
-                    );
-                });
-        });
+        for (index, c_layout) in layout.children().enumerate() {
+            let mut focus = OutputFocus {
+                focused: &mut state.focused,
+                index,
+            };
+            operation.focusable(None, c_layout.bounds(), &mut focus);
+        }
     }
 
     fn overlay<'b>(
@@ -340,7 +408,7 @@ impl<Msg> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, Msg> {
     }
 }
 
-impl<'a, Msg: 'static> From<OutputArrangement<'a, Msg>> for Element<'a, Msg> {
+impl<'a, Msg: Clone + 'static> From<OutputArrangement<'a, Msg>> for Element<'a, Msg> {
     fn from(widget: OutputArrangement<'a, Msg>) -> Self {
         Element::new(widget)
     }
