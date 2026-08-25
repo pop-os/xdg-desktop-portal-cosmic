@@ -12,3 +12,6 @@ share-screen = Teile deinen Bildschirm
 unknown-application = Unbekannte Anwendung
 output = Ausgabe
 window = Fenster
+allow-once = Einmalig zulassen
+always-allow = Immer zulassen
+deny = Verweigern
