@@ -2934,7 +2934,7 @@ pub(crate) async fn do_print_execution(
 
     let copy_result = tokio::task::spawn_blocking(move || {
         let mut reader = File::from(readable_fd);
-        let mut writer = File::from(std::os::fd::OwnedFd::from(cpdb_writable_fd));
+        let mut writer = File::from(OwnedFd::from(cpdb_writable_fd));
         copy(&mut reader, &mut writer)
     })
     .await;

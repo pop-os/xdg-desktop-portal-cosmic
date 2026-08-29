@@ -193,16 +193,6 @@ impl cosmic::Application for CosmicPortal {
         }
     }
 
-    fn on_close_requested(&self, id: window::Id) -> Option<Self::Message> {
-        if Some(id) == self.print_args.as_ref().map(|args| args.window_id) {
-            Some(Msg::Print(print::Msg::Dialog(
-                crate::print_dialog::Msg::Cancel,
-            )))
-        } else {
-            None
-        }
-    }
-
     fn update(&mut self, message: Self::Message) -> cosmic::Task<cosmic::Action<Self::Message>> {
         match message {
             Msg::Access(m) => access::update_msg(self, m),
@@ -241,7 +231,7 @@ impl cosmic::Application for CosmicPortal {
             Msg::RemoteDesktop(m) => {
                 remote_desktop_dialog::update_msg(self, m).map(cosmic::Action::App)
             }
-            Msg::Print(m) => print::update_msg(self, m).map(cosmic::Action::App),
+            Msg::Print(m) => print::update_msg(self, m),
             Msg::Output(o_event, wl_output) => {
                 if self.wayland_helper.is_none()
                     && let Some(backend) = wl_output.backend().upgrade()
@@ -388,7 +378,10 @@ impl cosmic::Application for CosmicPortal {
             _ => None,
         })];
         if let Some(wayland_helper) = self.wayland_helper.clone() {
-            subscriptions.push(subscription::portal_subscription(wayland_helper).map(Msg::Portal));
+            subscriptions.push(
+                subscription::portal_subscription(wayland_helper)
+                    .map(|e| Msg::Portal(Box::new(e))),
+            );
         }
         for (id, (_args, dialog)) in self.file_choosers.iter() {
             let id = *id;
