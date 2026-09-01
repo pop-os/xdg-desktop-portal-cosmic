@@ -11,16 +11,16 @@ use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock};
-use tokio::sync::{Mutex, mpsc::Sender};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc::Sender;
 use zbus::zvariant;
 
-use crate::PortalResponse;
 use crate::app::CosmicPortal;
 use crate::print_dialog::{
     PrintDialog, apply_xdg_hints, build_xdg_response, save_pdf_to_file, sync_print_models,
 };
-use crate::subscription;
 use crate::widget::keyboard_wrapper::KeyboardWrapper;
+use crate::{PortalResponse, subscription};
 
 pub static PRINT_ID: LazyLock<window::Id> = LazyLock::new(window::Id::unique);
 pub static PRINT_WIDGET_ID: LazyLock<widget::Id> =

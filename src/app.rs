@@ -379,8 +379,7 @@ impl cosmic::Application for CosmicPortal {
         })];
         if let Some(wayland_helper) = self.wayland_helper.clone() {
             subscriptions.push(
-                subscription::portal_subscription(wayland_helper)
-                    .map(|e| Msg::Portal(Box::new(e))),
+                subscription::portal_subscription(wayland_helper).map(|e| Msg::Portal(Box::new(e))),
             );
         }
         for (id, (_args, dialog)) in self.file_choosers.iter() {

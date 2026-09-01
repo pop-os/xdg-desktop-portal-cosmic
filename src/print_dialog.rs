@@ -15,9 +15,8 @@ use cpdb_rs::media::MediaCollection;
 use cpdb_rs::options::{OptionInfo, OptionsCollection};
 use cpdb_rs::types::PrinterState;
 use cpdb_rs::{DiscoveryEvent, MediaInfo, PrinterSnapshot};
-use futures::SinkExt;
-use futures::StreamExt;
 use futures::channel::mpsc;
+use futures::{SinkExt, StreamExt};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
@@ -27,10 +26,9 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::sync::Arc;
 use zbus::zvariant;
 
-use crate::PortalResponse;
 use crate::app::CosmicPortal;
-use crate::fl;
 use crate::print::PrintResult;
+use crate::{PortalResponse, fl};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PrinterDiscovery;
