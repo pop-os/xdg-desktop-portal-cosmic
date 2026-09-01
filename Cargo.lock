@@ -1666,6 +1666,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpdb-rs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9b84034b8bfeab9180097820a2182b91d629b7f8a89e612a488cabfdbb0a415"
+dependencies = [
+ "futures-util",
+ "log",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "cpubits"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9237,6 +9251,7 @@ dependencies = [
  "cosmic-files",
  "cosmic-portal-config",
  "cosmic-protocols",
+ "cpdb-rs",
  "dirs 6.0.0",
  "futures",
  "gbm",
