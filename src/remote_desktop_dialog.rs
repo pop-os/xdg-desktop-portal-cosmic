@@ -401,6 +401,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
             &args.outputs,
             &args.toplevels,
             &args.capture_sources,
+            args.multiple,
             Msg::ActivateTab,
             Msg::SelectOutput,
             Msg::SelectToplevel,
