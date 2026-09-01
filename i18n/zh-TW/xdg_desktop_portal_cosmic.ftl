@@ -12,3 +12,6 @@ share-screen = 分享您的螢幕
 unknown-application = 未知應用程式
 output = 輸出
 window = 視窗
+allow-once = 允許一次
+always-allow = 始終允許
+deny = 拒絕
