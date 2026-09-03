@@ -22,6 +22,7 @@ cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-feature
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "32283d7" }
 futures = "0.3"
+getrandom = "0.3"
 image = "0.25"
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
 cosmic-portal-config = { path = "./cosmic-portal-config" }
@@ -53,7 +54,7 @@ serde.workspace = true
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.27.0"
-tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
+tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync", "time"] }
 wayland-client = { version = "0.31.14" }
 tracing = "0.1.44"
 tracing-journald = { version = "0.3.2", optional = true }

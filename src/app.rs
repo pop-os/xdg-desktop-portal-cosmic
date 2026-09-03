@@ -39,6 +39,8 @@ pub struct CosmicPortal {
     pub file_choosers: HashMap<window::Id, (file_chooser::Args, file_chooser::Dialog)>,
 
     pub screenshot_args: Option<screenshot::Args>,
+    pub screenshot_clipboard_in_flight: Option<u64>,
+    pub screenshot_generation: u64,
     pub screencast_args: Option<screencast_dialog::Args>,
     pub screencast_tab_model:
         widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
@@ -119,6 +121,8 @@ impl cosmic::Application for CosmicPortal {
                 access_args: Default::default(),
                 file_choosers: Default::default(),
                 screenshot_args: Default::default(),
+                screenshot_clipboard_in_flight: None,
+                screenshot_generation: 0,
                 screencast_args: Default::default(),
                 screencast_tab_model: Default::default(),
                 remote_desktop_args: Default::default(),
