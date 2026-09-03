@@ -298,6 +298,157 @@ impl<Msg> RectangleSelection<Msg> {
     }
 }
 
+fn draw_vertical_line(
+    renderer: &mut impl Renderer,
+    start: Point,
+    height: f32,
+    color: Color,
+    thickness: f32,
+) {
+    let bounds = Rectangle {
+        x: start.x,
+        y: start.y,
+        width: thickness,
+        height: height,
+    };
+
+    let quad = Quad {
+        bounds,
+        border: Border {
+            radius: 0.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    renderer.fill_quad(quad, color);
+}
+
+fn draw_horizontal_line(
+    renderer: &mut impl Renderer,
+    start: Point,
+    width: f32,
+    color: Color,
+    thickness: f32,
+) {
+    let bounds = Rectangle {
+        x: start.x,
+        y: start.y,
+        width: width,
+        height: thickness,
+    };
+
+    let quad = Quad {
+        bounds,
+        border: Border {
+            radius: 0.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+
+    renderer.fill_quad(quad, color);
+}
+
+fn draw_dashed_vertical_line(
+    renderer: &mut impl Renderer,
+    start: Point,
+    height: f32,
+    color: Color,
+    thickness: f32,
+    dash_length: f32,
+) {
+    if dash_length <= 0.0 || height <= 0.0 || thickness <= 0.0 {
+        return;
+    }
+
+    let mut y = start.y;
+    let end_y = start.y + height;
+    let gap_length = dash_length;
+
+    while y < end_y {
+        let dash_height = (end_y - y).min(dash_length);
+        draw_vertical_line(
+            renderer,
+            Point::new(start.x, y),
+            dash_height,
+            color,
+            thickness,
+        );
+        y += dash_length;
+
+        if y >= end_y {
+            break;
+        }
+
+        y += gap_length;
+    }
+}
+
+fn draw_dashed_horizontal_line(
+    renderer: &mut impl Renderer,
+    start: Point,
+    width: f32,
+    color: Color,
+    thickness: f32,
+    dash_length: f32,
+) {
+    if dash_length <= 0.0 || width <= 0.0 || thickness <= 0.0 {
+        return;
+    }
+
+    let mut x = start.x;
+    let end_x = start.x + width;
+    let gap_length = dash_length;
+
+    while x < end_x {
+        let dash_width = (end_x - x).min(dash_length);
+        draw_horizontal_line(
+            renderer,
+            Point::new(x, start.y),
+            dash_width,
+            color,
+            thickness,
+        );
+        x += dash_length;
+
+        if x >= end_x {
+            break;
+        }
+        x += gap_length;
+    }
+}
+
+fn draw_circle(
+    renderer: &mut impl Renderer,
+    x: f32,
+    y: f32,
+    diameter: f32,
+    color: Color,
+    theme: &cosmic::Theme,
+) {
+    let radius_s = theme.cosmic().radius_s();
+    let bounds = Rectangle::new(
+        Point::new(x - diameter / 2.0, y - diameter / 2.0),
+        Size::new(diameter, diameter),
+    );
+    let quad = Quad {
+        bounds,
+        border: Border {
+            radius: radius_s.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+    renderer.fill_quad(quad, color);
+}
+
 impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
     for RectangleSelection<Msg>
 {
@@ -551,11 +702,15 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
             ),
             clipped_inner_rect.size(),
         );
+
+        let thickness = 4.0;
+        let dash_length = 10.0;
+
         let quad = Quad {
             bounds: translated_clipped_inner_rect,
             border: Border {
                 radius: 0.0.into(),
-                width: 4.0,
+                width: thickness,
                 color: accent,
             },
             shadow: Shadow::default(),
@@ -563,8 +718,50 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
         };
         renderer.fill_quad(quad, Color::TRANSPARENT);
 
+        // left
+        draw_dashed_vertical_line(
+            renderer,
+            Point::new(clipped_inner_rect.x, clipped_inner_rect.y),
+            translated_clipped_inner_rect.height,
+            accent.inverse(),
+            thickness,
+            dash_length,
+        );
+        // right
+        draw_dashed_vertical_line(
+            renderer,
+            Point::new(
+                clipped_inner_rect.x + clipped_inner_rect.size().width - thickness,
+                clipped_inner_rect.y,
+            ),
+            translated_clipped_inner_rect.height,
+            accent.inverse(),
+            thickness,
+            dash_length,
+        );
+        // top
+        draw_dashed_horizontal_line(
+            renderer,
+            Point::new(clipped_inner_rect.x, clipped_inner_rect.y),
+            translated_clipped_inner_rect.width,
+            accent.inverse(),
+            thickness,
+            dash_length,
+        );
+        // bottom
+        draw_dashed_horizontal_line(
+            renderer,
+            Point::new(
+                clipped_inner_rect.x,
+                clipped_inner_rect.y + clipped_inner_rect.size().height - thickness,
+            ),
+            translated_clipped_inner_rect.width,
+            accent.inverse(),
+            thickness,
+            dash_length,
+        );
+
         // draw handles as quads with radius_s
-        let radius_s = cosmic.radius_s();
         for (x, y) in &[
             (inner_rect.x, inner_rect.y),
             (inner_rect.x + inner_rect.width, inner_rect.y),
@@ -579,24 +776,22 @@ impl<Msg: 'static + Clone> Widget<Msg, cosmic::Theme, cosmic::Renderer>
             }
             let translated_x = x - outer_rect.x;
             let translated_y = y - outer_rect.y;
-            let bounds = Rectangle::new(
-                Point::new(
-                    translated_x - CORNER_DIAMETER / 2.0,
-                    translated_y - CORNER_DIAMETER / 2.0,
-                ),
-                Size::new(CORNER_DIAMETER, CORNER_DIAMETER),
+            draw_circle(
+                renderer,
+                translated_x,
+                translated_y,
+                CORNER_DIAMETER,
+                accent,
+                theme,
             );
-            let quad = Quad {
-                bounds,
-                border: Border {
-                    radius: radius_s.into(),
-                    width: 0.0,
-                    color: Color::TRANSPARENT,
-                },
-                shadow: Shadow::default(),
-                snap: true,
-            };
-            renderer.fill_quad(quad, accent);
+            draw_circle(
+                renderer,
+                translated_x,
+                translated_y,
+                CORNER_DIAMETER / 4.0,
+                accent.inverse(),
+                theme,
+            );
         }
     }
 
