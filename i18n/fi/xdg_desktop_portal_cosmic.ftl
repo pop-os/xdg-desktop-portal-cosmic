@@ -12,3 +12,6 @@ save-to = Tallenna
     .clipboard = { save-to } leikepöydälle
     .pictures = { save-to } Kuvat-kansioon
     .documents = { save-to } Asiakirjat-kansioon
+allow-once = Salli kerran
+always-allow = Salli aina
+deny = Estä
