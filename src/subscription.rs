@@ -2,6 +2,7 @@
 
 use std::any::TypeId;
 use std::hash::Hash;
+use std::time::Duration;
 
 use cosmic::cosmic_theme::palette::Srgba;
 use cosmic::iced::Subscription;
@@ -28,6 +29,7 @@ pub enum Event {
     CancelScreencast(zvariant::ObjectPath<'static>),
     RemoteDesktop(crate::remote_desktop_dialog::Args),
     CancelRemoteDesktop(zvariant::ObjectPath<'static>),
+    InputCapture(crate::input_capture::CompSignal),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -105,9 +107,41 @@ pub(crate) async fn process_changes(
                     DBUS_PATH,
                     ScreenCast::new(wayland_helper.clone(), tx.clone()),
                 )?
+                .serve_at(
+                    DBUS_PATH,
+                    crate::input_capture::InputCapture::new(tx.clone()),
+                )?
                 .serve_at(DBUS_PATH, Settings::new())?
                 .build()
                 .await?;
+
+            let compositor_connection = connection.clone();
+            let compositor_tx = tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    if compositor_tx.is_closed() {
+                        break;
+                    }
+                    match crate::input_capture::watch_compositor(
+                        compositor_connection.clone(),
+                        compositor_tx.clone(),
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            tracing::debug!(
+                                "InputCapture compositor signal watcher ended; retrying"
+                            );
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                "InputCapture compositor signal watcher unavailable: {err}"
+                            );
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            });
 
             // Create name lost stream before requesting name
             let dbus = fdo::DBusProxy::new(&connection).await?;
@@ -158,6 +192,9 @@ pub(crate) async fn process_changes(
                         if let Err(err) = output.send(Event::CancelRemoteDesktop(handle)).await {
                             tracing::error!("Error sending remote desktop cancel: {:?}", err);
                         };
+                    }
+                    Event::InputCapture(signal) => {
+                        crate::input_capture::forward_signal(conn, signal).await?;
                     }
                     Event::Accent(a) => {
                         let object_server = conn.object_server();
