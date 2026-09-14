@@ -255,11 +255,7 @@ pub(crate) struct Args {
 }
 
 fn map_msg(id: window::Id, message: cosmic::Action<Msg>) -> cosmic::Action<AppMsg> {
-    match message {
-        cosmic::Action::App(msg) => cosmic::Action::App(AppMsg::FileChooser(id, msg)),
-        cosmic::Action::Cosmic(cosmic_message) => cosmic::Action::Cosmic(cosmic_message),
-        cosmic::Action::None => cosmic::Action::None,
-    }
+    message.map(move |msg| AppMsg::FileChooser(id, msg))
 }
 
 pub(crate) fn view(portal: &CosmicPortal, id: window::Id) -> cosmic::Element<'_, AppMsg> {
