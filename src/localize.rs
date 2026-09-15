@@ -41,3 +41,11 @@ pub fn localize() {
         tracing::error!("Error while loading language for Cosmic Portal {}", error);
     }
 }
+
+pub fn posix_locale() -> String {
+    let lang = LANGUAGE_LOADER.current_language();
+    match &lang.region {
+        Some(region) => format!("{}_{region}", lang.language),
+        None => lang.language.to_string(),
+    }
+}
