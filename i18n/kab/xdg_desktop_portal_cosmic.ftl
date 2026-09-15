@@ -1,4 +1,4 @@
-cancel = Sefsex
+cancel = Semmet
 output = Tasufeɣt
 share = Bḍu
 window = Asfaylu
