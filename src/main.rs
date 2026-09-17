@@ -15,6 +15,7 @@ mod app;
 mod buffer;
 mod documents;
 mod file_chooser;
+mod input_capture;
 mod localize;
 mod remote_desktop;
 mod remote_desktop_dialog;
@@ -335,6 +336,14 @@ impl Settings {
 }
 
 fn main() -> cosmic::iced::Result {
+    // reis exposes an opt-in raw EIS wire dump through REIS_DEBUG. This
+    // process handles input events, so never allow an inherited environment
+    // variable to enable that dump. main is still single-threaded here,
+    // which satisfies remove_var's safety requirement.
+    unsafe {
+        std::env::remove_var("REIS_DEBUG");
+    }
+
     let trace = tracing_subscriber::registry();
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::WARN.into())
