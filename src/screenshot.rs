@@ -2,6 +2,7 @@
 
 use cosmic::cosmic_config::CosmicConfigEntry;
 use cosmic::iced::clipboard::mime::AsMimeTypes;
+use cosmic::iced::core::clipboard::Kind;
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface;
@@ -20,6 +21,8 @@ use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
@@ -76,23 +79,64 @@ pub struct ScreenshotResult {
     uri: String,
 }
 
-struct ScreenshotBytes {
-    bytes: Vec<u8>,
+const SCREENSHOT_MIME_TYPE: &str = "image/png";
+const CLIPBOARD_VERIFY_MIME_PREFIX: &str = "application/x-cosmic-screenshot-verification";
+// Bounds retries between completed marker reads. The clipboard backend does not
+// currently expose a cancelable read operation.
+const CLIPBOARD_VERIFY_RETRY_WINDOW: Duration = Duration::from_millis(500);
+const CLIPBOARD_WRITE_RETRY_DELAY: Duration = Duration::from_millis(10);
+const CLIPBOARD_WRITE_MAX_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+#[derive(Clone)]
+pub(crate) struct ScreenshotBytes {
+    bytes: Arc<[u8]>,
+    marker: [u8; 16],
+    verification_mime: String,
 }
 
 impl ScreenshotBytes {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+    fn new(bytes: Vec<u8>) -> Option<Self> {
+        let mut marker = [0; 16];
+        if let Err(err) = getrandom::fill(&mut marker) {
+            tracing::error!("Failed to create screenshot clipboard marker: {err}");
+            return None;
+        }
+        let verification_mime = format!(
+            "{CLIPBOARD_VERIFY_MIME_PREFIX}-{:032x}",
+            u128::from_ne_bytes(marker)
+        );
+        Some(Self {
+            bytes: bytes.into(),
+            marker,
+            verification_mime,
+        })
+    }
+}
+
+impl std::fmt::Debug for ScreenshotBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScreenshotBytes")
+            .field("len", &self.bytes.len())
+            .finish()
     }
 }
 
 impl AsMimeTypes for ScreenshotBytes {
     fn available(&self) -> std::borrow::Cow<'static, [String]> {
-        Cow::Owned(vec!["image/png".to_string()])
+        Cow::Owned(vec![
+            SCREENSHOT_MIME_TYPE.to_string(),
+            self.verification_mime.clone(),
+        ])
     }
 
     fn as_bytes(&self, mime_type: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
-        Some(Cow::Owned(self.bytes.clone()))
+        if mime_type == SCREENSHOT_MIME_TYPE {
+            Some(Cow::Owned(self.bytes.to_vec()))
+        } else if mime_type == self.verification_mime {
+            Some(Cow::Owned(self.marker.to_vec()))
+        } else {
+            None
+        }
     }
 }
 
@@ -377,11 +421,68 @@ fn write_png<W: io::Write>(w: W, image: &RgbaImage) -> Result<(), png::EncodingE
 pub enum Msg {
     Capture,
     CaptureWithLocation(ImageSaveLocation),
+    ClipboardWritten {
+        data: ScreenshotBytes,
+        actual: Option<Vec<u8>>,
+        response: Option<(Sender<PortalResponse<ScreenshotResult>>, String)>,
+        attempt: u8,
+        retry_deadline: Instant,
+        generation: u64,
+        layer_ids: Vec<window::Id>,
+    },
     Cancel,
     Choice(Choice),
     OutputChanged(WlOutput),
     WindowChosen(String, usize),
     Location(usize),
+}
+
+fn read_clipboard_marker(mime_type: String) -> cosmic::Task<Option<Vec<u8>>> {
+    // The per-capture MIME type cannot match an unrelated previous selection,
+    // so a read attempted before our queued write becomes current fails without
+    // requesting that selection's potentially large payload.
+    cosmic::iced::runtime::task::oneshot(move |tx| {
+        cosmic::iced::runtime::Action::Clipboard(clipboard::Action::ReadData(
+            vec![mime_type],
+            tx,
+            Kind::Standard,
+        ))
+    })
+    .map(|data| data.map(|(bytes, _mime_type)| bytes))
+}
+
+fn write_clipboard_and_verify(
+    data: ScreenshotBytes,
+    response: Option<(Sender<PortalResponse<ScreenshotResult>>, String)>,
+    attempt: u8,
+    retry_deadline: Instant,
+    generation: u64,
+    layer_ids: Vec<window::Id>,
+) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
+    let verification_data = data.clone();
+    let verification_mime = data.verification_mime.clone();
+    let retry_delay = CLIPBOARD_WRITE_RETRY_DELAY
+        .saturating_mul(2_u32.saturating_pow(u32::from(attempt)))
+        .min(CLIPBOARD_WRITE_MAX_RETRY_DELAY);
+    clipboard::write_data(data)
+        // `write_data` only queues work for smithay-clipboard. Give its separate
+        // Wayland connection a chance to observe keyboard focus and install the
+        // selection before asking it to read the selection back.
+        .chain(cosmic::Task::perform(
+            tokio::time::sleep(retry_delay),
+            |_| cosmic::action::none(),
+        ))
+        .chain(read_clipboard_marker(verification_mime).map(move |actual| {
+            cosmic::action::app(crate::app::Msg::Screenshot(Msg::ClipboardWritten {
+                data: verification_data.clone(),
+                actual,
+                response: response.clone(),
+                attempt,
+                retry_deadline,
+                generation,
+                layer_ids: layer_ids.clone(),
+            }))
+        }))
 }
 
 #[derive(Debug, Clone)]
@@ -650,14 +751,19 @@ pub fn update_msg(
 ) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     match msg {
         Msg::Capture => {
-            let mut cmds: Vec<cosmic::Task<cosmic::Action<crate::app::Msg>>> = portal
-                .outputs
+            if portal.screenshot_clipboard_in_flight.is_some() {
+                tracing::debug!("Ignoring duplicate capture during clipboard verification");
+                return cosmic::Task::none();
+            }
+            let layer_ids: Vec<_> = portal.outputs.iter().map(|output| output.id).collect();
+            let close_tasks: Vec<cosmic::Task<cosmic::Action<crate::app::Msg>>> = layer_ids
                 .iter()
-                .map(|o| destroy_layer_surface(o.id))
+                .copied()
+                .map(destroy_layer_surface)
                 .collect();
             let Some(args) = portal.screenshot_args.take() else {
                 tracing::error!("Failed to find screenshot Args for Capture message.");
-                return cosmic::Task::batch(cmds);
+                return cosmic::Task::batch(close_tasks);
             };
             let outputs = portal.outputs.clone();
             let Args {
@@ -670,6 +776,7 @@ pub fn update_msg(
 
             let mut success = true;
             let image_path = Screenshot::get_img_path(location);
+            let mut clipboard_data = None;
 
             match choice {
                 Choice::Output(name) => {
@@ -680,7 +787,8 @@ pub fn update_msg(
                                 success = false;
                             })
                         {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                            clipboard_data = ScreenshotBytes::new(buffer);
+                            success = clipboard_data.is_some() || image_path.is_some();
                         }
                     } else {
                         tracing::error!("Failed to find output {}", name);
@@ -718,7 +826,8 @@ pub fn update_msg(
                                 success = false;
                             })
                         {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                            clipboard_data = ScreenshotBytes::new(buffer);
+                            success = clipboard_data.is_some() || image_path.is_some();
                         }
                     } else {
                         success = false;
@@ -736,7 +845,8 @@ pub fn update_msg(
                                 success = false;
                             })
                         {
-                            cmds.push(clipboard::write_data(ScreenshotBytes::new(buffer)));
+                            clipboard_data = ScreenshotBytes::new(buffer);
+                            success = clipboard_data.is_some() || image_path.is_some();
                         }
                     } else {
                         success = false;
@@ -747,24 +857,58 @@ pub fn update_msg(
                 }
             }
 
-            let response = if success && let Some(image_path) = image_path {
-                PortalResponse::Success(ScreenshotResult {
+            if success && let Some(data) = clipboard_data {
+                let response = if let Some(image_path) = image_path {
+                    let response = PortalResponse::Success(ScreenshotResult {
+                        uri: format!("file:///{}", image_path.display()),
+                    });
+                    tokio::spawn(async move {
+                        if let Err(err) = tx.send(response).await {
+                            tracing::error!("Failed to send screenshot event: {err}");
+                        }
+                    });
+                    None
+                } else {
+                    Some((tx, "clipboard:///".to_string()))
+                };
+
+                // smithay-clipboard stores data on a separate Wayland connection and silently
+                // skips the write if that connection has not observed keyboard focus. Keep the
+                // screenshot layers focused until the compositor offers our per-capture marker;
+                // only then is it safe to report clipboard success and close the layers.
+                let generation = portal.screenshot_generation;
+                portal.screenshot_clipboard_in_flight = Some(generation);
+                return write_clipboard_and_verify(
+                    data,
+                    response,
+                    0,
+                    Instant::now() + CLIPBOARD_VERIFY_RETRY_WINDOW,
+                    generation,
+                    layer_ids,
+                );
+            }
+
+            if success && let Some(image_path) = image_path {
+                tracing::warn!(
+                    "Screenshot saved without a clipboard copy: failed to create verification marker"
+                );
+                let response = PortalResponse::Success(ScreenshotResult {
                     uri: format!("file:///{}", image_path.display()),
-                })
-            } else if success && image_path.is_none() {
-                PortalResponse::Success(ScreenshotResult {
-                    uri: "clipboard:///".to_string(),
-                })
-            } else {
-                PortalResponse::Other
-            };
+                });
+                tokio::spawn(async move {
+                    if let Err(err) = tx.send(response).await {
+                        tracing::error!("Failed to send screenshot event: {err}");
+                    }
+                });
+                return cosmic::Task::batch(close_tasks);
+            }
 
             tokio::spawn(async move {
-                if let Err(err) = tx.send(response).await {
-                    tracing::error!("Failed to send screenshot event");
+                if let Err(err) = tx.send(PortalResponse::Other).await {
+                    tracing::error!("Failed to send screenshot event: {err}");
                 }
             });
-            cosmic::Task::batch(cmds)
+            cosmic::Task::batch(close_tasks)
         }
         Msg::CaptureWithLocation(location) => {
             if let Some(args) = portal.screenshot_args.as_mut() {
@@ -775,7 +919,84 @@ pub fn update_msg(
             }
             update_msg(portal, Msg::Capture)
         }
+        Msg::ClipboardWritten {
+            data,
+            actual,
+            response,
+            attempt,
+            retry_deadline,
+            generation,
+            layer_ids,
+        } => {
+            if portal.screenshot_clipboard_in_flight != Some(generation) {
+                tracing::warn!(
+                    generation,
+                    "Ignoring stale screenshot clipboard verification"
+                );
+                if let Some((tx, _uri)) = response {
+                    tokio::spawn(async move {
+                        if let Err(err) = tx.send(PortalResponse::Other).await {
+                            tracing::error!("Failed to send screenshot event: {err}");
+                        }
+                    });
+                }
+                return cosmic::Task::none();
+            }
+
+            if actual.is_some_and(|actual| actual.as_slice() == data.marker) {
+                portal.screenshot_clipboard_in_flight = None;
+                if let Some((tx, uri)) = response {
+                    tokio::spawn(async move {
+                        let response = PortalResponse::Success(ScreenshotResult { uri });
+                        if let Err(err) = tx.send(response).await {
+                            tracing::error!("Failed to send screenshot event: {err}");
+                        }
+                    });
+                }
+                let close_tasks = layer_ids.into_iter().map(destroy_layer_surface);
+                cosmic::Task::batch(close_tasks)
+            } else if Instant::now() < retry_deadline {
+                tracing::debug!(
+                    attempt,
+                    "Screenshot clipboard verification failed; retrying"
+                );
+                write_clipboard_and_verify(
+                    data,
+                    response,
+                    attempt.saturating_add(1),
+                    retry_deadline,
+                    generation,
+                    layer_ids,
+                )
+            } else {
+                portal.screenshot_clipboard_in_flight = None;
+                if response.is_some() {
+                    tracing::error!(
+                        attempt,
+                        "Failed to verify screenshot clipboard contents; not reporting success"
+                    );
+                } else {
+                    tracing::warn!(
+                        attempt,
+                        "Screenshot was saved, but its clipboard copy could not be verified"
+                    );
+                }
+                if let Some((tx, _uri)) = response {
+                    tokio::spawn(async move {
+                        if let Err(err) = tx.send(PortalResponse::Other).await {
+                            tracing::error!("Failed to send screenshot event: {err}");
+                        }
+                    });
+                }
+                let close_tasks = layer_ids.into_iter().map(destroy_layer_surface);
+                cosmic::Task::batch(close_tasks)
+            }
+        }
         Msg::Cancel => {
+            if portal.screenshot_clipboard_in_flight.is_some() {
+                tracing::debug!("Ignoring cancel during clipboard verification");
+                return cosmic::Task::none();
+            }
             let cmds = portal.outputs.iter().map(|o| destroy_layer_surface(o.id));
             let Some(args) = portal.screenshot_args.take() else {
                 tracing::error!("Failed to find screenshot Args for Cancel message.");
@@ -885,6 +1106,21 @@ pub fn update_args(
     portal: &mut CosmicPortal,
     args: Args,
 ) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
+    if let Some(generation) = portal.screenshot_clipboard_in_flight {
+        tracing::warn!(
+            generation,
+            "Rejecting screenshot request while clipboard verification is in flight"
+        );
+        let tx = args.tx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = tx.send(PortalResponse::Other).await {
+                tracing::error!("Failed to send screenshot event: {err}");
+            }
+        });
+        return cosmic::Task::none();
+    }
+    portal.screenshot_generation = portal.screenshot_generation.wrapping_add(1);
+
     let Args {
         handle,
         app_id,
@@ -957,7 +1193,14 @@ pub fn update_args(
                     let name = name.clone();
                     cosmic::surface::surface_task::<crate::app::Msg>(
                 cosmic::surface::action::simple_layer_shell::<crate::app::Msg>(
-                    Default::default,
+                    || cosmic::surface::action::LiveSettings {
+                        // Screenshot overlays cover the entire output, so surface-level rounded
+                        // corners are unnecessary. Explicit zero radii also remain valid before
+                        // the layer receives its configured size; a nonzero radius that exceeds
+                        // half the temporary dimensions is a fatal corner-radius protocol error.
+                        corners: Some(Default::default()),
+                        ..Default::default()
+                    },
                         move || {
                             SctkLayerSurfaceSettings {
                                     id,
