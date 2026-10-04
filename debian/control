@@ -23,5 +23,6 @@ Architecture: amd64 arm64
 Depends:
   ${misc:Depends},
   ${shlibs:Depends}
+Recommends: xdg-desktop-portal-gtk
 Provides: xdg-desktop-portal-backend
 Description: Cosmic backend for xdg-desktop-portal
