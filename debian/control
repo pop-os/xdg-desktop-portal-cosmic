@@ -22,7 +22,8 @@ Package: xdg-desktop-portal-cosmic
 Architecture: amd64 arm64
 Depends:
   ${misc:Depends},
-  ${shlibs:Depends}
+  ${shlibs:Depends},
+  xdg-desktop-portal
 Recommends: xdg-desktop-portal-gtk
 Provides: xdg-desktop-portal-backend
 Description: Cosmic backend for xdg-desktop-portal
