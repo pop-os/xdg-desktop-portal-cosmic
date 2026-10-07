@@ -270,11 +270,13 @@ pub(crate) fn update_tab_model(
 /// outputs laid out by display arrangement or the list of windows. Generic over
 /// the dialog's message type so both the screencast and remote-desktop dialogs
 /// can reuse it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sources_view<'a, M, FTab, FOut, FTop>(
     tab_model: &'a widget::segmented_button::Model<widget::segmented_button::SingleSelect>,
     outputs: &'a [(WlOutput, OutputInfo, Option<widget::image::Handle>)],
     toplevels: &'a [(ToplevelInfo, Option<String>)],
     selected: &'a CaptureSources,
+    multiple: bool,
     on_tab: FTab,
     on_output: FOut,
     on_toplevel: FTop,
@@ -350,7 +352,8 @@ where
                 labels,
                 selected_flags,
                 total,
-            );
+            )
+            .multiple(multiple);
             widget::container(arrangement)
                 .width(iced::Length::Fill)
                 .align_x(iced::Alignment::Center)
@@ -365,6 +368,7 @@ where
                 list = list.add(toplevel_button(
                     label,
                     is_selected,
+                    multiple,
                     icon,
                     on_toplevel(toplevel_info.foreign_toplevel.clone()),
                 ));
@@ -494,11 +498,13 @@ fn output_thumb_button<'a, M: Clone + 'static>(
     height: f32,
     msg: M,
 ) -> cosmic::Element<'a, M> {
+    let radius = cosmic::theme::active().cosmic().radius_s();
     let content: cosmic::Element<'a, M> = match image_handle {
         Some(image_handle) => widget::image::Image::new(image_handle.clone())
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .content_fit(iced::ContentFit::Fill)
+            .border_radius(radius)
             .into(),
         None => widget::container(widget::text(""))
             .width(iced::Length::Fill)
@@ -530,6 +536,7 @@ fn output_thumb_button<'a, M: Clone + 'static>(
 fn toplevel_button<'a, M: Clone + 'static>(
     label: &'a str,
     is_selected: bool,
+    multiple: bool,
     icon: IconSource,
     msg: M,
 ) -> cosmic::Element<'a, M> {
@@ -540,22 +547,22 @@ fn toplevel_button<'a, M: Clone + 'static>(
             ..Default::default()
         }
     }));
-    let button = widget::button::custom(text)
+    let content = widget::row::with_children(vec![
+        crate::widget::selection_indicator::SelectionIndicator::new(is_selected, multiple).into(),
+        icon.as_cosmic_icon().icon().size(24).into(),
+        text.into(),
+    ])
+    .spacing(12)
+    .align_y(iced::Alignment::Center);
+    widget::button::custom(content)
         .width(iced::Length::Fill)
         .padding(0)
         // TODO hover style? Etc.
         // .style(theme::style::Button::Text)
         .class(theme::style::Button::Transparent)
         .selected(is_selected)
-        .on_press(msg);
-    let mut children = Vec::new();
-    children.push(icon.as_cosmic_icon().icon().size(24).into());
-    children.push(button.into());
-    // TODO
-    if is_selected {
-        children.push(widget::text("✓").into());
-    }
-    widget::row::with_children(children).spacing(12).into()
+        .on_press(msg)
+        .into()
 }
 
 pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
@@ -579,6 +586,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
         &args.outputs,
         &args.toplevels,
         &args.capture_sources,
+        args.multiple,
         Msg::ActivateTab,
         Msg::SelectOutput,
         Msg::SelectToplevel,
