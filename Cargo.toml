@@ -32,11 +32,11 @@ pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", featur
 ] }
 png = "0.18"
 reis = { version = "0.7", features = ["tokio"] }
-rustix = { version = "1.1", features = ["fs", "time"] }
+rustix = { version = "1.1", features = ["event", "fs", "pipe", "time"] }
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
 zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"
-wayland-protocols = "0.32.12"
+wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
 dirs = "6.0.0"
 jiff = "0.2"
 url = "2.5"
@@ -53,7 +53,7 @@ serde.workspace = true
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.27.0"
-tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
+tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync", "time"] }
 wayland-client = { version = "0.31.14" }
 tracing = "0.1.44"
 tracing-journald = { version = "0.3.2", optional = true }

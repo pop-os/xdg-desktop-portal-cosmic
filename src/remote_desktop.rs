@@ -25,6 +25,7 @@ pub(crate) const PERSIST_UNTIL_REVOKED: u32 = 2;
 pub(crate) struct RemoteDesktopData {
     pub(crate) device_types: u32,
     pub(crate) clipboard_enabled: bool,
+    pub(crate) clipboard_session: Option<String>,
     pub(crate) persist_mode: u32,
     pub(crate) granted_persist_mode: u32,
     pub(crate) screen_cast_enabled: bool,
@@ -38,6 +39,7 @@ impl Default for RemoteDesktopData {
         Self {
             device_types: ALL_DEVICE_TYPES,
             clipboard_enabled: false,
+            clipboard_session: None,
             persist_mode: PERSIST_NONE,
             granted_persist_mode: PERSIST_NONE,
             screen_cast_enabled: false,
@@ -407,6 +409,9 @@ impl RemoteDesktop {
                 remote_desktop.stream_offsets = stream_offsets;
             }
 
+            if clipboard_enabled {
+                crate::clipboard::schedule_announce(connection.clone(), session_handle.to_string());
+            }
             PortalResponse::Success(StartResult {
                 devices: device_types,
                 clipboard_enabled,

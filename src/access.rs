@@ -36,6 +36,14 @@ pub(crate) struct AccessDialogOptions {
 #[zvariant(signature = "a{sv}")]
 pub struct AccessDialogResult {
     choices: Vec<(String, String)>,
+    pub(crate) always_allow: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfirmationResult {
+    Allow,
+    AlwaysAllow,
+    Deny,
 }
 
 pub struct Access {
@@ -96,6 +104,7 @@ impl Access {
                 choice_labels,
                 tx,
                 access_id: window::Id::NONE,
+                always_allow: false,
             }))
             .await
         {
@@ -109,9 +118,65 @@ impl Access {
     }
 }
 
+/// Ask the user for a simple allow/deny decision through the existing portal
+/// access dialog. InputCapture and the other privileged portal interfaces use
+/// the same COSMIC UI so that permission prompts have one consistent owner.
+pub(crate) async fn show_confirmation(
+    tx: &Sender<subscription::Event>,
+    handle: zvariant::ObjectPath<'static>,
+    app_id: &str,
+    parent_window: &str,
+    labels: ConfirmationLabels,
+) -> ConfirmationResult {
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(1);
+    let options = AccessDialogOptions {
+        modal: Some(true),
+        deny_label: Some(labels.deny),
+        grant_label: Some(labels.grant),
+        icon: Some(labels.icon),
+        choices: None,
+    };
+    let args = AccessDialogArgs {
+        handle,
+        app_id: app_id.to_string(),
+        parent_window: parent_window.to_string(),
+        title: labels.title,
+        subtitle: labels.subtitle,
+        body: labels.body,
+        options,
+        active_choices: HashMap::new(),
+        choice_labels: Vec::new(),
+        tx: response_tx,
+        access_id: window::Id::NONE,
+        always_allow: labels.always_allow,
+    };
+    if let Err(err) = tx.send(subscription::Event::Access(args)).await {
+        tracing::error!("Failed to send access confirmation dialog, {err}");
+        return ConfirmationResult::Deny;
+    }
+    match response_rx.recv().await {
+        Some(PortalResponse::Success(result)) if result.always_allow => {
+            ConfirmationResult::AlwaysAllow
+        }
+        Some(PortalResponse::Success(_)) => ConfirmationResult::Allow,
+        _ => ConfirmationResult::Deny,
+    }
+}
+
+pub(crate) struct ConfirmationLabels {
+    pub(crate) title: String,
+    pub(crate) subtitle: String,
+    pub(crate) body: String,
+    pub(crate) grant: String,
+    pub(crate) deny: String,
+    pub(crate) icon: String,
+    pub(crate) always_allow: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum Msg {
     Allow,
+    AlwaysAllow,
     Cancel,
     Choice(usize, usize),
 }
@@ -129,6 +194,7 @@ pub(crate) struct AccessDialogArgs {
     pub choice_labels: Vec<Vec<String>>,
     pub tx: Sender<PortalResponse<AccessDialogResult>>,
     pub access_id: window::Id,
+    pub always_allow: bool,
 }
 
 impl AccessDialogArgs {
@@ -229,20 +295,28 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     .on_press(Msg::Allow)
     .class(cosmic::theme::Button::Suggested);
 
-    let content = KeyboardWrapper::new(
-        widget::dialog()
-            .title(&args.title)
-            .body(&args.subtitle)
-            .control(control)
-            .icon(icon)
-            .secondary_action(cancel_button)
-            .primary_action(allow_button),
-        |key, _| match key {
-            Key::Named(Named::Enter) => Some(Msg::Allow),
-            Key::Named(Named::Escape) => Some(Msg::Cancel),
-            _ => None,
-        },
-    );
+    let always_allow_button = args
+        .always_allow
+        .then(|| button::text(fl!("always-allow")).on_press(Msg::AlwaysAllow));
+
+    let dialog = widget::dialog()
+        .title(&args.title)
+        .body(&args.subtitle)
+        .control(control)
+        .icon(icon)
+        .secondary_action(cancel_button)
+        .primary_action(allow_button);
+    let dialog = if let Some(button) = always_allow_button {
+        dialog.tertiary_action(button)
+    } else {
+        dialog
+    };
+
+    let content = KeyboardWrapper::new(dialog, |key, _| match key {
+        Key::Named(Named::Enter) => Some(Msg::Allow),
+        Key::Named(Named::Escape) => Some(Msg::Cancel),
+        _ => None,
+    });
 
     autosize(content, Id::new(args.app_id.clone()))
         .min_width(1.)
@@ -255,14 +329,18 @@ pub fn update_msg(
     msg: Msg,
 ) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     match msg {
-        Msg::Allow => {
+        Msg::Allow | Msg::AlwaysAllow => {
+            let always_allow = matches!(&msg, Msg::AlwaysAllow);
             let args = portal.access_args.take().unwrap();
             let tx = args.tx.clone();
             let choices = args.active_choices.clone().into_iter().collect();
             cosmic::Task::batch([
                 cosmic::task::future::<(), ()>(async move {
                     _ = tx
-                        .send(PortalResponse::Success(AccessDialogResult { choices }))
+                        .send(PortalResponse::Success(AccessDialogResult {
+                            choices,
+                            always_allow,
+                        }))
                         .await;
                 })
                 .discard(),

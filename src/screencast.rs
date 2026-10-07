@@ -182,6 +182,13 @@ impl SessionData {
         for thread in mem::take(&mut self.screencast_threads) {
             thread.stop();
         }
+        if let Some(path) = self
+            .remote_desktop
+            .as_ref()
+            .and_then(|remote| remote.clipboard_session.clone())
+        {
+            crate::clipboard::session_closed(&path);
+        }
         self.closed = true
     }
 }

@@ -187,6 +187,7 @@ impl cosmic::Application for CosmicPortal {
                 subscription::Event::CancelRemoteDesktop(handle) => {
                     remote_desktop_dialog::cancel(self, handle).map(cosmic::Action::App)
                 }
+                subscription::Event::InputCapture(_) => cosmic::iced::Task::none(),
                 subscription::Event::Config(config) => self.update(Msg::ConfigSubUpdate(config)),
                 subscription::Event::Accent(_)
                 | subscription::Event::IsDark(_)
