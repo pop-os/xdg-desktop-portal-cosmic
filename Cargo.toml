@@ -7,6 +7,7 @@ license = "GPL-3.0-or-later"
 [features]
 default = ["systemd"]
 wgpu = ["libcosmic/wgpu"]
+syslog = ["dep:syslog", "dep:tracing-log", "tracing/log-always"]
 systemd = ["dep:tracing-journald"]
 
 [workspace]
@@ -51,12 +52,14 @@ rust-embed = "8.11.0"
 cosmic-config.workspace = true
 serde.workspace = true
 spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
+syslog = { version = "7", optional = true }
 pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.27.0"
 tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.14" }
 tracing = "0.1.44"
 tracing-journald = { version = "0.3.2", optional = true }
+tracing-log = { version = "0.2", optional = true }
 tracing-subscriber = "0.3.23"
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
 
