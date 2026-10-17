@@ -53,6 +53,25 @@ fn spa_format_to_gbm(format: Id) -> Option<gbm::Format> {
     Some(FORMAT_MAP.iter().find(|(_, f)| *f == format)?.0)
 }
 
+// PipeWire collapses the intersection to `None` when only one modifier is shared,
+// e.g. LINEAR between a compositor and client rendering on different GPUs.
+fn modifier_candidates(choice: &spa::utils::ChoiceEnum<i64>) -> Option<Vec<gbm::Modifier>> {
+    let modifiers: Vec<i64> = match choice {
+        spa::utils::ChoiceEnum::None(modifier) => vec![*modifier],
+        spa::utils::ChoiceEnum::Enum {
+            default,
+            alternatives,
+        } => iter::once(default).chain(alternatives).copied().collect(),
+        _ => return None,
+    };
+    Some(
+        modifiers
+            .into_iter()
+            .map(|x| gbm::Modifier::from(x as u64))
+            .collect(),
+    )
+}
+
 fn shm_format(format: gbm::Format) -> Option<wl_shm::Format> {
     match format {
         gbm::Format::Argb8888 => Some(wl_shm::Format::Argb8888),
@@ -368,28 +387,15 @@ impl StreamData {
                 .flags()
                 .contains(pod::PodPropFlags::DONT_FIXATE)
             {
-                let spa::utils::ChoiceEnum::Enum {
-                    default,
-                    alternatives,
-                } = choice
-                else {
-                    // TODO How does C code deal with variants of choice?
+                let Some(modifiers) = modifier_candidates(choice) else {
                     tracing::error!("invalid modifier prop choice: {:?}", choice);
                     return;
                 };
 
-                tracing::info!(
-                    "modifier param-changed: (default: {}, alternatives: {:?})",
-                    default,
-                    alternatives
-                );
+                tracing::info!("modifier param-changed: {:?}", modifiers);
 
                 // Create temporary bo to get preferred modifier
                 // Similar to xdg-desktop-portal-wlr
-                let modifiers = iter::once(default)
-                    .chain(alternatives)
-                    .map(|x| gbm::Modifier::from(*x as u64))
-                    .collect::<Vec<_>>();
                 if let Some(modifier) = self.choose_modifier(self.format, &modifiers) {
                     self.modifier = Some(modifier);
 
@@ -413,6 +419,9 @@ impl StreamData {
                     return;
                 }
             }
+        } else {
+            // Client fell back to shm; a modifier from an earlier negotiation no longer applies.
+            self.modifier = None;
         }
 
         tracing::info!("modifier fixated. Setting other params.");
@@ -998,4 +1007,33 @@ fn format(
         id: spa_sys::SPA_PARAM_EnumFormat,
         properties,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_modifier_choice_is_a_candidate() {
+        assert_eq!(
+            modifier_candidates(&spa::utils::ChoiceEnum::None(0)),
+            Some(vec![gbm::Modifier::Linear])
+        );
+    }
+
+    #[test]
+    fn enum_modifier_choice_lists_default_first() {
+        let nvidia_block_linear = 0x0300_0000_0060_6010;
+        assert_eq!(
+            modifier_candidates(&spa::utils::ChoiceEnum::Enum {
+                default: nvidia_block_linear,
+                alternatives: vec![nvidia_block_linear, 0],
+            }),
+            Some(vec![
+                gbm::Modifier::from(nvidia_block_linear as u64),
+                gbm::Modifier::from(nvidia_block_linear as u64),
+                gbm::Modifier::Linear,
+            ])
+        );
+    }
 }
