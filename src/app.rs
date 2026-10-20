@@ -132,7 +132,10 @@ impl cosmic::Application for CosmicPortal {
             },
             get_layer_surface(SctkLayerSurfaceSettings {
                 id: dummy_id,
-                layer: wlr_layer::Layer::Bottom,
+                // Must be Top or Overlay: cosmic-comp's map_layer() only auto-grants
+                // keyboard focus to layers in that set, and this surface's sole purpose
+                // is to hold keyboard focus so wl_data_device::set_selection succeeds.
+                layer: wlr_layer::Layer::Overlay,
                 keyboard_interactivity: wlr_layer::KeyboardInteractivity::OnDemand,
                 input_zone: Some(Vec::new()),
                 anchor: wlr_layer::Anchor::empty(),
@@ -308,7 +311,7 @@ impl cosmic::Application for CosmicPortal {
                 self.dummy_id = window::Id::unique();
                 get_layer_surface(SctkLayerSurfaceSettings {
                     id: self.dummy_id,
-                    layer: wlr_layer::Layer::Bottom,
+                    layer: wlr_layer::Layer::Overlay,
                     keyboard_interactivity: wlr_layer::KeyboardInteractivity::OnDemand,
                     input_zone: Some(Vec::new()),
                     anchor: wlr_layer::Anchor::empty(),
