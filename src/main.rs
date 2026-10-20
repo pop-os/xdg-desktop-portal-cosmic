@@ -334,36 +334,55 @@ impl Settings {
     }
 }
 
-fn main() -> cosmic::iced::Result {
-    let trace = tracing_subscriber::registry();
+fn init_logging() {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::WARN.into())
         .from_env_lossy();
+    let trace = tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(env_filter);
+
+    // If systemd and syslog are both enabled, prefer systemd which should forward to a running
+    // syslog daemon anyway.
     #[cfg(feature = "systemd")]
     if let Ok(journald) = tracing_journald::layer() {
-        trace
-            .with(journald)
-            .with(fmt::layer())
-            .with(env_filter)
-            .try_init()
-            .unwrap();
+        trace.with(journald).try_init().unwrap();
     } else {
-        trace
-            .with(fmt::layer())
-            .with(env_filter)
-            .try_init()
-            .unwrap();
+        trace.try_init().unwrap();
         tracing::warn!("failed to connect to journald");
+    };
+
+    // The syslog feature enables tracing-subscriber/tracing-log which forwards tracing events to
+    // log. The syslog crate is registered as the process' logger which consumes the tracing events
+    // and forwards them to the syslog daemon. Roundabout, yes.
+    #[cfg(all(feature = "syslog", not(feature = "systemd")))]
+    {
+        let pid = rustix::process::getpid().as_raw_pid() as _;
+        let formatter = syslog::Formatter3164 {
+            facility: syslog::Facility::LOG_USER,
+            hostname: None,
+            process: "xdg-desktop-portal-cosmic".into(),
+            pid,
+        };
+        match syslog::unix(formatter) {
+            Ok(logger) => {
+                tracing::log::set_boxed_logger(Box::new(syslog::BasicLogger::new(logger)))
+                    .expect("failed to register syslog as the default logger");
+                tracing::subscriber::set_global_default(trace)
+                    .expect("failed to register tracing subscriber");
+            }
+            Err(e) => eprintln!("failed to connect to syslog: {e}"),
+        }
     }
-    #[cfg(not(feature = "systemd"))]
-    trace
-        .with(fmt::layer())
-        .with(env_filter)
-        .try_init()
-        .unwrap();
+
+    #[cfg(all(not(feature = "syslog"), not(feature = "systemd")))]
+    trace.try_init().unwrap();
 
     log_panics::init();
+}
 
+fn main() -> cosmic::iced::Result {
+    init_logging();
     localize::localize();
 
     app::run()
