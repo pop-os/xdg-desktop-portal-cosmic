@@ -1,0 +1,17 @@
+output = გამოტანა
+cancel = გაუქმება
+allow = დაშვება
+capture = სურათის გადაღება
+share = გაზიარება
+window = ფანჯარა
+choose-folder = საქაღალდის არჩევა
+unknown-application = უცნობი აპლიკაცია
+save-to = შენახვა
+    .clipboard = { save-to } ბუფერში
+    .pictures = { save-to } სურათებში
+    .documents = { save-to } დოკუმენტებში
+share-screen = გააზიარეთ თქვენი ეკრანი
+    .description = სისტემას უნდა, თქვენი ეკრანის შემცველობა გაუზიაროს აპლიკაციას "{ $app_name }". აირჩიეთ, რომელი ეკრანის, ან ფანჯრის გაზიარება გსურთ.
+deny = უარყოფა
+always-allow = ყოველთვის დაშვება
+allow-once = ერთხელ დაშვება
