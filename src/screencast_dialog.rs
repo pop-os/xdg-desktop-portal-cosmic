@@ -413,7 +413,11 @@ pub fn update_msg(
                 .toggle_toplevel(toplevel, args.multiple);
         }
         Msg::Share => {
-            if let Some(mut args) = portal.screencast_args.take() {
+            // Enter reaches this without going through the disabled button.
+            if let Some(mut args) = portal
+                .screencast_args
+                .take_if(|args| !args.capture_sources.is_empty())
+            {
                 let response = mem::take(&mut args.capture_sources);
                 args.send_response(Some(response));
                 return destroy_layer_surface(*SCREENCAST_ID);

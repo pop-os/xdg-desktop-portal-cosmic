@@ -52,6 +52,11 @@ impl PersistedCaptureSources {
     }
 
     fn to_capture_sources(&self, wayland_helper: &WaylandHelper) -> Option<CaptureSources> {
+        // An empty selection isn't a choice to restore: Ask the user again.
+        if self.outputs.is_empty() && self.toplevels.is_empty() {
+            return None;
+        }
+
         let mut outputs = Vec::new();
         for name in &self.outputs {
             outputs.push(wayland_helper.output_for_name(name)?);
