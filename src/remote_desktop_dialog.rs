@@ -254,10 +254,17 @@ pub enum Msg {
     Cancel,
 }
 
+/// A client using ScreenCast needs at least one source selected before it can be
+/// allowed. Otherwise it gets a session with no streams.
+fn can_allow(args: &Args) -> bool {
+    !args.screen_cast_enabled || !args.capture_sources.is_empty()
+}
+
 /// Grant the request and dismiss the dialog, persisting the consent unless the
 /// user picked "allow once".
 fn allow(portal: &mut CosmicPortal, once: bool) -> cosmic::Task<crate::app::Msg> {
-    if let Some(args) = portal.remote_desktop_args.take() {
+    // Enter reaches this without going through the disabled button.
+    if let Some(args) = portal.remote_desktop_args.take_if(|args| can_allow(args)) {
         let persist_mode = if once {
             PERSIST_NONE
         } else {
@@ -374,9 +381,11 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     let devices = widget::row::with_children(devices).spacing(spacing.space_l as f32);
 
     let deny_button = widget::button::standard(fl!("deny")).on_press(Msg::Cancel);
-    let allow_button = widget::button::standard(allow_label(args.persist_mode))
-        .class(cosmic::style::Button::Suggested)
-        .on_press(Msg::Allow);
+    let mut allow_button = widget::button::standard(allow_label(args.persist_mode))
+        .class(cosmic::style::Button::Suggested);
+    if can_allow(args) {
+        allow_button = allow_button.on_press(Msg::Allow);
+    }
 
     let mut dialog = widget::dialog()
         .title(fl!("remote-desktop"))
@@ -391,8 +400,11 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
         .primary_action(allow_button);
 
     if args.persist_mode != PERSIST_NONE {
-        dialog = dialog
-            .tertiary_action(widget::button::text(fl!("allow-once")).on_press(Msg::AllowOnce));
+        let mut allow_once_button = widget::button::text(fl!("allow-once"));
+        if can_allow(args) {
+            allow_once_button = allow_once_button.on_press(Msg::AllowOnce);
+        }
+        dialog = dialog.tertiary_action(allow_once_button);
     }
 
     if args.screen_cast_enabled {
