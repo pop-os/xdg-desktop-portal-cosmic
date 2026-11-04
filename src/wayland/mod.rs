@@ -332,10 +332,21 @@ impl WaylandHelper {
 
         event_queue.roundtrip(&mut data).unwrap();
 
+        // iced's event loop reads this connection's socket on its own thread and can queue events
+        // for this queue at any moment. A thread in `blocking_dispatch` isn't woken by that and can
+        // sleep with an event pending, so wait on the queue's waker, which that read wakes.
         thread::spawn(move || {
             loop {
-                match event_queue.blocking_dispatch(&mut data) {
-                    Ok(_) => {}
+                let result = futures::executor::block_on(std::future::poll_fn(|cx| {
+                    let result = event_queue.poll_dispatch_pending(cx, &mut data);
+                    // Handlers send requests, and this replaces the flush `blocking_dispatch` did.
+                    if let Err(err) = event_queue.flush() {
+                        tracing::error!("wayland flush: {}", err);
+                    }
+                    result
+                }));
+                match result {
+                    Ok(never) => match never {},
                     // The connection is still usable; skip the malformed message
                     Err(err @ DispatchError::BadMessage { .. }) => {
                         tracing::error!("wayland dispatch: {}", err);
