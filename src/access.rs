@@ -256,7 +256,9 @@ pub fn update_msg(
 ) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     match msg {
         Msg::Allow => {
-            let args = portal.access_args.take().unwrap();
+            let Some(args) = portal.access_args.take() else {
+                return cosmic::Task::none();
+            };
             let tx = args.tx.clone();
             let choices = args.active_choices.clone().into_iter().collect();
             cosmic::Task::batch([
@@ -270,7 +272,9 @@ pub fn update_msg(
             ])
         }
         Msg::Cancel => {
-            let args = portal.access_args.take().unwrap();
+            let Some(args) = portal.access_args.take() else {
+                return cosmic::Task::none();
+            };
             let tx = args.tx.clone();
             cosmic::Task::batch([
                 cosmic::task::future::<(), ()>(async move {
@@ -283,7 +287,9 @@ pub fn update_msg(
             ])
         }
         Msg::Choice(i, j) => {
-            let args = portal.access_args.as_mut().unwrap();
+            let Some(args) = portal.access_args.as_mut() else {
+                return cosmic::Task::none();
+            };
             if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i))
                 && let Some((option_id, _)) = choice.2.get(j)
             {
