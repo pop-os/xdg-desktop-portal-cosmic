@@ -110,6 +110,7 @@ impl cosmic::Application for CosmicPortal {
         }: Self::Flags,
     ) -> (Self, cosmic::iced::Task<cosmic::Action<Self::Message>>) {
         core.set_app_type(cosmic::core::AppType::System);
+        core.set_auto_corner_radius(core.auto_corner_radius() & !cosmic::core::Auto::System);
         let dummy_id = window::Id::unique();
         (
             Self {
