@@ -26,10 +26,9 @@ image = "0.25"
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
 cosmic-portal-config = { path = "./cosmic-portal-config" }
 memmap2 = "0.9.10"
-# pipewire = { git = "https://github.com/pop-os/pipewire-rs" }
-pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs", features = [
-    "v0_3_33",
-] }
+pipewire = { version = "0.10", features = ["v0_3_33"] }
+pipewire-sys = "0.10"
+spa_sys = { package = "libspa-sys", version = "0.10" }
 png = "0.18"
 reis = { version = "0.7", features = ["tokio"] }
 rustix = { version = "1.1", features = ["fs", "time"] }
@@ -50,8 +49,6 @@ rust-embed = "8.11.0"
 # Workspace
 cosmic-config.workspace = true
 serde.workspace = true
-spa_sys = { package = "libspa-sys", git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
-pipewire-sys = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs" }
 tempfile = "3.27.0"
 tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
 wayland-client = { version = "0.31.14" }
