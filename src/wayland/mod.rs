@@ -690,8 +690,7 @@ impl OutputHandler for AppData {
         self.wayland_helper.set_output_info(&output, None);
 
         let mut outputs = self.wayland_helper.inner.outputs.lock().unwrap();
-        let idx = outputs.iter().position(|x| x == &output).unwrap();
-        outputs.remove(idx);
+        outputs.retain(|x| x != &output);
         self.update_output_toplevels();
     }
 }
