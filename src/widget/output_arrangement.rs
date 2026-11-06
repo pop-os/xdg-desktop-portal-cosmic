@@ -13,6 +13,8 @@ use cosmic::iced::core::{
 };
 use cosmic::{Element, Renderer};
 
+const FOCUS_GAP: f32 = 2.0;
+const FOCUS_WIDTH: f32 = 1.0;
 const LABEL_BAR_MIN: f32 = 14.0;
 const LABEL_BAR_MAX: f32 = 24.0;
 
@@ -23,6 +25,7 @@ pub struct OutputArrangement<'a, Msg> {
     labels: Vec<String>,
     selected: Vec<bool>,
     size: Size,
+    multiple: bool,
 }
 
 impl<'a, Msg> OutputArrangement<'a, Msg> {
@@ -44,7 +47,15 @@ impl<'a, Msg> OutputArrangement<'a, Msg> {
             labels,
             selected,
             size,
+            multiple: false,
         }
+    }
+
+    /// Mark the outputs with checkboxes rather than radio buttons, for when the
+    /// app accepts more than one source.
+    pub fn multiple(mut self, multiple: bool) -> Self {
+        self.multiple = multiple;
+        self
     }
 }
 
@@ -189,23 +200,23 @@ impl<Msg: Clone> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, 
                 );
             }
 
-            // Focus ring for the keyboard-focused output, inset so it reads as
-            // distinct from the selection border.
+            // Focus ring for the keyboard-focused output. Outside the thumbnail,
+            // as a focused button draws it
             if let Some(c_layout) = focused.and_then(|index| layout.children().nth(index)) {
                 let bounds = c_layout.bounds();
-                let inset = 3.0;
+                let offset = FOCUS_GAP + FOCUS_WIDTH;
                 let ring = Rectangle {
-                    x: bounds.x + inset,
-                    y: bounds.y + inset,
-                    width: (bounds.width - inset * 2.0).max(1.0),
-                    height: (bounds.height - inset * 2.0).max(1.0),
+                    x: bounds.x - offset,
+                    y: bounds.y - offset,
+                    width: bounds.width + offset * 2.0,
+                    height: bounds.height + offset * 2.0,
                 };
                 renderer.fill_quad(
                     Quad {
                         bounds: ring,
                         border: Border {
                             color: Color::from(accent),
-                            width: 2.0,
+                            width: FOCUS_WIDTH,
                             radius: radius.into(),
                         },
                         shadow: Default::default(),
@@ -277,6 +288,16 @@ impl<Msg: Clone> Widget<Msg, cosmic::Theme, Renderer> for OutputArrangement<'_, 
                     },
                     Color::WHITE,
                     bar,
+                );
+            }
+
+            for (c_layout, &is_selected) in layout.children().zip(self.selected.iter()) {
+                crate::widget::selection_indicator::draw_badge(
+                    renderer,
+                    theme,
+                    c_layout.bounds(),
+                    is_selected,
+                    self.multiple,
                 );
             }
         });
