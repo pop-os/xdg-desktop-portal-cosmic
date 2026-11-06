@@ -16,6 +16,8 @@ mod buffer;
 mod documents;
 mod file_chooser;
 mod localize;
+mod print;
+mod print_dialog;
 mod remote_desktop;
 mod remote_desktop_dialog;
 mod remote_desktop_ei;
