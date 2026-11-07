@@ -26,7 +26,6 @@ use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
-use zbus::zvariant;
 
 pub static SCREENCAST_ID: LazyLock<window::Id> = LazyLock::new(window::Id::unique);
 pub static SCREENCAST_WIDGET_ID: LazyLock<widget::Id> =
@@ -34,7 +33,7 @@ pub static SCREENCAST_WIDGET_ID: LazyLock<widget::Id> =
 
 pub async fn hide_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
-    session_handle: &zvariant::ObjectPath<'_>,
+    session_handle: &zbus::ObjectPath<'_>,
 ) {
     let _ = subscription_tx
         .send(crate::subscription::Event::CancelScreencast(
@@ -45,7 +44,7 @@ pub async fn hide_screencast_prompt(
 
 pub async fn show_screencast_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
-    session_handle: &zvariant::ObjectPath<'_>,
+    session_handle: &zbus::ObjectPath<'_>,
     app_id: String,
     multiple: bool,
     source_types: BitFlags<SourceType>,
@@ -159,7 +158,7 @@ pub(crate) enum Tab {
 
 #[derive(Debug, Clone)]
 pub struct Args {
-    session_handle: zvariant::ObjectPath<'static>,
+    session_handle: zbus::ObjectPath<'static>,
     multiple: bool,
     source_types: BitFlags<SourceType>,
     outputs: Vec<(WlOutput, OutputInfo, Option<widget::image::Handle>)>,
@@ -458,7 +457,7 @@ pub fn update_args(
 
 pub fn cancel(
     portal: &mut CosmicPortal,
-    session_handle: zvariant::ObjectPath<'static>,
+    session_handle: zbus::ObjectPath<'static>,
 ) -> cosmic::Task<cosmic::Action<crate::app::Msg>> {
     if portal
         .screencast_args

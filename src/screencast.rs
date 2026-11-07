@@ -6,7 +6,6 @@ use futures::stream::{FuturesOrdered, StreamExt};
 use std::collections::HashMap;
 use std::mem;
 use tokio::sync::mpsc::Sender;
-use zbus::zvariant;
 
 use crate::remote_desktop::RemoteDesktopData;
 use crate::screencast_dialog::{self, CaptureSources};
@@ -80,36 +79,33 @@ impl PersistedCaptureSources {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, zvariant::Type)]
-#[zvariant(signature = "(suv)")]
+#[derive(Debug, serde::Serialize, serde::Deserialize, zbus::Type)]
+#[zbus(signature = "(suv)")]
 pub(crate) struct RestoreData {
     vendor: String,
     version: u32,
-    data: zvariant::OwnedValue,
+    data: zbus::OwnedVariant,
 }
 
 impl RestoreData {
     /// Wrap an implementation-private structure as a `("COSMIC", 1, v)` blob.
-    pub(crate) fn cosmic_v1(data: zvariant::Structure) -> Self {
+    pub(crate) fn cosmic_v1(data: zbus::Structure) -> Self {
         RestoreData {
             vendor: "COSMIC".to_string(),
             version: 1,
-            data: zvariant::Value::from(data).try_to_owned().unwrap(),
+            data: zbus::Variant::from(data).try_to_owned().unwrap(),
         }
     }
 
     /// Return the private payload if this is a `("COSMIC", 1, _)` blob.
-    pub(crate) fn cosmic_v1_data(&self) -> Option<&zvariant::OwnedValue> {
+    pub(crate) fn cosmic_v1_data(&self) -> Option<&zbus::OwnedVariant> {
         ((&*self.vendor, self.version) == ("COSMIC", 1)).then_some(&self.data)
     }
 }
 
 impl From<PersistedCaptureSources> for RestoreData {
     fn from(sources: PersistedCaptureSources) -> RestoreData {
-        RestoreData::cosmic_v1(zvariant::Structure::from((
-            sources.outputs,
-            sources.toplevels,
-        )))
+        RestoreData::cosmic_v1(zbus::Structure::from((sources.outputs, sources.toplevels)))
     }
 }
 
@@ -117,7 +113,7 @@ impl TryFrom<&RestoreData> for PersistedCaptureSources {
     type Error = ();
     fn try_from(restore_data: &RestoreData) -> Result<Self, ()> {
         let data = restore_data.cosmic_v1_data().ok_or(())?;
-        let structure = zvariant::Structure::try_from(&**data).map_err(|_| ())?;
+        let structure = zbus::Structure::try_from(&**data).map_err(|_| ())?;
         let (outputs, toplevels) = structure.try_into().map_err(|_| ())?;
         Ok(PersistedCaptureSources { outputs, toplevels })
     }
@@ -125,8 +121,8 @@ impl TryFrom<&RestoreData> for PersistedCaptureSources {
 
 // TODO TryFrom
 
-#[derive(zvariant::DeserializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::DeserializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 struct SelectSourcesOptions {
     // Default: monitor
     types: Option<u32>,
@@ -138,8 +134,8 @@ struct SelectSourcesOptions {
     persist_mode: Option<u32>,
 }
 
-#[derive(Clone, zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(Clone, zbus::SerializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 pub struct StreamProps {
     position: Option<(i32, i32)>,
     size: (i32, i32),
@@ -156,8 +152,8 @@ impl StreamProps {
     }
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::SerializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 struct StartResult {
     streams: Vec<(u32, StreamProps)>,
     persist_mode: Option<u32>,
@@ -207,7 +203,7 @@ pub(crate) async fn capture(
     connection: &zbus::Connection,
     wayland_helper: &WaylandHelper,
     tx: &Sender<subscription::Event>,
-    session_handle: &zvariant::ObjectPath<'_>,
+    session_handle: &zbus::ObjectPath<'_>,
     app_id: String,
 ) -> CaptureOutcome {
     let Some(interface) = crate::session_interface::<SessionData>(connection, session_handle).await
@@ -258,7 +254,7 @@ pub(crate) async fn capture(
 pub(crate) async fn capture_from_sources(
     connection: &zbus::Connection,
     wayland_helper: &WaylandHelper,
-    session_handle: &zvariant::ObjectPath<'_>,
+    session_handle: &zbus::ObjectPath<'_>,
     capture_sources: CaptureSources,
 ) -> CaptureOutcome {
     let Some(interface) = crate::session_interface::<SessionData>(connection, session_handle).await
@@ -392,11 +388,11 @@ impl ScreenCast {
     async fn create_session(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
-        session_handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
+        session_handle: zbus::ObjectPath<'_>,
         app_id: String,
-        options: HashMap<String, zvariant::OwnedValue>,
-    ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
+        options: HashMap<String, zbus::OwnedVariant>,
+    ) -> PortalResponse<HashMap<String, zbus::OwnedVariant>> {
         // TODO: handle
         let session_data = SessionData::default();
         connection
@@ -413,11 +409,11 @@ impl ScreenCast {
     async fn select_sources(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
-        session_handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
+        session_handle: zbus::ObjectPath<'_>,
         app_id: String,
         options: SelectSourcesOptions,
-    ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
+    ) -> PortalResponse<HashMap<String, zbus::OwnedVariant>> {
         // TODO: Handle other options
         match crate::session_interface::<SessionData>(connection, &session_handle).await {
             Some(interface) => {
@@ -458,11 +454,11 @@ impl ScreenCast {
     async fn start(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
-        session_handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
+        session_handle: zbus::ObjectPath<'_>,
         app_id: String,
         parent_window: String,
-        options: HashMap<String, zvariant::OwnedValue>,
+        options: HashMap<String, zbus::OwnedVariant>,
     ) -> PortalResponse<StartResult> {
         let on_cancel = || screencast_dialog::hide_screencast_prompt(&self.tx, &session_handle);
         Request::run(connection, &handle, on_cancel, async {

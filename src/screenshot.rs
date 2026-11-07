@@ -23,7 +23,6 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::Sender;
 
 use wayland_client::protocol::wl_output::WlOutput;
-use zbus::zvariant;
 
 use crate::app::{CosmicPortal, OutputState};
 use crate::config::screenshot::ImageSaveLocation;
@@ -59,8 +58,8 @@ impl ScreenshotImage {
     }
 }
 
-#[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::DeserializeDict, zbus::Type, Clone, Debug)]
+#[zbus(signature = "a{sv}")]
 pub struct ScreenshotOptions {
     modal: Option<bool>,
     interactive: Option<bool>,
@@ -70,8 +69,8 @@ pub struct ScreenshotOptions {
     choose_destination: Option<bool>,
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::SerializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 pub struct ScreenshotResult {
     uri: String,
 }
@@ -96,8 +95,8 @@ impl AsMimeTypes for ScreenshotBytes {
     }
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::SerializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 struct PickColorResult {
     color: (f64, f64, f64), // (ddd)
 }
@@ -415,7 +414,7 @@ pub enum Action {
 
 #[derive(Clone, Debug)]
 pub struct Args {
-    pub handle: zvariant::ObjectPath<'static>,
+    pub handle: zbus::ObjectPath<'static>,
     pub app_id: String,
     pub parent_window: String,
     pub options: ScreenshotOptions,
@@ -439,7 +438,7 @@ impl Screenshot {
     async fn screenshot(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
         options: ScreenshotOptions,
@@ -567,10 +566,10 @@ impl Screenshot {
 
     async fn pick_color(
         &self,
-        handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
-        option: HashMap<String, zvariant::Value<'_>>,
+        option: HashMap<String, zbus::Variant<'_>>,
     ) -> PortalResponse<PickColorResult> {
         // TODO create handle
         // XXX implement

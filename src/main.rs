@@ -6,7 +6,6 @@ use tracing::metadata::LevelFilter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 use zbus::object_server::{InterfaceRef, SignalEmitter};
-use zbus::zvariant::{self, OwnedValue};
 
 pub use cosmic_portal_config as config;
 
@@ -34,26 +33,26 @@ const PORTAL_RESPONSE_SUCCESS: u32 = 0;
 const PORTAL_RESPONSE_CANCELLED: u32 = 1;
 const PORTAL_RESPONSE_OTHER: u32 = 2;
 
-#[derive(zvariant::Type)]
-#[zvariant(signature = "(ua{sv})")]
-enum PortalResponse<T: zvariant::Type + serde::Serialize> {
+#[derive(zbus::Type)]
+#[zbus(signature = "(ua{sv})")]
+enum PortalResponse<T: zbus::Type + serde::Serialize> {
     Success(T),
     Cancelled,
     Other,
 }
 
-impl<T: zvariant::Type + serde::Serialize> serde::Serialize for PortalResponse<T> {
+impl<T: zbus::Type + serde::Serialize> serde::Serialize for PortalResponse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Self::Success(res) => (PORTAL_RESPONSE_SUCCESS, res).serialize(serializer),
             Self::Cancelled => (
                 PORTAL_RESPONSE_CANCELLED,
-                HashMap::<String, zvariant::Value>::new(),
+                HashMap::<String, zbus::Variant>::new(),
             )
                 .serialize(serializer),
             Self::Other => (
                 PORTAL_RESPONSE_OTHER,
-                HashMap::<String, zvariant::Value>::new(),
+                HashMap::<String, zbus::Variant>::new(),
             )
                 .serialize(serializer),
         }
@@ -72,12 +71,12 @@ impl Request {
 impl Request {
     async fn run<T, DropFut, F, Fut>(
         connection: &zbus::Connection,
-        handle: &zvariant::ObjectPath<'_>,
+        handle: &zbus::ObjectPath<'_>,
         on_cancel: F,
         task: Fut,
     ) -> PortalResponse<T>
     where
-        T: zvariant::Type + serde::Serialize,
+        T: zbus::Type + serde::Serialize,
         DropFut: Future<Output = ()>,
         F: FnOnce() -> DropFut,
         Fut: Future<Output = PortalResponse<T>>,
@@ -119,7 +118,7 @@ impl<T: Send + Sync + 'static> Session<T> {
 
 #[zbus::interface(name = "org.freedesktop.impl.portal.Session")]
 impl<T: Send + Sync + 'static> Session<T> {
-    async fn close(&mut self, #[zbus(signal_context)] signal_ctxt: SignalEmitter<'_>) {
+    async fn close(&mut self, #[zbus(signal_emitter)] signal_ctxt: SignalEmitter<'_>) {
         // XXX error?
         let _ = self.closed(&signal_ctxt).await;
         let _ = signal_ctxt
@@ -157,7 +156,7 @@ impl<Data: Send + Sync + 'static> std::ops::DerefMut for Session<Data> {
 
 async fn session_interface<Data: Send + Sync + 'static>(
     connection: &zbus::Connection,
-    session_handle: &zvariant::ObjectPath<'_>,
+    session_handle: &zbus::ObjectPath<'_>,
 ) -> Option<InterfaceRef<Session<Data>>> {
     connection
         .object_server()
@@ -186,7 +185,7 @@ pub enum Contrast {
     High,
 }
 
-#[derive(Debug, Clone, Copy, zvariant::Value, zvariant::OwnedValue)]
+#[derive(Debug, Clone, Copy, zbus::Variant, zbus::OwnedVariant)]
 struct Color {
     red: f64,
     green: f64,
@@ -240,7 +239,7 @@ impl Settings {
 #[zbus::interface(name = "org.freedesktop.impl.portal.Settings")]
 impl Settings {
     /// Read method (deprecated)
-    async fn read(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zvariant::OwnedValue> {
+    async fn read(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zbus::OwnedVariant> {
         self.read_one(namespace, key).await
     }
 
@@ -248,7 +247,7 @@ impl Settings {
     async fn read_all(
         &self,
         namespaces: Vec<&str>,
-    ) -> HashMap<String, HashMap<String, OwnedValue>> {
+    ) -> HashMap<String, HashMap<String, zbus::OwnedVariant>> {
         let mut map = HashMap::new();
 
         let all_namespaces: &[&str] = &[APPEARANCE_NAMESPACE, GNOME_DESKTOP_INTERFACE_NAMESPACE];
@@ -266,13 +265,13 @@ impl Settings {
                     let mut inner = HashMap::new();
                     inner.insert(
                         COLOR_SCHEME_KEY.to_string(),
-                        OwnedValue::from(self.color_scheme as u32),
+                        zbus::OwnedVariant::from(self.color_scheme as u32),
                     );
                     inner.insert(
                         CONTRAST_KEY.to_string(),
-                        OwnedValue::from(self.contrast as u32),
+                        zbus::OwnedVariant::from(self.contrast as u32),
                     );
-                    if let Ok(value) = OwnedValue::try_from(Color {
+                    if let Ok(value) = zbus::OwnedVariant::try_from(Color {
                         red: self.accent.red,
                         green: self.accent.green,
                         blue: self.accent.blue,
@@ -285,7 +284,7 @@ impl Settings {
                     let mut inner = HashMap::new();
                     inner.insert(
                         TEXT_SCALING_FACTOR_KEY.to_string(),
-                        OwnedValue::from(1.0_f64),
+                        zbus::OwnedVariant::from(1.0_f64),
                     );
                     map.insert(GNOME_DESKTOP_INTERFACE_NAMESPACE.to_string(), inner);
                 }
@@ -296,20 +295,22 @@ impl Settings {
     }
 
     /// ReadOne method
-    async fn read_one(&self, namespace: &str, key: &str) -> zbus::fdo::Result<OwnedValue> {
+    async fn read_one(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zbus::OwnedVariant> {
         match (namespace, key) {
             (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => {
-                Ok(OwnedValue::from(self.color_scheme as u32))
+                Ok(zbus::OwnedVariant::from(self.color_scheme as u32))
             }
-            (APPEARANCE_NAMESPACE, CONTRAST_KEY) => Ok(OwnedValue::from(self.contrast as u32)),
-            (APPEARANCE_NAMESPACE, ACCENT_COLOR_KEY) => OwnedValue::try_from(Color {
+            (APPEARANCE_NAMESPACE, CONTRAST_KEY) => {
+                Ok(zbus::OwnedVariant::from(self.contrast as u32))
+            }
+            (APPEARANCE_NAMESPACE, ACCENT_COLOR_KEY) => zbus::OwnedVariant::try_from(Color {
                 red: self.accent.red,
                 green: self.accent.green,
                 blue: self.accent.blue,
             })
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string())),
             (GNOME_DESKTOP_INTERFACE_NAMESPACE, TEXT_SCALING_FACTOR_KEY) => {
-                Ok(OwnedValue::from(1.0_f64))
+                Ok(zbus::OwnedVariant::from(1.0_f64))
             }
             _ => Err(zbus::fdo::Error::Failed(
                 "Unknown namespace or key".to_string(),
@@ -324,7 +325,7 @@ impl Settings {
         _signal_ctxt: &SignalEmitter<'_>,
         namespace: &str,
         key: &str,
-        value: zvariant::Value<'_>,
+        value: zbus::Variant<'_>,
     ) -> zbus::Result<()>;
 
     /// version property
