@@ -9,7 +9,6 @@ use remote_desktop_ei::{Command, EiSender};
 use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 use tokio::sync::mpsc::Sender;
-use zbus::zvariant;
 
 // Device types, as defined by the RemoteDesktop portal spec.
 pub(crate) const DEVICE_KEYBOARD: u32 = 1;
@@ -58,7 +57,7 @@ struct PersistedRemoteDesktop {
 
 impl From<PersistedRemoteDesktop> for RestoreData {
     fn from(p: PersistedRemoteDesktop) -> RestoreData {
-        RestoreData::cosmic_v1(zvariant::Structure::from((
+        RestoreData::cosmic_v1(zbus::Structure::from((
             p.device_types,
             p.clipboard_enabled,
             p.screen_cast_enabled,
@@ -72,7 +71,7 @@ impl TryFrom<&RestoreData> for PersistedRemoteDesktop {
     type Error = ();
     fn try_from(restore_data: &RestoreData) -> Result<Self, ()> {
         let data = restore_data.cosmic_v1_data().ok_or(())?;
-        let structure = zvariant::Structure::try_from(&**data).map_err(|_| ())?;
+        let structure = zbus::Structure::try_from(&**data).map_err(|_| ())?;
         let (device_types, clipboard_enabled, screen_cast_enabled, outputs, toplevels) =
             structure.try_into().map_err(|_| ())?;
         Ok(PersistedRemoteDesktop {
@@ -84,8 +83,8 @@ impl TryFrom<&RestoreData> for PersistedRemoteDesktop {
     }
 }
 
-#[derive(zvariant::DeserializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::DeserializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 struct SelectDevicesOptions {
     // Default: all
     types: Option<u32>,
@@ -94,8 +93,8 @@ struct SelectDevicesOptions {
     persist_mode: Option<u32>,
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::SerializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 struct StartResult {
     devices: u32,
     clipboard_enabled: bool,
@@ -110,7 +109,7 @@ struct StartResult {
     default_path = "/com/system76/CosmicComp/Ei"
 )]
 trait CosmicCompEi {
-    fn get_sender_socket(&self, device_types: u32) -> zbus::Result<zvariant::OwnedFd>;
+    fn get_sender_socket(&self, device_types: u32) -> zbus::Result<zbus::OwnedFd>;
 }
 
 pub struct RemoteDesktop {
@@ -126,7 +125,7 @@ impl RemoteDesktop {
     async fn ei_sender(
         &self,
         connection: &zbus::Connection,
-        session_handle: &zvariant::ObjectPath<'_>,
+        session_handle: &zbus::ObjectPath<'_>,
     ) -> Option<EiSender> {
         let interface = crate::session_interface::<SessionData>(connection, session_handle).await?;
 
@@ -167,7 +166,7 @@ impl RemoteDesktop {
     async fn stream_offset(
         &self,
         connection: &zbus::Connection,
-        session_handle: &zvariant::ObjectPath<'_>,
+        session_handle: &zbus::ObjectPath<'_>,
         stream: u32,
     ) -> (i32, i32) {
         let Some(interface) =
@@ -191,7 +190,7 @@ impl RemoteDesktop {
     async fn notify(
         &self,
         connection: &zbus::Connection,
-        session_handle: &zvariant::ObjectPath<'_>,
+        session_handle: &zbus::ObjectPath<'_>,
         command: Command,
     ) {
         if let Some(sender) = self.ei_sender(connection, session_handle).await {
@@ -206,11 +205,11 @@ impl RemoteDesktop {
     async fn create_session(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
-        session_handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
+        session_handle: zbus::ObjectPath<'_>,
         app_id: String,
-        options: HashMap<String, zvariant::OwnedValue>,
-    ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
+        options: HashMap<String, zbus::OwnedVariant>,
+    ) -> PortalResponse<HashMap<String, zbus::OwnedVariant>> {
         connection
             .object_server()
             .at(
@@ -227,11 +226,11 @@ impl RemoteDesktop {
     async fn select_devices(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
-        session_handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
+        session_handle: zbus::ObjectPath<'_>,
         app_id: String,
         options: SelectDevicesOptions,
-    ) -> PortalResponse<HashMap<String, zvariant::OwnedValue>> {
+    ) -> PortalResponse<HashMap<String, zbus::OwnedVariant>> {
         let Some(interface) =
             crate::session_interface::<SessionData>(connection, &session_handle).await
         else {
@@ -253,11 +252,11 @@ impl RemoteDesktop {
     async fn start(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        handle: zvariant::ObjectPath<'_>,
-        session_handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
+        session_handle: zbus::ObjectPath<'_>,
         app_id: String,
         parent_window: String,
-        options: HashMap<String, zvariant::OwnedValue>,
+        options: HashMap<String, zbus::OwnedVariant>,
     ) -> PortalResponse<StartResult> {
         let on_cancel =
             || remote_desktop_dialog::hide_remote_desktop_prompt(&self.tx, &session_handle);
@@ -422,10 +421,10 @@ impl RemoteDesktop {
     async fn connect_to_eis(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
+        session_handle: zbus::ObjectPath<'_>,
         app_id: String,
-        options: HashMap<String, zvariant::OwnedValue>,
-    ) -> zbus::fdo::Result<zvariant::OwnedFd> {
+        options: HashMap<String, zbus::OwnedVariant>,
+    ) -> zbus::fdo::Result<zbus::OwnedFd> {
         let Some(interface) =
             crate::session_interface::<SessionData>(connection, &session_handle).await
         else {
@@ -454,8 +453,8 @@ impl RemoteDesktop {
     async fn notify_pointer_motion(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         dx: f64,
         dy: f64,
     ) {
@@ -470,8 +469,8 @@ impl RemoteDesktop {
     async fn notify_pointer_motion_absolute(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         stream: u32,
         x: f64,
         y: f64,
@@ -492,8 +491,8 @@ impl RemoteDesktop {
     async fn notify_pointer_button(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         button: i32,
         state: u32,
     ) {
@@ -508,8 +507,8 @@ impl RemoteDesktop {
     async fn notify_pointer_axis(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         dx: f64,
         dy: f64,
     ) {
@@ -520,8 +519,8 @@ impl RemoteDesktop {
     async fn notify_pointer_axis_discrete(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         axis: u32,
         steps: i32,
     ) {
@@ -536,8 +535,8 @@ impl RemoteDesktop {
     async fn notify_keyboard_keycode(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         keycode: i32,
         state: u32,
     ) {
@@ -552,8 +551,8 @@ impl RemoteDesktop {
     async fn notify_keyboard_keysym(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         keysym: i32,
         state: u32,
     ) {
@@ -569,8 +568,8 @@ impl RemoteDesktop {
     async fn notify_touch_down(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         _stream: u32,
         slot: u32,
         x: f64,
@@ -588,8 +587,8 @@ impl RemoteDesktop {
     async fn notify_touch_motion(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         _stream: u32,
         slot: u32,
         x: f64,
@@ -606,8 +605,8 @@ impl RemoteDesktop {
     async fn notify_touch_up(
         &self,
         #[zbus(connection)] connection: &zbus::Connection,
-        session_handle: zvariant::ObjectPath<'_>,
-        _options: HashMap<String, zvariant::OwnedValue>,
+        session_handle: zbus::ObjectPath<'_>,
+        _options: HashMap<String, zbus::OwnedVariant>,
         slot: u32,
     ) {
         self.notify(connection, &session_handle, Command::TouchUp { slot })

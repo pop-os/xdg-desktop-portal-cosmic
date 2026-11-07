@@ -12,7 +12,6 @@ use cosmic::widget::autosize::autosize;
 use cosmic::widget::{self, Column, Id, button, dropdown, icon, text};
 use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
-use zbus::zvariant;
 
 use crate::app::CosmicPortal;
 use crate::wayland::WaylandHelper;
@@ -22,8 +21,8 @@ use crate::{PortalResponse, fl, subscription};
 //(ID returned with the response, choices (ID, label), label, initial selection or "" meaning the portal should choose)
 type AccessDialogChoice = (String, String, Vec<(String, String)>, String);
 
-#[derive(zvariant::DeserializeDict, zvariant::Type, Debug, Clone)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::DeserializeDict, zbus::Type, Debug, Clone)]
+#[zbus(signature = "a{sv}")]
 pub(crate) struct AccessDialogOptions {
     modal: Option<bool>,
     deny_label: Option<String>,
@@ -32,8 +31,8 @@ pub(crate) struct AccessDialogOptions {
     choices: Option<Vec<AccessDialogChoice>>,
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type, Debug, Clone)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::SerializeDict, zbus::Type, Debug, Clone)]
+#[zbus(signature = "a{sv}")]
 pub struct AccessDialogResult {
     choices: Vec<(String, String)>,
 }
@@ -54,7 +53,7 @@ impl Access {
     #[allow(clippy::too_many_arguments)]
     async fn access_dialog(
         &self,
-        handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
         title: &str,
@@ -118,7 +117,7 @@ pub enum Msg {
 
 #[derive(Clone, Debug)]
 pub(crate) struct AccessDialogArgs {
-    pub handle: zvariant::ObjectPath<'static>,
+    pub handle: zbus::ObjectPath<'static>,
     pub app_id: String,
     pub parent_window: String,
     pub title: String,

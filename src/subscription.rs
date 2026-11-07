@@ -7,7 +7,7 @@ use cosmic::cosmic_theme::palette::Srgba;
 use cosmic::iced::Subscription;
 use futures::{SinkExt, StreamExt, future};
 use tokio::sync::mpsc::Receiver;
-use zbus::{Connection, fdo, zvariant};
+use zbus::{Connection, fdo};
 
 use crate::access::Access;
 use crate::file_chooser::FileChooser;
@@ -25,9 +25,9 @@ pub enum Event {
     FileChooser(crate::file_chooser::Args),
     Screenshot(crate::screenshot::Args),
     Screencast(crate::screencast_dialog::Args),
-    CancelScreencast(zvariant::ObjectPath<'static>),
+    CancelScreencast(zbus::ObjectPath<'static>),
     RemoteDesktop(crate::remote_desktop_dialog::Args),
-    CancelRemoteDesktop(zvariant::ObjectPath<'static>),
+    CancelRemoteDesktop(zbus::ObjectPath<'static>),
     Accent(Srgba),
     IsDark(bool),
     HighContrast(bool),
@@ -90,22 +90,22 @@ pub(crate) async fn process_changes(
         State::Init => {
             let (tx, rx) = tokio::sync::mpsc::channel(10);
 
-            let connection = zbus::connection::Builder::session()?
-                .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))?
-                .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))?
+            let connection = zbus::connection::Builder::session()
+                .serve_at(DBUS_PATH, Access::new(wayland_helper.clone(), tx.clone()))
+                .serve_at(DBUS_PATH, FileChooser::new(tx.clone()))
                 .serve_at(
                     DBUS_PATH,
                     RemoteDesktop::new(wayland_helper.clone(), tx.clone()),
-                )?
+                )
                 .serve_at(
                     DBUS_PATH,
                     Screenshot::new(wayland_helper.clone(), tx.clone()),
-                )?
+                )
                 .serve_at(
                     DBUS_PATH,
                     ScreenCast::new(wayland_helper.clone(), tx.clone()),
-                )?
-                .serve_at(DBUS_PATH, Settings::new())?
+                )
+                .serve_at(DBUS_PATH, Settings::new())
                 .build()
                 .await?;
 
@@ -169,7 +169,7 @@ pub(crate) async fn process_changes(
                                 iface_ref.signal_emitter(),
                                 APPEARANCE_NAMESPACE,
                                 ACCENT_COLOR_KEY,
-                                zvariant::Array::from(
+                                zbus::Array::from(
                                     [iface.accent.red, iface.accent.green, iface.accent.blue]
                                         .as_slice(),
                                 )
@@ -191,7 +191,7 @@ pub(crate) async fn process_changes(
                                 iface_ref.signal_emitter(),
                                 APPEARANCE_NAMESPACE,
                                 COLOR_SCHEME_KEY,
-                                zvariant::Value::from(iface.color_scheme as u32),
+                                zbus::Variant::from(iface.color_scheme as u32),
                             )
                             .await?;
                     }
@@ -210,7 +210,7 @@ pub(crate) async fn process_changes(
                                 iface_ref.signal_emitter(),
                                 APPEARANCE_NAMESPACE,
                                 CONTRAST_KEY,
-                                zvariant::Value::from(iface.contrast as u32),
+                                zbus::Variant::from(iface.contrast as u32),
                             )
                             .await?;
                     }

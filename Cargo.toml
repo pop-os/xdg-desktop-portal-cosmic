@@ -34,7 +34,7 @@ png = "0.18"
 reis = { version = "0.7", features = ["tokio"] }
 rustix = { version = "1.1", features = ["fs", "time"] }
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
-zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
+zbus = { version = "6.2.1", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"
 wayland-protocols = "0.32.12"
 dirs = "6.0.0"

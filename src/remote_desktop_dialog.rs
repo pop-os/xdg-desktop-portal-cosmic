@@ -26,7 +26,6 @@ use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
-use zbus::zvariant;
 
 pub static REMOTE_DESKTOP_ID: LazyLock<window::Id> = LazyLock::new(window::Id::unique);
 pub static REMOTE_DESKTOP_WIDGET_ID: LazyLock<widget::Id> =
@@ -40,7 +39,7 @@ pub struct RemoteDesktopResponse {
 
 pub async fn hide_remote_desktop_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
-    session_handle: &zvariant::ObjectPath<'_>,
+    session_handle: &zbus::ObjectPath<'_>,
 ) {
     let _ = subscription_tx
         .send(crate::subscription::Event::CancelRemoteDesktop(
@@ -52,7 +51,7 @@ pub async fn hide_remote_desktop_prompt(
 #[allow(clippy::too_many_arguments)]
 pub async fn show_remote_desktop_prompt(
     subscription_tx: &mpsc::Sender<crate::subscription::Event>,
-    session_handle: &zvariant::ObjectPath<'_>,
+    session_handle: &zbus::ObjectPath<'_>,
     app_id: String,
     device_types: u32,
     persist_mode: u32,
@@ -219,7 +218,7 @@ fn select_sources_label(
 
 #[derive(Debug, Clone)]
 pub struct Args {
-    session_handle: zvariant::ObjectPath<'static>,
+    session_handle: zbus::ObjectPath<'static>,
     app_name: Option<String>,
     app_icon: Option<String>,
     device_types: u32,
@@ -335,7 +334,7 @@ pub fn update_args(portal: &mut CosmicPortal, args: Args) -> cosmic::Task<crate:
 
 pub fn cancel(
     portal: &mut CosmicPortal,
-    session_handle: zvariant::ObjectPath<'static>,
+    session_handle: zbus::ObjectPath<'static>,
 ) -> cosmic::Task<crate::app::Msg> {
     if portal
         .remote_desktop_args

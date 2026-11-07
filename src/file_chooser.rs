@@ -8,7 +8,6 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use tokio::sync::mpsc::Sender;
-use zbus::zvariant;
 
 use crate::app::{CosmicPortal, Msg as AppMsg};
 use crate::{PortalResponse, subscription};
@@ -19,8 +18,8 @@ type Choices = Vec<(String, String, Vec<(String, String)>, String)>;
 type Filter = (String, Vec<(u32, String)>);
 type Filters = Vec<Filter>;
 
-#[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::DeserializeDict, zbus::Type, Clone, Debug)]
+#[zbus(signature = "a{sv}")]
 pub struct OpenFileOptions {
     accept_label: Option<String>,
     #[allow(dead_code)]
@@ -33,8 +32,8 @@ pub struct OpenFileOptions {
     current_folder: Option<Vec<u8>>,
 }
 
-#[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::DeserializeDict, zbus::Type, Clone, Debug)]
+#[zbus(signature = "a{sv}")]
 pub struct SaveFileOptions {
     accept_label: Option<String>,
     #[allow(dead_code)]
@@ -48,8 +47,8 @@ pub struct SaveFileOptions {
     current_file: Option<Vec<u8>>,
 }
 
-#[derive(zvariant::DeserializeDict, zvariant::Type, Clone, Debug)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::DeserializeDict, zbus::Type, Clone, Debug)]
+#[zbus(signature = "a{sv}")]
 pub struct SaveFilesOptions {
     accept_label: Option<String>,
     #[allow(dead_code)]
@@ -127,8 +126,8 @@ impl FileChooserOptions {
     }
 }
 
-#[derive(zvariant::SerializeDict, zvariant::Type)]
-#[zvariant(signature = "a{sv}")]
+#[derive(zbus::SerializeDict, zbus::Type)]
+#[zbus(signature = "a{sv}")]
 pub struct FileChooserResult {
     uris: Vec<String>,
     choices: Vec<(String, String)>,
@@ -146,7 +145,7 @@ impl FileChooser {
 
     async fn run(
         &self,
-        handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
         title: &str,
@@ -182,7 +181,7 @@ impl FileChooser {
 impl FileChooser {
     async fn open_file(
         &self,
-        handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
         title: &str,
@@ -200,7 +199,7 @@ impl FileChooser {
 
     async fn save_file(
         &self,
-        handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
         title: &str,
@@ -218,7 +217,7 @@ impl FileChooser {
 
     async fn save_files(
         &self,
-        handle: zvariant::ObjectPath<'_>,
+        handle: zbus::ObjectPath<'_>,
         app_id: &str,
         parent_window: &str,
         title: &str,
@@ -244,7 +243,7 @@ pub enum Msg {
 #[derive(Clone, Debug)]
 pub(crate) struct Args {
     #[allow(dead_code)]
-    pub handle: zvariant::ObjectPath<'static>,
+    pub handle: zbus::ObjectPath<'static>,
     #[allow(dead_code)]
     pub app_id: String,
     #[allow(dead_code)]
