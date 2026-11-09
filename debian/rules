@@ -1,24 +1,15 @@
 #!/usr/bin/make -f
 
 DESTDIR = debian/xdg-desktop-portal-cosmic
-CLEAN ?= 1
-VENDOR ?= 1
 
 %:
 	dh $@
 
 override_dh_auto_clean:
-ifeq ($(CLEAN),1)
-	just clean
-endif
-ifeq ($(VENDOR),1)
-	if ! ischroot; then \
-		just vendor; \
-	fi
-endif
+	ischroot || (just clean-dist && just vendor)
 
 override_dh_auto_build:
-	just vendor=$(VENDOR) build
+	test -e vendor.tar && just build-vendored || just build-release
 
 override_dh_auto_install:
 	just rootdir=$(DESTDIR) install

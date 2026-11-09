@@ -3,6 +3,7 @@ name = "xdg-desktop-portal-cosmic"
 version = "1.11.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
+rust-version = "1.95.0"
 
 [features]
 default = ["systemd"]
@@ -14,13 +15,13 @@ members = ["cosmic-portal-config"]
 
 [dependencies]
 anyhow = "1.0.102"
-ashpd = "0.12"
+ashpd = { version = "0.13", features = ["screencast"] }
 cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
     "gvfs",
     "wayland",
 ] }
-cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c0cff4d" }
-cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols", rev = "c0cff4d" }
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols" }
 futures = "0.3"
 image = "0.25"
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
@@ -37,7 +38,7 @@ rustix = { version = "1.1", features = ["fs", "time"] }
 zbus = { version = "6.2.1", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"
 wayland-protocols = "0.32.12"
-dirs = "6.0.0"
+dirs = "7.0.0"
 jiff = "0.2"
 url = "2.5"
 # i18n
@@ -95,3 +96,6 @@ clap = { version = "4.6.1", features = ["derive"] }
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+[profile.dev]
+opt-level = 3
