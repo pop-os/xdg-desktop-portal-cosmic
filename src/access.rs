@@ -78,7 +78,14 @@ impl Access {
             .choices
             .iter()
             .flatten()
-            .map(|(id, _, _, initial)| (id.clone(), initial.clone()))
+            .map(|(id, _, choices, initial)| {
+                // A choice without options is a boolean, shown as an unchecked checkbox by default
+                if choices.is_empty() && initial.is_empty() {
+                    (id.clone(), "false".to_owned())
+                } else {
+                    (id.clone(), initial.clone())
+                }
+            })
             .filter(|(_, value)| !value.is_empty())
             .collect();
         if let Err(err) = self
@@ -113,6 +120,7 @@ pub enum Msg {
     Allow,
     Cancel,
     Choice(usize, usize),
+    Toggle(usize, bool),
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +194,14 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     for (i, ((id, label, choices, initial), choice_labels)) in
         choices.iter().zip(&args.choice_labels).enumerate()
     {
+        if choices.is_empty() {
+            let checked = args.active_choices.get(id).is_some_and(|v| v == "true");
+            let checkbox = widget::checkbox(checked)
+                .label(label.as_str())
+                .on_toggle(move |b| Msg::Toggle(i, b));
+            options.push(checkbox.into());
+            continue;
+        }
         let label = text(label);
         let active_choice = args
             .active_choices
@@ -284,6 +300,16 @@ pub fn update_msg(
                 .discard(),
                 args.destroy_surface().discard(),
             ])
+        }
+        Msg::Toggle(i, checked) => {
+            let Some(args) = portal.access_args.as_mut() else {
+                return cosmic::Task::none();
+            };
+            if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i)) {
+                args.active_choices
+                    .insert(choice.0.clone(), checked.to_string());
+            }
+            cosmic::iced::Task::none()
         }
         Msg::Choice(i, j) => {
             let Some(args) = portal.access_args.as_mut() else {
