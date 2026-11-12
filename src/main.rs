@@ -38,6 +38,8 @@ const PORTAL_RESPONSE_OTHER: u32 = 2;
 enum PortalResponse<T: zbus::Type + serde::Serialize> {
     Success(T),
     Cancelled,
+    /// Cancelled, but still reporting results
+    CancelledWith(T),
     Other,
 }
 
@@ -45,6 +47,7 @@ impl<T: zbus::Type + serde::Serialize> serde::Serialize for PortalResponse<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Self::Success(res) => (PORTAL_RESPONSE_SUCCESS, res).serialize(serializer),
+            Self::CancelledWith(res) => (PORTAL_RESPONSE_CANCELLED, res).serialize(serializer),
             Self::Cancelled => (
                 PORTAL_RESPONSE_CANCELLED,
                 HashMap::<String, zbus::Variant>::new(),

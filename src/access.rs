@@ -118,6 +118,8 @@ impl Access {
 #[derive(Debug, Clone)]
 pub enum Msg {
     Allow,
+    /// unlike `Cancel` (Escape), reports the choices too
+    Deny,
     Cancel,
     Choice(usize, usize),
     Toggle(usize, bool),
@@ -233,7 +235,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
             .clone()
             .unwrap_or_else(|| fl!("cancel")),
     )
-    .on_press(Msg::Cancel);
+    .on_press(Msg::Deny);
 
     let allow_button = button::text(
         args.options
@@ -280,6 +282,24 @@ pub fn update_msg(
                 cosmic::task::future::<(), ()>(async move {
                     _ = tx
                         .send(PortalResponse::Success(AccessDialogResult { choices }))
+                        .await;
+                })
+                .discard(),
+                args.destroy_surface().discard(),
+            ])
+        }
+        Msg::Deny => {
+            let Some(args) = portal.access_args.take() else {
+                return cosmic::Task::none();
+            };
+            let tx = args.tx.clone();
+            let choices = args.active_choices.clone().into_iter().collect();
+            cosmic::Task::batch([
+                cosmic::task::future::<(), ()>(async move {
+                    _ = tx
+                        .send(PortalResponse::CancelledWith(AccessDialogResult {
+                            choices,
+                        }))
                         .await;
                 })
                 .discard(),
