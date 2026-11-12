@@ -82,6 +82,7 @@ log = "0.4.29"
 serde = "1.0.228"
 
 [dev-dependencies]
+ashpd = { version = "0.13", features = ["file_chooser"] }
 gst = { package = "gstreamer", version = "0.25.1" }
 clap = { version = "4.6.1", features = ["derive"] }
 
