@@ -78,7 +78,14 @@ impl Access {
             .choices
             .iter()
             .flatten()
-            .map(|(id, _, _, initial)| (id.clone(), initial.clone()))
+            .map(|(id, _, choices, initial)| {
+                // A choice without options is a boolean, shown as an unchecked checkbox by default
+                if choices.is_empty() && initial.is_empty() {
+                    (id.clone(), "false".to_owned())
+                } else {
+                    (id.clone(), initial.clone())
+                }
+            })
             .filter(|(_, value)| !value.is_empty())
             .collect();
         if let Err(err) = self
@@ -111,8 +118,11 @@ impl Access {
 #[derive(Debug, Clone)]
 pub enum Msg {
     Allow,
+    /// unlike `Cancel` (Escape), reports the choices too
+    Deny,
     Cancel,
     Choice(usize, usize),
+    Toggle(usize, bool),
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +196,14 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
     for (i, ((id, label, choices, initial), choice_labels)) in
         choices.iter().zip(&args.choice_labels).enumerate()
     {
+        if choices.is_empty() {
+            let checked = args.active_choices.get(id).is_some_and(|v| v == "true");
+            let checkbox = widget::checkbox(checked)
+                .label(label.as_str())
+                .on_toggle(move |b| Msg::Toggle(i, b));
+            options.push(checkbox.into());
+            continue;
+        }
         let label = text(label);
         let active_choice = args
             .active_choices
@@ -217,7 +235,7 @@ pub(crate) fn view(portal: &CosmicPortal) -> cosmic::Element<'_, Msg> {
             .clone()
             .unwrap_or_else(|| fl!("cancel")),
     )
-    .on_press(Msg::Cancel);
+    .on_press(Msg::Deny);
 
     let allow_button = button::text(
         args.options
@@ -270,6 +288,24 @@ pub fn update_msg(
                 args.destroy_surface().discard(),
             ])
         }
+        Msg::Deny => {
+            let Some(args) = portal.access_args.take() else {
+                return cosmic::Task::none();
+            };
+            let tx = args.tx.clone();
+            let choices = args.active_choices.clone().into_iter().collect();
+            cosmic::Task::batch([
+                cosmic::task::future::<(), ()>(async move {
+                    _ = tx
+                        .send(PortalResponse::CancelledWith(AccessDialogResult {
+                            choices,
+                        }))
+                        .await;
+                })
+                .discard(),
+                args.destroy_surface().discard(),
+            ])
+        }
         Msg::Cancel => {
             let Some(args) = portal.access_args.take() else {
                 return cosmic::Task::none();
@@ -284,6 +320,16 @@ pub fn update_msg(
                 .discard(),
                 args.destroy_surface().discard(),
             ])
+        }
+        Msg::Toggle(i, checked) => {
+            let Some(args) = portal.access_args.as_mut() else {
+                return cosmic::Task::none();
+            };
+            if let Some(choice) = args.options.choices.as_ref().and_then(|x| x.get(i)) {
+                args.active_choices
+                    .insert(choice.0.clone(), checked.to_string());
+            }
+            cosmic::iced::Task::none()
         }
         Msg::Choice(i, j) => {
             let Some(args) = portal.access_args.as_mut() else {
