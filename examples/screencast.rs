@@ -3,7 +3,7 @@
 // - https://gitlab.freedesktop.org/pipewire/pipewire/-/merge_requests/1881
 
 use ashpd::desktop::PersistMode;
-use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
+use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use ashpd::enumflags2::BitFlags;
 use clap::Parser;
 use gst::prelude::*;
@@ -55,21 +55,26 @@ async fn main() -> anyhow::Result<()> {
         .fold(BitFlags::EMPTY, |a, b| a | b);
 
     let screencast = Screencast::new().await?;
-    let session = screencast.create_session().await?;
+    let session = screencast.create_session(Default::default()).await?;
     screencast
         .select_sources(
             &session,
-            CursorMode::Embedded,
-            source_types,
-            args.multiple,
-            None,
-            PersistMode::DoNot,
+            SelectSourcesOptions::default()
+                .set_cursor_mode(CursorMode::Embedded)
+                .set_sources(source_types)
+                .set_multiple(args.multiple)
+                .set_persist_mode(PersistMode::DoNot),
         )
         .await?;
-    let streams = screencast.start(&session, None).await?.response()?;
+    let streams = screencast
+        .start(&session, None, Default::default())
+        .await?
+        .response()?;
     println!("{} streams", streams.streams().len());
     let stream = &streams.streams()[0];
-    let fd = screencast.open_pipe_wire_remote(&session).await?;
+    let fd = screencast
+        .open_pipe_wire_remote(&session, Default::default())
+        .await?;
 
     let node_id = stream.pipe_wire_node_id();
 
