@@ -77,7 +77,13 @@ impl futures::stream::Stream for CursorStream {
                 .is_none_or(|b| (b.width, b.height) != formats.buffer_size)
         {
             let (width, height) = formats.buffer_size;
-            let fd = buffer::create_memfd(width, height);
+            let fd = match buffer::create_memfd(width, height) {
+                Ok(fd) => fd,
+                Err(err) => {
+                    tracing::error!("failed to allocate cursor buffer: {}", err);
+                    return Poll::Pending;
+                }
+            };
             let wl_buffer = stream.wayland_helper.create_shm_buffer(
                 &fd,
                 width,

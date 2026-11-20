@@ -242,7 +242,9 @@ impl Session {
                 sender: Mutex::new(Some(sender)),
             },
         );
-        self.0.wayland_helper.inner.conn.flush().unwrap();
+        if let Err(err) = self.0.wayland_helper.inner.conn.flush() {
+            tracing::error!("wayland flush: {}", err);
+        }
 
         // TODO: wait for server to release buffer?
         // Assume stopped if frame is dropped without `ready` or `failed`
@@ -474,7 +476,7 @@ impl WaylandHelper {
             .wait_for_formats(|formats| formats.buffer_size)
             .await?;
 
-        let fd = buffer::create_memfd(width, height);
+        let fd = buffer::create_memfd(width, height).ok()?;
         let buffer =
             self.create_shm_buffer(&fd, width, height, width * 4, wl_shm::Format::Abgr8888);
 
