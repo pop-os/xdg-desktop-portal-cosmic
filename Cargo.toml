@@ -38,7 +38,7 @@ zbus = { version = "6.2.1", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"
 wayland-protocols = "0.32.12"
 dirs = "7.0.0"
-jiff = "0.2"
+jiff = "1.0.3"
 url = "2.5"
 # i18n
 i18n-embed = { version = "0.16", features = [
@@ -79,6 +79,7 @@ log = "0.4.29"
 serde = "1.0.228"
 
 [dev-dependencies]
+ashpd = { version = "0.13", features = ["file_chooser", "screencast"] }
 gst = { package = "gstreamer", version = "0.25.1" }
 clap = { version = "4.6.1", features = ["derive"] }
 
