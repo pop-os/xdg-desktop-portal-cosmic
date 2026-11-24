@@ -257,7 +257,7 @@ impl Screenshot {
             return None;
         }
 
-        let name = jiff::Zoned::now()
+        let name = jiff::ZonedDateTime::now()
             .strftime("Screenshot_%Y-%m-%d_%H-%M-%S.png")
             .to_string();
         path.push(name);
