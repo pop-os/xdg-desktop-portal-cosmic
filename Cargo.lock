@@ -1507,8 +1507,8 @@ dependencies = [
 
 [[package]]
 name = "cosmic-files"
-version = "1.11.0"
-source = "git+https://github.com/pop-os/cosmic-files#84a32e1eed33b1e017c8a653bfe1c2d5a13a711a"
+version = "1.12.0"
+source = "git+https://github.com/pop-os/cosmic-files#3165e0f7e46da0cbc852d729af99eaa3a3fead37"
 dependencies = [
  "anyhow",
  "atomic_float",
