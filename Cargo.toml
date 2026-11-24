@@ -14,7 +14,7 @@ systemd = ["dep:tracing-journald"]
 members = ["cosmic-portal-config"]
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.105"
 ashpd = { version = "0.13", features = ["screencast"] }
 cosmic-files = { git = "https://github.com/pop-os/cosmic-files", default-features = false, features = [
     "gvfs",
@@ -26,7 +26,7 @@ futures = "0.3"
 image = "0.25"
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
 cosmic-portal-config = { path = "./cosmic-portal-config" }
-memmap2 = "0.9.10"
+memmap2 = "0.9.12"
 pipewire = { version = "0.10", features = ["v0_3_33"] }
 pipewire-sys = "0.10"
 spa_sys = { package = "libspa-sys", version = "0.10" }
@@ -34,9 +34,9 @@ png = "0.18"
 reis = { version = "0.7", features = ["tokio"] }
 rustix = { version = "1.1", features = ["fs", "time"] }
 # spa_sys = { package = "libspa-sys", git = "https://github.com/pop-os/pipewire-rs" }
-zbus = { version = "6.2.1", default-features = false, features = ["tokio"] }
+zbus = { version = "6.5.0", default-features = false, features = ["tokio"] }
 gbm = "0.18.0"
-wayland-protocols = "0.32.12"
+wayland-protocols = "0.32.13"
 dirs = "7.0.0"
 jiff = "1.0.3"
 url = "2.5"
@@ -46,13 +46,13 @@ i18n-embed = { version = "0.16", features = [
     "desktop-requester",
 ] }
 i18n-embed-fl = "0.10"
-rust-embed = "8.11.0"
+rust-embed = "8.14.0"
 # Workspace
 cosmic-config.workspace = true
 serde.workspace = true
 tempfile = "3.27.0"
-tokio = { version = "1.52.1", features = ["macros", "net", "rt", "sync"] }
-wayland-client = { version = "0.31.14" }
+tokio = { version = "1.54.1", features = ["macros", "net", "rt", "sync"] }
+wayland-client = { version = "0.31.15" }
 tracing = "0.1.44"
 tracing-journald = { version = "0.3.2", optional = true }
 tracing-subscriber = "0.3.23"
@@ -75,13 +75,13 @@ features = [
 
 [workspace.dependencies]
 cosmic-config = { git = "https://github.com/pop-os/libcosmic" }
-log = "0.4.29"
-serde = "1.0.228"
+log = "0.4.35"
+serde = "1.0.229"
 
 [dev-dependencies]
 ashpd = { version = "0.13", features = ["file_chooser", "screencast"] }
-gst = { package = "gstreamer", version = "0.25.1" }
-clap = { version = "4.6.1", features = ["derive"] }
+gst = { package = "gstreamer", version = "0.25.4" }
+clap = { version = "4.6.9", features = ["derive"] }
 
 # [patch."https://github.com/pop-os/libcosmic"]
 # libcosmic = { git = "https://github.com/pop-os/libcosmic//", branch = "theme-v2" }
