@@ -161,20 +161,23 @@ impl ScreencastThread {
                 thread_stop_tx_clone,
             ) {
                 Ok((loop_, _stream, _listener, _context, node_id_rx)) => {
-                    tx.send(Ok(node_id_rx)).unwrap();
+                    if tx.send(Ok(node_id_rx)).is_err() {
+                        return;
+                    }
                     let weak_loop = loop_.downgrade();
                     let _receiver = thread_stop_rx.attach(loop_.loop_(), move |()| {
                         weak_loop.upgrade().unwrap().quit();
                     });
                     loop_.run();
                 }
-                Err(err) => tx.send(Err(err)).unwrap(),
+                Err(err) => {
+                    let _ = tx.send(Err(err));
+                }
             }
         });
         Ok(Self {
             stream_props,
-            // XXX can second unwrap fail?
-            node_id: rx.await.unwrap()?.await.unwrap()?,
+            node_id: rx.await??.await??,
             thread_stop_tx,
         })
     }
@@ -313,14 +316,12 @@ impl StreamData {
         match new {
             StreamState::Paused => {
                 if let Some(node_id_tx) = self.node_id_tx.take() {
-                    node_id_tx.send(Ok(stream.node_id())).unwrap();
+                    let _ = node_id_tx.send(Ok(stream.node_id()));
                 }
             }
             StreamState::Error(msg) => {
                 if let Some(node_id_tx) = self.node_id_tx.take() {
-                    node_id_tx
-                        .send(Err(anyhow::anyhow!("stream error: {}", msg)))
-                        .unwrap();
+                    let _ = node_id_tx.send(Err(anyhow::anyhow!("stream error: {}", msg)));
                 }
             }
             _ => {}
@@ -450,13 +451,19 @@ impl StreamData {
                 .unwrap_or(dmabuf_helper.feedback().main_device());
             // Unwrap: assumes `choose_buffer` successfully opened gbm device
             let (_, gbm) = gbm_devices.gbm_device(dev).unwrap().unwrap();
-            let dmabuf = buffer::create_dmabuf(
+            let dmabuf = match buffer::create_dmabuf(
                 gbm,
                 self.format,
                 self.modifier.unwrap(),
                 self.width(),
                 self.height(),
-            );
+            ) {
+                Ok(dmabuf) => dmabuf,
+                Err(err) => {
+                    tracing::error!("failed to allocate dmabuf buffer: {}", err);
+                    return;
+                }
+            };
 
             wl_buffer = self.wayland_helper.create_dmabuf_buffer(&dmabuf);
 
@@ -479,7 +486,13 @@ impl StreamData {
             assert_eq!(datas.len(), 1);
             let data = &mut datas[0];
 
-            let fd = buffer::create_memfd(self.width(), self.height());
+            let fd = match buffer::create_memfd(self.width(), self.height()) {
+                Ok(fd) => fd,
+                Err(err) => {
+                    tracing::error!("failed to allocate shm buffer: {}", err);
+                    return;
+                }
+            };
 
             wl_buffer = self.wayland_helper.create_shm_buffer(
                 &fd,
@@ -507,6 +520,9 @@ impl StreamData {
     }
 
     fn remove_buffer(&mut self, _stream: &Stream, buffer: *mut pw_buffer) {
+        if unsafe { (*buffer).user_data }.is_null() {
+            return;
+        }
         let buf = unsafe { &mut *(*buffer).buffer };
         let datas = unsafe { slice::from_raw_parts_mut(buf.datas, buf.n_datas as usize) };
 
@@ -537,7 +553,11 @@ impl StreamData {
 
         let buffer = unsafe { stream.dequeue_raw_buffer() };
         if !buffer.is_null() {
-            let wl_buffer = unsafe { &*((*buffer).user_data as *const wl_buffer::WlBuffer) };
+            let Some(wl_buffer) =
+                (unsafe { ((*buffer).user_data as *const wl_buffer::WlBuffer).as_ref() })
+            else {
+                return;
+            };
             let full_damage = &[Rect {
                 x: 0,
                 y: 0,
